@@ -80,6 +80,20 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 		DERCurves:          memory.NewStore[sep2.DERCurve](),
 		FSAs:               memory.NewScopedStore[sep2.FunctionSetAssignments](),
 		Subscriptions:      memory.NewSubscriptionStore(),
+		UsagePoints:        memory.NewStore[sep2.UsagePoint](),
+		MeterReadings:      memory.NewScopedStore[sep2.MeterReading](),
+		Readings:           memory.NewScopedStore[sep2.Reading](),
+		ReadingTypes:       memory.NewStore[sep2.ReadingType](),
+		Configurations:     memory.NewScopedStore[sep2.Configuration](),
+		DeviceStatuses:     memory.NewScopedStore[sep2.DeviceStatus](),
+		LogEvents:          memory.NewScopedStore[sep2.LogEvent](),
+		PowerStatuses:      memory.NewScopedStore[sep2.PowerStatus](),
+		MessagingPrograms:  memory.NewStore[sep2.MessagingProgram](),
+		TextMessages:       memory.NewScopedStore[sep2.TextMessage](),
+		FlowReservationRequests:  memory.NewScopedStore[sep2.FlowReservationRequest](),
+		FlowReservationResponses: memory.NewScopedStore[sep2.FlowReservationResponse](),
+		ResponseSets:       memory.NewStore[sep2.ResponseSet](),
+		Responses:          memory.NewScopedStore[sep2.Response](),
 	}
 
 	cfg := &config.Config{
