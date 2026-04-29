@@ -71,7 +71,7 @@ func TestEnforceVALimit(t *testing.T) {
 	}
 
 	// P alone exceeds
-	p, q = EnforceVALimit(12000, 0)
+	p, _ = EnforceVALimit(12000, 0)
 	if p > Rating.RatedVA+1 {
 		t.Errorf("P=%.0f should be clamped to VA rating", p)
 	}

@@ -105,13 +105,13 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	tlsListener := tls.NewListener(listener, serverTLSCfg)
 	router := server.NewRouter(cfg, stores, nil, "", "")
 	srv := &http.Server{Handler: router}
-	go srv.Serve(tlsListener)
-	defer srv.Close()
+	go func() { _ = srv.Serve(tlsListener) }()
+	defer func() { _ = srv.Close() }()
 
 	serverURL := "https://" + listener.Addr().String()
 
