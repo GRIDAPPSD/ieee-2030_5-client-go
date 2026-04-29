@@ -218,8 +218,12 @@ func main() {
 
 			// Report periodically
 			if time.Since(lastReport) >= cfg.ReportInterval {
-				reporter.ReportStatus(ctx, state)
-				reporter.ReportMetering(ctx, state)
+				if err := reporter.ReportStatus(ctx, state); err != nil {
+					log.Printf("ReportStatus failed: %v", err)
+				}
+				if err := reporter.ReportMetering(ctx, state); err != nil {
+					log.Printf("ReportMetering failed: %v", err)
+				}
 				lastReport = time.Now()
 
 				log.Printf("  sim=%s P=%.0fW Q=%.0fVAr PF=%.3f V=%.3fpu F=%.1fHz mode=%s irr=%.0f",

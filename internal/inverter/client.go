@@ -97,7 +97,7 @@ func (c *SEP2Client) Get(ctx context.Context, path string, out any) error {
 	if err != nil {
 		return fmt.Errorf("GET %s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -135,8 +135,8 @@ func (c *SEP2Client) Post(ctx context.Context, path string, body any) (string, e
 	if err != nil {
 		return "", fmt.Errorf("POST %s: %w", path, err)
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body) // drain for connection reuse
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body) // drain for connection reuse
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("POST %s: %d", path, resp.StatusCode)
@@ -164,8 +164,8 @@ func (c *SEP2Client) Put(ctx context.Context, path string, body any) error {
 	if err != nil {
 		return fmt.Errorf("PUT %s: %w", path, err)
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("PUT %s: %d", path, resp.StatusCode)

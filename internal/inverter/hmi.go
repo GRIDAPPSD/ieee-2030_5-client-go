@@ -63,7 +63,7 @@ func (h *HMI) Handler() http.Handler {
 
 func (h *HMI) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, dashboardHTML)
+	_, _ = fmt.Fprint(w, dashboardHTML)
 }
 
 func (h *HMI) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +97,7 @@ func (h *HMI) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case data := <-ch:
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 		}
 	}
