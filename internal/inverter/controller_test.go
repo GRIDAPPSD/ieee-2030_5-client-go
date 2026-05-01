@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/craig8/ieee-2030_5-go/pkg/sep2"
+	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
 
 func TestApplyControlsNil(t *testing.T) {
