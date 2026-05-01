@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craig8/ieee-2030_5-go/internal/certs"
-	"github.com/craig8/ieee-2030_5-go/internal/config"
-	"github.com/craig8/ieee-2030_5-go/internal/inverter"
-	"github.com/craig8/ieee-2030_5-go/internal/server"
-	sepTLS "github.com/craig8/ieee-2030_5-go/internal/tls"
-	"github.com/craig8/ieee-2030_5-go/pkg/sep2"
-	"github.com/craig8/ieee-2030_5-go/pkg/store/memory"
+	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/certs"
+	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/config"
+	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/server"
+	sepTLS "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls"
+	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
+	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/store/memory"
 )
 
 // TestEndToEndInverterLifecycle runs the full IEEE 2030.5 protocol lifecycle:

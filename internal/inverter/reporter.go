@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/craig8/ieee-2030_5-go/pkg/sep2"
+	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
 
 // Reporter sends periodic DERStatus and metering data to the server.

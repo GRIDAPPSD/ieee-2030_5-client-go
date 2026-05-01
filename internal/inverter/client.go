@@ -13,8 +13,8 @@ import (
 	"os"
 	"time"
 
-	sepTLS "github.com/craig8/ieee-2030_5-go/internal/tls"
-	"github.com/craig8/ieee-2030_5-go/pkg/sep2"
+	sepTLS "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls"
+	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
 
 const (
