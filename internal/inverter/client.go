@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -34,16 +33,16 @@ type SEP2Client struct {
 func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 	cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
 	if err != nil {
-		return nil, fmt.Errorf("load client cert: %w", err)
+		return nil, fmt.Errorf("load client cert %q: %w", cfg.CertFile, err)
 	}
 
 	caPEM, err := os.ReadFile(cfg.CAFile)
 	if err != nil {
-		return nil, fmt.Errorf("read CA cert: %w", err)
+		return nil, fmt.Errorf("read CA cert %q: %w", cfg.CAFile, err)
 	}
 	caPool := x509.NewCertPool()
 	if !caPool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("parse CA cert failed")
+		return nil, fmt.Errorf("parse CA cert %q: no PEM data", cfg.CAFile)
 	}
 
 	tlsCfg := &tls.Config{
@@ -53,12 +52,17 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 		CurvePreferences: []tls.CurveID{tls.CurveP256},
 	}
 
-	// Derive SFDI/LFDI from client cert
-	certPEM, _ := os.ReadFile(cfg.CertFile)
-	block, _ := pem.Decode(certPEM)
-	parsedCert, err := x509.ParseCertificate(block.Bytes)
+	// Derive SFDI/LFDI from the leaf cert that LoadX509KeyPair already
+	// parsed. Reading the cert file a second time and re-decoding the PEM
+	// (the previous behavior) was redundant and discarded errors from both
+	// os.ReadFile and pem.Decode, leaving a nil-pointer deref on the next
+	// line if either failed (IEEE-008).
+	if len(cert.Certificate) == 0 {
+		return nil, fmt.Errorf("client cert %q has no leaf certificate", cfg.CertFile)
+	}
+	parsedCert, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
-		return nil, fmt.Errorf("parse client cert for identity: %w", err)
+		return nil, fmt.Errorf("parse client cert %q for identity: %w", cfg.CertFile, err)
 	}
 
 	return &SEP2Client{
