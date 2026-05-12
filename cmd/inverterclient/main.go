@@ -614,11 +614,45 @@ func main() {
 	// same internal/inverter.derControlPollDuration policy (60s floor,
 	// 30min default-on-zero).
 	//
-	// Hook left nil — Phase 6 (IEEE-043+) wires the Response Function Set
-	// emitter here. IEEE-041 reads sm.Current() in the simulation loop to
-	// pick the ApplyControls base.
+	// Hook: IEEE-042 installs a curve-refresh hook here that fetches
+	// the active DERProgram's DERCurveList on every EVENT_RECEIVED →
+	// EVENT_STARTED transition (CSIP V1.2 CORE-012 step 6 — curves are
+	// part of "apply," not "discover"). Phase 6 (IEEE-043+) layers the
+	// Response Function Set emitter on top of this same hook surface.
 	sched := inverter.NewScheduler(client.Now, mathrand.New(mathrand.NewPCG(uint64(time.Now().UnixNano()), 0xCAFEBABE)))
 	stateMachine := inverter.NewStateMachine()
+
+	// IEEE-042: curve cache populated by the state-machine hook on
+	// EVENT_RECEIVED → EVENT_STARTED. ApplyControlsWithCurves reads from
+	// it on every sim tick; cache miss falls back to IEEE 1547 default
+	// curves (see internal/inverter/controller.go).
+	curveCache := inverter.NewDERCurveCache()
+	if selected && selectedDERProgram.DERCurveListLink != nil {
+		curveListHref := selectedDERProgram.DERCurveListLink.Href
+		stateMachine.OnTransition(func(prev, next inverter.EventState, _ *sep2.DERControl) {
+			// Fire only on the start-of-event edge. Cancellation before
+			// start never reaches EVENT_STARTED, so no fetch fires for a
+			// cancelled event. State-machine hooks run OUTSIDE its mutex
+			// (IEEE-040 contract), so we spawn a ctx-bound goroutine to
+			// keep the Tick path non-blocking even if the server is slow.
+			if prev == inverter.StateEventStarted || next != inverter.StateEventStarted {
+				return
+			}
+			go func() {
+				if err := inverter.FetchProgramCurves(ctx, client, curveListHref, curveCache); err != nil {
+					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+						return
+					}
+					log.Printf("Phase 5 (IEEE-042): curve refresh failed (continuing with cached/default curves): %v", err)
+					return
+				}
+				log.Printf("Phase 5 (IEEE-042): refreshed %d curve type(s) from %s", curveCache.Len(), curveListHref)
+			}()
+		})
+	} else if selected {
+		log.Println("Phase 5 (IEEE-042): no DERCurveListLink on selected program; curve refresh disabled (controller falls back to IEEE 1547 defaults)")
+	}
+
 	if selected && selectedDERProgram.DERControlListLink != nil {
 		tickInterval := pinPollInterval(dcap.PollRate)
 		log.Printf("Phase 5 (IEEE-040): starting state-machine tick interval=%s", tickInterval)
@@ -810,8 +844,12 @@ func main() {
 			// (no CSIP server / no default provisioned → preserves the
 			// pre-IEEE-041 no-op semantics). See
 			// internal/inverter/applycontrols_base.go for the decision tree.
+			//
+			// IEEE-042: ApplyControlsWithCurves consults curveCache for
+			// server-supplied Volt/Var and Volt/Watt curves; misses fall
+			// back to IEEE 1547 defaults inside the controller.
 			base := inverter.ActiveControlBase(stateMachine.Current(), defaultCtl)
-			controls := inverter.ApplyControls(base, currentGrid, maxP)
+			controls := inverter.ApplyControlsWithCurves(base, currentGrid, maxP, curveCache)
 
 			// Compute output
 			state := inverter.ComputeOutput(controls, currentGrid)
