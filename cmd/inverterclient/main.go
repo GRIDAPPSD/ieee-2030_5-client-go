@@ -103,6 +103,16 @@ func main() {
 		log.Printf("  EndDeviceListLink: %s", dcap.EndDeviceListLink.Href)
 	}
 
+	// IEEE-028: per CSIP §6.6 / IEEE 2030.5 §10.3, when DeviceCapability
+	// advertises no function-set links the device MUST idle-re-poll at the
+	// advertised pollRate rather than crash forward into Phase 2 against
+	// paths the server has not provisioned. WaitForAdvertisedLinks returns
+	// immediately if at least one link is already present.
+	dcap, err = client.WaitForAdvertisedLinks(ctx, dcap)
+	if err != nil {
+		log.Fatalf("wait for advertised links: %v", err)
+	}
+
 	// Phase 2: Registration
 	log.Println("=== Phase 2: Registration ===")
 	edev, err := client.Register(ctx)

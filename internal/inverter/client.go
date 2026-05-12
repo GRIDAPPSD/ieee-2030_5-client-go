@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -290,9 +291,10 @@ func (c *SEP2Client) PostMeterReading(ctx context.Context, mupID string, mmr sep
 }
 
 // pollDuration maps a DeviceCapability pollRate (seconds) to a wait
-// duration. Exposed as a var so tests can compress polling cadence without
-// faking time (see idle_export_test.go). Real implementation lands in the
-// GREEN commit of IEEE-028.
+// duration. Zero/unset pollRate falls back to 30s — a conservative default
+// matching the example values in IEEE 2030.5 / CSIP. Exposed as a var so
+// tests can compress polling cadence without faking time
+// (see idle_export_test.go). See IEEE-028.
 var pollDuration = func(pollRateSec uint32) time.Duration {
 	if pollRateSec == 0 {
 		return 30 * time.Second
@@ -300,10 +302,44 @@ var pollDuration = func(pollRateSec uint32) time.Duration {
 	return time.Duration(pollRateSec) * time.Second
 }
 
-// WaitForAdvertisedLinks is the IEEE-028 idle-poll seam.
-// RED stub: returns the initial DeviceCapability unchanged so the failing
-// tests can compile. The GREEN commit replaces this body with a real
-// re-poll loop honoring ctx and dcap.PollRate.
-func (c *SEP2Client) WaitForAdvertisedLinks(_ context.Context, initial sep2.DeviceCapability) (sep2.DeviceCapability, error) {
-	return initial, nil
+// dcapHasAnyLink reports whether a DeviceCapability advertises at least one
+// function-set link the inverter cares about for Phase 2+ progression.
+// Per CSIP §6.6 / IEEE 2030.5 §10.3 a device MUST NOT proceed past
+// discovery (registration, DER setup, metering) when the entry point
+// advertises nothing — the server has not yet provisioned the device.
+// See IEEE-028.
+func dcapHasAnyLink(d sep2.DeviceCapability) bool {
+	return d.EndDeviceListLink != nil ||
+		d.TimeLink != nil ||
+		d.SelfDeviceLink != nil ||
+		d.MirrorUsagePointListLink != nil ||
+		d.ResponseSetListLink != nil
+}
+
+// WaitForAdvertisedLinks blocks until DeviceCapability advertises at least
+// one function-set link, re-polling /dcap every pollRate seconds (default
+// 30s when unset). Honors ctx — cancellation returns ctx.Err() and exits
+// the loop cleanly without re-polling. No timeout bound; callers control
+// lifetime via ctx.
+//
+// IEEE-028: when the server returns a bare <DeviceCapability pollRate="N"/>
+// with no children, the inverter must idle-re-poll rather than crash
+// forward into Phase 2 (which would 404 on the unprovisioned /edev path).
+func (c *SEP2Client) WaitForAdvertisedLinks(ctx context.Context, initial sep2.DeviceCapability) (sep2.DeviceCapability, error) {
+	dcap := initial
+	for !dcapHasAnyLink(dcap) {
+		wait := pollDuration(dcap.PollRate)
+		log.Printf("DeviceCapability advertises no function sets; re-polling every %s", wait)
+		select {
+		case <-ctx.Done():
+			return dcap, ctx.Err()
+		case <-time.After(wait):
+		}
+		next, err := c.Discover(ctx)
+		if err != nil {
+			return dcap, fmt.Errorf("re-discover after idle wait: %w", err)
+		}
+		dcap = next
+	}
+	return dcap, nil
 }

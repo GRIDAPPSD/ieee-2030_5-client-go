@@ -3,15 +3,16 @@ package inverter_test
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"net"
 	"net/http"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/inverter"
 	sepTLS "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls"
 	gotls "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls/gotls"
-	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/inverter"
 	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
 
@@ -121,8 +122,12 @@ func TestEmptyDcapIdlesAndNeverRegisters(t *testing.T) {
 	go func() {
 		defer close(done)
 		_, werr := client.WaitForAdvertisedLinks(ctx, initial)
-		if werr != context.Canceled && werr != nil {
-			t.Errorf("WaitForAdvertisedLinks returned %v, want context.Canceled or nil", werr)
+		// errors.Is unwraps fmt.Errorf("...: %w", ctx.Err()) wrappers, so
+		// it catches both the bare ctx.Err() return and the wrapped
+		// "re-discover after idle wait: ... context canceled" path that
+		// fires if cancel races with a /dcap GET already in flight.
+		if werr != nil && !errors.Is(werr, context.Canceled) {
+			t.Errorf("WaitForAdvertisedLinks returned %v, want nil or context.Canceled", werr)
 		}
 	}()
 
