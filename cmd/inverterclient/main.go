@@ -311,101 +311,29 @@ func main() {
 		log.Printf("Registered: href=%s SFDI=%s", edev.Href, edev.SFDI)
 	}
 
-	// Phase 2b: Registration resource read + PIN match check + commissioning gate
-	// (IEEE-032 landed the GET; IEEE-033 added enforcement; IEEE-034 closes the
-	// two deviations from Noor's plan and adds missing-RegistrationLink handling).
-	// CSIP V1.2 BASIC-001 step 5 / IEEE 2030.5 §10 require the device to walk
-	// EndDevice.RegistrationLink, parse the Registration resource, and refuse
-	// to proceed unless the server-presented pIN matches the out-of-band-
-	// provisioned PIN (--pin / cfg.ExpectedPIN).
+	// Phase 2b: Registration resource read + PIN match check + commissioning
+	// gate. Extracted by IEEE-074 into runPhase2bRegistration so the deferred
+	// IEEE-071 integration cases have a function seam to test against. The
+	// full behavior contract (missing-RegistrationLink branches, PIN-match
+	// branches, idle-loop policy, PIN redaction) lives in
+	// cmd/inverterclient/phase2b.go.
 	//
-	// Missing-RegistrationLink behavior:
-	//   - --csip=false OR --allow-unregistered=true: log bypass, skip Phase 2b.
-	//     Operator-acknowledged dev/test bypass.
-	//   - --csip strict (default in CSIP mode): idle-loop re-fetching the
-	//     EndDevice via LookupOwnEndDevice on dcap.PollRate until the server
-	//     publishes RegistrationLink. EndDevice itself carries no pollRate
-	//     (SubscribableResource only; PollRate lives on ListResource), so we
-	//     reuse dcap.PollRate the same way IEEE-029 does for the EndDevice
-	//     lookup idle. ctx-cancel exits the loop cleanly.
-	//
-	// PIN-match branches (after RegistrationLink resolves):
-	//   - GET failure is FATAL — spec-mandated step, can't be skipped.
-	//   - ExpectedPIN == 0: operator opted out of match check; log redacted
-	//     server pIN and break.
-	//   - Match: log "matches expected; proceeding" — this exact string is
-	//     the CSIP "we are commissioned" signal. Downstream phases (FSA /
-	//     DER control / Response Function Set) treat it as the gate. Do not
-	//     reword without updating those consumers.
-	//   - rg.PIN == 0 (server hasn't provisioned us yet — transient): idle
-	//     and re-poll on registration.PollRate (floor 60s / default 30min
-	//     when zero — IEEE-031 pattern). Honors ctx cancel.
-	//   - rg.PIN != 0 && rg.PIN != cfg.ExpectedPIN (wrong device/server
-	//     pair — fatal): log.Fatalf with both values redacted. Operator
-	//     must intervene; idling here masks misconfiguration indefinitely.
-	//
-	// PIN redaction: every PIN log line goes through redactPIN, which
-	// masks all but the last 2 digits (***NN). IEEE 2030.5 §8.2.1 makes the
-	// last digit a check digit; trailing 2 is conventional in security UIs.
-	//
-	// Tests are deferred per Craig override 2026-05-12. Required coverage
-	// captured in backlog (IEEE-034) and the PR body; the IEEE-028
-	// pollDuration test seam was deliberately NOT extended here.
-	switch {
-	case edev.RegistrationLink == nil && (!cfg.CSIP || cfg.AllowUnregistered):
-		log.Println("EndDevice has no RegistrationLink; skipping Phase 2b (--csip off or --allow-unregistered)")
-	case edev.RegistrationLink == nil:
-		// CSIP-strict: idle until the server publishes RegistrationLink.
-		log.Println("=== Phase 2b: Awaiting RegistrationLink ===")
-		for edev.RegistrationLink == nil {
-			pollEvery := pinPollInterval(dcap.PollRate)
-			log.Printf("EndDevice has no RegistrationLink (CSIP V1.2 BASIC-001 step 5 requires it); re-polling EndDevice every %s. Pass --allow-unregistered to bypass.", pollEvery)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(pollEvery):
+	// log.Fatalf stays HERE — main() is the exit-code owner. The extracted
+	// function returns *phase2bFatal in place of every previous inline
+	// log.Fatalf, which main() unwraps via errors.As. ctx-cancel inside the
+	// function returns ctx.Err() (context.Canceled / DeadlineExceeded);
+	// main() treats that the same as the previous inline `return` on
+	// `<-ctx.Done()`.
+	{
+		newEdev, err := runPhase2bRegistration(ctx, client, edev, edevListHref, cfg, dcap)
+		if err != nil {
+			var fe *phase2bFatal
+			if errors.As(err, &fe) {
+				log.Fatalf("%s", fe.Error())
 			}
-			if edevListHref == "" {
-				log.Fatalf("EndDeviceListLink lost between polls; cannot re-lookup own EndDevice")
-			}
-			newEdev, err := client.LookupOwnEndDevice(ctx, edevListHref)
-			if err != nil {
-				log.Fatalf("re-lookup own EndDevice: %v", err)
-			}
-			edev = newEdev
+			return
 		}
-		log.Printf("RegistrationLink appeared: %s", edev.RegistrationLink.Href)
-		fallthrough
-	default:
-		log.Println("=== Phase 2b: Registration ===")
-		for {
-			rg, err := client.GetRegistration(ctx, edev.RegistrationLink.Href)
-			if err != nil {
-				log.Fatalf("GET Registration: %v", err)
-			}
-			if cfg.ExpectedPIN == 0 {
-				log.Printf("Registration: href=%s pIN=%s (--pin not set; skipping match check)", edev.RegistrationLink.Href, redactPIN(uint(rg.PIN)))
-				break
-			}
-			if uint(rg.PIN) == cfg.ExpectedPIN {
-				log.Printf("Registration: pIN=%s matches expected; proceeding", redactPIN(uint(rg.PIN)))
-				break
-			}
-			if rg.PIN == 0 {
-				// Server hasn't provisioned us yet; transient. Idle on registration.PollRate.
-				pollEvery := pinPollInterval(rg.PollRate)
-				log.Printf("Registration: server PIN not yet provisioned (pIN=%s); re-polling Registration every %s", redactPIN(uint(rg.PIN)), pollEvery)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(pollEvery):
-				}
-				continue
-			}
-			// Non-zero mismatch — wrong device/server pair. Operator must intervene.
-			log.Fatalf("Registration: PIN mismatch — server=%s expected=%s (CSIP V1.2 BASIC-001 step 5; check --pin or device provisioning)",
-				redactPIN(uint(rg.PIN)), redactPIN(cfg.ExpectedPIN))
-		}
+		edev = newEdev
 	}
 
 	// Phase 2c: FunctionSetAssignmentsList discovery (IEEE-035 — plan-1
