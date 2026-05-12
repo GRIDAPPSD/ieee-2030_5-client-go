@@ -5,18 +5,26 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	sepTLS "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls"
 	gotls "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls/gotls"
 	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
+
+// ErrEndDeviceNotFound is returned by LookupOwnEndDevice when the server's
+// EndDeviceList does not contain an entry whose LFDI matches the client's.
+// Callers in CSIP mode treat this as a transient "not yet provisioned"
+// condition and re-poll the list rather than aborting. See IEEE-029.
+var ErrEndDeviceNotFound = errors.New("end device not found in server list")
 
 const (
 	contentTypeSEPXML = "application/sep+xml"
@@ -254,6 +262,58 @@ func (c *SEP2Client) Register(ctx context.Context) (sep2.EndDevice, error) {
 		err = c.Get(ctx, loc, &registered)
 	}
 	return registered, err
+}
+
+// LookupOwnEndDevice GETs the EndDeviceList at edevListHref and returns the
+// EndDevice whose LFDI matches the client's. This is the CSIP discovery
+// path: per CSIP §6.7 / IEEE 2030.5 §10.5, CSIP devices are pre-allowlisted
+// out-of-band by LFDI; the device's job is to find its own EndDevice in the
+// server's list, not to POST one. Use this instead of Register when the
+// server provisions devices ahead of time.
+//
+// Returns ErrEndDeviceNotFound when the list does not contain the client's
+// LFDI (callers idle and re-poll in that case — see cmd/inverterclient).
+// All underlying transport/decode failures are wrapped with %w.
+//
+// LFDI match is exact case-sensitive string equality on the upper-hex 40-char
+// form produced by internal/tls.LFDI (`fmt.Sprintf("%X", ...)`); the server
+// stores LFDIs the same way.
+//
+// First-cut paging: appends `?l=255` to fetch the first page. Cursor walking
+// for lists larger than 255 entries is deferred to a follow-up ticket
+// (noted in IEEE-029).
+//
+// IEEE-029 tests deferred per Craig override 2026-05-12 (time crunch).
+// Required-but-deferred coverage (must be written before next backlog sweep):
+//  1. --csip on, server list contains our LFDI → succeeds; Phase 3 fires once.
+//  2. --csip on, server list empty → ErrEndDeviceNotFound; caller idle-loops;
+//     zero PUTs/POSTs on /edev/{id}/* or /mup while idling.
+//  3. --csip on, server list contains other LFDIs but not ours → ErrEndDeviceNotFound.
+//  4. --csip off → existing Register POST still fires /edev (no regression).
+//  5. Cursor paging: list > 255 entries (follow-up ticket; not filed yet).
+func (c *SEP2Client) LookupOwnEndDevice(ctx context.Context, edevListHref string) (sep2.EndDevice, error) {
+	if edevListHref == "" {
+		return sep2.EndDevice{}, fmt.Errorf("edev list href required")
+	}
+
+	// First-cut paging: limit=255 on the first page.
+	sep := "?"
+	if strings.Contains(edevListHref, "?") {
+		sep = "&"
+	}
+	path := edevListHref + sep + "l=255"
+
+	var list sep2.EndDeviceList
+	if err := c.Get(ctx, path, &list); err != nil {
+		return sep2.EndDevice{}, fmt.Errorf("get edev list: %w", err)
+	}
+
+	for _, ed := range list.EndDevice {
+		if ed.LFDI == c.lfdi {
+			return ed, nil
+		}
+	}
+	return sep2.EndDevice{}, ErrEndDeviceNotFound
 }
 
 // PutDERCapability reports the inverter's DER capability.
