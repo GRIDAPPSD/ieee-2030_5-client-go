@@ -123,18 +123,25 @@ func main() {
 	// rather than POSTing /edev. If our LFDI is not in the list yet, idle
 	// and re-poll at dcap.PollRate (default 30s). IEEE 2030.5 mode (--csip
 	// off, the default) keeps the self-registration POST /edev path.
+	// Phase 2 / 3 / 4 walk the link graph reachable from /dcap rather than
+	// hardcoding URLs. Per IEEE 2030.5 §10.3 / CSIP §6.6 the client MUST
+	// derive every endpoint from advertised links — the server is free to
+	// host resources at any path. Each phase skips with a log line if the
+	// upstream link is absent (server did not advertise that function set).
+	// See IEEE-030.
+	edevListHref := ""
+	if dcap.EndDeviceListLink != nil {
+		edevListHref = dcap.EndDeviceListLink.Href
+	}
+
 	var edev sep2.EndDevice
 	if cfg.CSIP {
 		log.Println("=== Phase 2: EndDevice Lookup (CSIP) ===")
-		href := ""
-		if dcap.EndDeviceListLink != nil {
-			href = dcap.EndDeviceListLink.Href
-		}
-		if href == "" {
+		if edevListHref == "" {
 			log.Fatalf("--csip set but DeviceCapability has no EndDeviceListLink")
 		}
 		for {
-			edev, err = client.LookupOwnEndDevice(ctx, href)
+			edev, err = client.LookupOwnEndDevice(ctx, edevListHref)
 			if err == nil {
 				break
 			}
@@ -155,56 +162,109 @@ func main() {
 		log.Printf("Found own EndDevice: href=%s SFDI=%s", edev.Href, edev.SFDI)
 	} else {
 		log.Println("=== Phase 2: Registration ===")
-		edev, err = client.Register(ctx)
+		if edevListHref == "" {
+			log.Fatalf("DeviceCapability has no EndDeviceListLink; registration impossible")
+		}
+		edev, err = client.Register(ctx, edevListHref)
 		if err != nil {
 			log.Fatalf("register: %v", err)
 		}
 		log.Printf("Registered: href=%s SFDI=%s", edev.Href, edev.SFDI)
 	}
-	edevID := extractID(edev.Href)
-	derID := "1" // default DER ID
 
-	// Phase 3: DER Setup
+	// Phase 3: DER Setup — follow EndDevice.DERListLink to find the first
+	// DER, then PUT to its DERCapabilityLink / DERSettingsLink. DERStatus
+	// goes through the reporter loop in Phase 5 against DERStatusLink.
 	log.Println("=== Phase 3: DER Setup ===")
-	maxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
-	maxVAr := sep2.ReactivePower{Value: int64(inverter.Rating.RatedVAr)}
-	modesSupported := uint32(0xFF) // all modes
-	derType := uint8(4)           // PV inverter
-
-	if err := client.PutDERCapability(ctx, edevID, derID, sep2.DERCapability{
-		RTGMaxW:        &maxW,
-		RTGMaxVar:      &maxVAr,
-		ModesSupported: &modesSupported,
-		Type:           &derType,
-	}); err != nil {
-		log.Printf("PUT DERCapability: %v (continuing)", err)
-	}
-
-	setMaxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
-	if err := client.PutDERSettings(ctx, edevID, derID, sep2.DERSettings{
-		SetMaxW:     &setMaxW,
-		UpdatedTime: time.Now().Unix(),
-	}); err != nil {
-		log.Printf("PUT DERSettings: %v (continuing)", err)
-	}
-	log.Println("DER capability and settings reported")
-
-	// Phase 4: Metering Setup
-	log.Println("=== Phase 4: Metering Setup ===")
-	mupHref, err := client.CreateMirrorUsagePoint(ctx, sep2.MirrorUsagePoint{
-		MRID:                "mup-" + client.SFDI()[:8],
-		Description:         "PV Inverter Metering",
-		ServiceCategoryKind: 0,
-		Status:              1,
-	})
-	if err != nil {
-		log.Printf("create MirrorUsagePoint: %v (metering disabled)", err)
+	var derStatusHref string
+	if edev.DERListLink == nil {
+		log.Println("EndDevice has no DERListLink; skipping Phase 3 DER setup")
 	} else {
-		log.Printf("MirrorUsagePoint: %s", mupHref)
+		var derList sep2.DERList
+		if err := client.Get(ctx, edev.DERListLink.Href, &derList); err != nil {
+			log.Fatalf("GET DER list %s: %v", edev.DERListLink.Href, err)
+		}
+		if len(derList.DER) == 0 {
+			log.Println("DER list empty; skipping Phase 3 DER setup")
+		} else {
+			// First DER only — multi-DER inverters are a follow-up.
+			der := derList.DER[0]
+
+			maxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
+			maxVAr := sep2.ReactivePower{Value: int64(inverter.Rating.RatedVAr)}
+			modesSupported := uint32(0xFF) // all modes
+			derType := uint8(4)            // PV inverter
+
+			if der.DERCapabilityLink != nil {
+				if err := client.PutDERCapability(ctx, der.DERCapabilityLink.Href, sep2.DERCapability{
+					RTGMaxW:        &maxW,
+					RTGMaxVar:      &maxVAr,
+					ModesSupported: &modesSupported,
+					Type:           &derType,
+				}); err != nil {
+					log.Printf("PUT DERCapability: %v (continuing)", err)
+				}
+			} else {
+				log.Println("DER has no DERCapabilityLink; skipping DERCapability PUT")
+			}
+
+			setMaxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
+			if der.DERSettingsLink != nil {
+				if err := client.PutDERSettings(ctx, der.DERSettingsLink.Href, sep2.DERSettings{
+					SetMaxW:     &setMaxW,
+					UpdatedTime: time.Now().Unix(),
+				}); err != nil {
+					log.Printf("PUT DERSettings: %v (continuing)", err)
+				}
+			} else {
+				log.Println("DER has no DERSettingsLink; skipping DERSettings PUT")
+			}
+
+			if der.DERStatusLink != nil {
+				derStatusHref = der.DERStatusLink.Href
+			} else {
+				log.Println("DER has no DERStatusLink; Phase 5 status reporting disabled")
+			}
+			log.Println("DER capability and settings reported")
+		}
 	}
 
-	// Create reporter
-	reporter := inverter.NewReporter(client, edevID, derID, extractID(mupHref))
+	// Phase 4: Metering Setup — POST a MirrorUsagePoint to the list href
+	// advertised by DeviceCapability. The response Location is then GET to
+	// read back the MirrorMeterReadingListLink for Phase 5 readings.
+	log.Println("=== Phase 4: Metering Setup ===")
+	var mmrHref string
+	if dcap.MirrorUsagePointListLink == nil {
+		log.Println("DeviceCapability has no MirrorUsagePointListLink; metering disabled")
+	} else {
+		mupLoc, err := client.CreateMirrorUsagePoint(ctx, dcap.MirrorUsagePointListLink.Href, sep2.MirrorUsagePoint{
+			MRID:                "mup-" + client.SFDI()[:8],
+			Description:         "PV Inverter Metering",
+			ServiceCategoryKind: 0,
+			Status:              1,
+		})
+		if err != nil {
+			log.Printf("create MirrorUsagePoint: %v (metering disabled)", err)
+		} else if mupLoc == "" {
+			log.Println("MirrorUsagePoint POST returned empty Location; metering disabled")
+		} else {
+			log.Printf("MirrorUsagePoint: %s", mupLoc)
+			// Read back the created resource to discover its
+			// MirrorMeterReadingListLink — we do not assume the URL.
+			var mup sep2.MirrorUsagePoint
+			if err := client.Get(ctx, mupLoc, &mup); err != nil {
+				log.Printf("GET MirrorUsagePoint %s: %v (metering disabled)", mupLoc, err)
+			} else if mup.MirrorMeterReadingListLink == nil {
+				log.Println("MirrorUsagePoint has no MirrorMeterReadingListLink; metering disabled")
+			} else {
+				mmrHref = mup.MirrorMeterReadingListLink.Href
+			}
+		}
+	}
+
+	// Create reporter — empty hrefs cause the corresponding channel to be
+	// a silent no-op (see reporter.go).
+	reporter := inverter.NewReporter(client, derStatusHref, mmrHref)
 
 	// Phase 5: Simulation Loop
 	log.Printf("=== Phase 5: Simulation — %s ===", scenario.Name)
@@ -289,17 +349,4 @@ func main() {
 			}
 		}
 	}
-}
-
-func extractID(href string) string {
-	if href == "" {
-		return ""
-	}
-	// Extract last path segment: "/mup/abc" → "abc", "/edev/xyz" → "xyz"
-	for i := len(href) - 1; i >= 0; i-- {
-		if href[i] == '/' {
-			return href[i+1:]
-		}
-	}
-	return href
 }

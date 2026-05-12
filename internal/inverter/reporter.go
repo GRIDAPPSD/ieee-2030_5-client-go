@@ -8,26 +8,46 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
 
-// Reporter sends periodic DERStatus and metering data to the server.
+// Reporter sends periodic DERStatus PUTs and MirrorMeterReading POSTs.
+//
+// Hrefs are derived by main.go from the advertised link graph (see IEEE-030)
+// rather than built from ID segments. Empty hrefs cause the corresponding
+// report to be skipped silently — used when the server's DeviceCapability
+// or EndDevice didn't advertise the corresponding link, in which case the
+// inverter must continue running locally without poking endpoints that
+// don't exist on the server side.
 type Reporter struct {
-	client  *SEP2Client
-	edevID  string
-	derID   string
-	mupHref string
+	client        *SEP2Client
+	derStatusHref string // empty → skip status PUT
+	mmrHref       string // empty → skip metering POST
 }
 
-// NewReporter creates a reporter for the given device/DER/mirror IDs.
-func NewReporter(client *SEP2Client, edevID, derID, mupHref string) *Reporter {
+// NewReporter creates a reporter that PUTs status to derStatusHref and POSTs
+// meter readings to mmrHref. Either or both may be empty to disable that
+// channel (see Reporter doc).
+//
+// IEEE-030 tests deferred per Craig override 2026-05-12 (time crunch).
+// Required-but-deferred coverage:
+//  1. derStatusHref empty → ReportStatus is a no-op, returns nil, zero HTTP.
+//  2. mmrHref empty → ReportMetering is a no-op, returns nil, zero HTTP.
+//  3. both set → exactly one PUT and one POST per ReportStatus/ReportMetering
+//     call, to the exact hrefs passed in.
+func NewReporter(client *SEP2Client, derStatusHref, mmrHref string) *Reporter {
 	return &Reporter{
-		client:  client,
-		edevID:  edevID,
-		derID:   derID,
-		mupHref: mupHref,
+		client:        client,
+		derStatusHref: derStatusHref,
+		mmrHref:       mmrHref,
 	}
 }
 
-// ReportStatus sends a DERStatus PUT to the server.
+// ReportStatus sends a DERStatus PUT to the server. Returns nil immediately
+// (without error) when the configured derStatusHref is empty — the server
+// did not advertise a DERStatusLink, so there is nothing to report against.
 func (r *Reporter) ReportStatus(ctx context.Context, state InverterState) error {
+	if r.derStatusHref == "" {
+		return nil
+	}
+
 	connectValue := uint8(0)
 	if state.Connected {
 		connectValue = 1
@@ -46,16 +66,17 @@ func (r *Reporter) ReportStatus(ctx context.Context, state InverterState) error 
 		ReadingTime: state.Time.Unix(),
 	}
 
-	err := r.client.PutDERStatus(ctx, r.edevID, r.derID, status)
+	err := r.client.PutDERStatus(ctx, r.derStatusHref, status)
 	if err != nil {
 		log.Printf("reporter: status PUT failed: %v", err)
 	}
 	return err
 }
 
-// ReportMetering sends a MirrorMeterReading POST with active and reactive power.
+// ReportMetering sends a MirrorMeterReading POST with active power. Returns
+// nil immediately when mmrHref is empty (see Reporter doc).
 func (r *Reporter) ReportMetering(ctx context.Context, state InverterState) error {
-	if r.mupHref == "" {
+	if r.mmrHref == "" {
 		return nil
 	}
 
@@ -78,7 +99,7 @@ func (r *Reporter) ReportMetering(ctx context.Context, state InverterState) erro
 		},
 	}
 
-	err := r.client.PostMeterReading(ctx, r.mupHref, mmr)
+	err := r.client.PostMeterReading(ctx, r.mmrHref, mmr)
 	if err != nil {
 		log.Printf("reporter: metering POST failed: %v", err)
 	}
