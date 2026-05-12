@@ -115,6 +115,30 @@ func main() {
 		log.Fatalf("wait for advertised links: %v", err)
 	}
 
+	// Phase 1b: Server-time sync (IEEE-031). Per IEEE 2030.5 §10 / CSIP,
+	// devices source time from the server's Time resource advertised by
+	// DeviceCapability.TimeLink and use it — not local wall-clock — for
+	// every server-consumed timestamp. We do a synchronous initial sync
+	// so the offset is populated before Phase 2 starts; the goroutine
+	// then refreshes the offset at DefaultTimeSyncPollRate. The goroutine
+	// exits cleanly when the inverter's root context cancels (Ctrl-C
+	// handler already wired). If TimeLink is absent the inverter
+	// degrades to local clock — log it and proceed.
+	log.Println("=== Phase 1b: Time Sync ===")
+	if dcap.TimeLink != nil {
+		serverTime, err := client.SyncServerTime(ctx, dcap.TimeLink.Href)
+		if err != nil {
+			log.Fatalf("initial server time sync %s: %v", dcap.TimeLink.Href, err)
+		}
+		offset := client.Now().Sub(time.Now())
+		log.Printf("Server time: %s (offset from local: %s)",
+			time.Unix(serverTime.CurrentTime, 0).UTC().Format(time.RFC3339),
+			offset)
+		go client.RunTimeSync(ctx, dcap.TimeLink.Href, inverter.DefaultTimeSyncPollRate)
+	} else {
+		log.Println("DeviceCapability has no TimeLink; using local clock for outbound timestamps")
+	}
+
 	// Phase 2: EndDevice acquisition.
 	//
 	// IEEE-029: CSIP mode (--csip) GETs the server's EndDeviceList and finds
@@ -210,9 +234,13 @@ func main() {
 
 			setMaxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
 			if der.DERSettingsLink != nil {
+				// IEEE-031: outbound timestamp — use the server-synced clock
+				// rather than local wall-clock. Before any TimeLink sync runs
+				// client.Now() degrades to time.Now(), so this is safe even
+				// when no TimeLink was advertised.
 				if err := client.PutDERSettings(ctx, der.DERSettingsLink.Href, sep2.DERSettings{
 					SetMaxW:     &setMaxW,
-					UpdatedTime: time.Now().Unix(),
+					UpdatedTime: client.Now().Unix(),
 				}); err != nil {
 					log.Printf("PUT DERSettings: %v (continuing)", err)
 				}

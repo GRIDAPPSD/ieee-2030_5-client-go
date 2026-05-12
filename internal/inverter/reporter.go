@@ -3,7 +3,6 @@ package inverter
 import (
 	"context"
 	"log"
-	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
@@ -83,8 +82,14 @@ func (r *Reporter) ReportMetering(ctx context.Context, state InverterState) erro
 	uomW := sep2.UomWatts
 	activeW := int64(state.ActivePowerW)
 
+	// IEEE-031: outbound identifier derives from the server-synced clock
+	// (client.Now()), not local wall-clock. state.Time is simulation time
+	// (2024 sunrise + accelerated delta), so it stays where it is on the
+	// reading payload fields — replacing it would jump reported timestamps
+	// out of the simulation's time domain. The MRID is a unique ID the
+	// server may correlate against its own clock, so it goes through Now().
 	mmr := sep2.MirrorMeterReading{
-		MRID:           "reading-" + time.Now().Format("20060102-150405"),
+		MRID:           "reading-" + r.client.Now().Format("20060102-150405"),
 		Description:    "Active Power",
 		LastUpdateTime: state.Time.Unix(),
 		ReadingType: &sep2.ReadingType{
