@@ -197,21 +197,59 @@ func main() {
 		log.Printf("Registered: href=%s SFDI=%s", edev.Href, edev.SFDI)
 	}
 
-	// Phase 2b: Registration resource read (IEEE-032). CSIP V1.2 BASIC-001
-	// step 5 / IEEE 2030.5 §10 require the device to walk
-	// EndDevice.RegistrationLink and validate the server-presented pIN
-	// against an out-of-band-provisioned PIN. This ticket lands the GET and
-	// log-only output; PIN mismatch enforcement and idle-retry on an
-	// unprovisioned PIN are IEEE-033. Strict-mode missing-RegistrationLink
-	// behavior is IEEE-034. A GET failure here is non-fatal (back-compat
-	// for the local dev server which may not populate Registration).
+	// Phase 2b: Registration resource read + PIN mismatch enforcement
+	// (IEEE-032 landed the GET; IEEE-033 lands the enforcement). CSIP V1.2
+	// BASIC-001 step 5 / IEEE 2030.5 §10 require the device to walk
+	// EndDevice.RegistrationLink, parse the Registration resource, and
+	// refuse to proceed unless the server-presented pIN matches the
+	// out-of-band-provisioned PIN (--pin / cfg.ExpectedPIN).
+	//
+	// Behavior:
+	//   - GET failure is FATAL — spec-mandated step, can't be skipped.
+	//   - ExpectedPIN == 0 means the operator opted out of the match check
+	//     (back-compat); we log the server pIN and break.
+	//   - On match, the log line "matches expected; proceeding" is the
+	//     CSIP "we are commissioned" signal. Downstream phases (FSA / DER
+	//     control / Response Function Set) treat this as the gate. Do not
+	//     reword without updating those consumers.
+	//   - On mismatch we idle-retry on registration.PollRate (NOT
+	//     dcap.PollRate — Registration carries its own pollRate per spec
+	//     §10), applying the IEEE-031 floor (60s) / default-if-zero (30min)
+	//     pattern. The select honors ctx cancellation so SIGINT during
+	//     idle-retry exits cleanly under -race.
+	//   - Strict-mode missing-RegistrationLink behavior is IEEE-034.
+	//
+	// Tests are deferred per Craig override 2026-05-12. Required coverage
+	// captured in backlog (IEEE-033) and the PR body; the IEEE-028
+	// pollDuration test seam was deliberately NOT extended here.
 	if edev.RegistrationLink != nil {
 		log.Println("=== Phase 2b: Registration ===")
-		rg, err := client.GetRegistration(ctx, edev.RegistrationLink.Href)
-		if err != nil {
-			log.Printf("GET Registration failed (continuing without PIN check): %v", err)
-		} else {
-			log.Printf("Registration: href=%s pIN=%d (expected=%d)", edev.RegistrationLink.Href, rg.PIN, cfg.ExpectedPIN)
+		for {
+			rg, err := client.GetRegistration(ctx, edev.RegistrationLink.Href)
+			if err != nil {
+				log.Fatalf("GET Registration: %v", err)
+			}
+			if cfg.ExpectedPIN == 0 {
+				log.Printf("Registration: href=%s pIN=%d (--pin not set; skipping match check)", edev.RegistrationLink.Href, rg.PIN)
+				break
+			}
+			if uint(rg.PIN) == cfg.ExpectedPIN {
+				log.Printf("Registration: pIN=%d matches expected; proceeding", rg.PIN)
+				break
+			}
+			pollEvery := time.Duration(rg.PollRate) * time.Second
+			if pollEvery <= 0 {
+				pollEvery = 30 * time.Minute
+			}
+			if pollEvery < 60*time.Second {
+				pollEvery = 60 * time.Second
+			}
+			log.Printf("Registration PIN mismatch: got %d, expected %d; re-polling Registration every %s", rg.PIN, cfg.ExpectedPIN, pollEvery)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(pollEvery):
+			}
 		}
 	} else {
 		log.Println("EndDevice has no RegistrationLink; skipping Phase 2b")
