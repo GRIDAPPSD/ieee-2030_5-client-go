@@ -38,8 +38,9 @@ import (
 )
 
 // sampleDERControlResponse returns a populated DERControlResponse the test
-// server will see on the wire. Status=1 (Started) per the §10.10 enum, with
-// a Subject mRID that identifies which event the Response acknowledges.
+// server will see on the wire. Status=2 (Started) per IEEE 2030.5-2023
+// §10.10 Table 31 (post-IEEE-044a enum alignment), with a Subject mRID
+// that identifies which event the Response acknowledges.
 func sampleDERControlResponse() sep2.DERControlResponse {
 	status := sep2.ResponseStatusEventStarted
 	return sep2.DERControlResponse{
@@ -135,7 +136,7 @@ func TestPostResponse_201CreatedHappyPath(t *testing.T) {
 		t.Errorf("decoded Subject = %q, want event-mrid-001", decoded.Subject)
 	}
 	if decoded.Status == nil || *decoded.Status != sep2.ResponseStatusEventStarted {
-		t.Errorf("decoded Status = %v, want Started(1)", decoded.Status)
+		t.Errorf("decoded Status = %v, want Started(2)", decoded.Status)
 	}
 	if !strings.Contains(logs, "/rsps/1/rsp/42") {
 		t.Errorf("expected Location header trace in log; got: %s", logs)
