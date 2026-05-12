@@ -70,11 +70,29 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 	}
 
 	tlsCfg := &gotls.Config{
-		Certificates:     []gotls.Certificate{cert},
-		RootCAs:          caPool,
-		MinVersion:       gotls.VersionTLS12,
-		MaxVersion:       gotls.VersionTLS12,
-		CipherSuites:     cipherSuites,
+		Certificates: []gotls.Certificate{cert},
+		RootCAs:      caPool,
+		MinVersion:   gotls.VersionTLS12,
+		MaxVersion:   gotls.VersionTLS12,
+		CipherSuites: cipherSuites,
+		// IEEE 2030.5 / CSIP §6.11 server certs carry a critical
+		// HardwareModuleName SAN (otherName OID 1.3.6.1.5.5.7.8.4) that the
+		// stdlib x509 parser leaves in UnhandledCriticalExtensions. The
+		// gotls client-side handshake always runs stdlib Verify before
+		// invoking VerifyPeerCertificate (handshake_client.go:985-1002), so
+		// merely adding the hook is not enough — stdlib's pre-verify is
+		// what trips `unhandled critical extension`. Set InsecureSkipVerify
+		// to bypass that pre-verify, and do the chain walk ourselves in the
+		// hook via the shared HMN-tolerant helper. This is NOT
+		// `--insecure-skip-verify`; the hook performs full chain validation
+		// against RootCAs. CSIP §6.11 device-profile certs have empty
+		// Subject and an otherName-only SAN, so stdlib hostname
+		// verification cannot succeed against them in any case; the helper
+		// matches the existing server-side enforcement scope. See IEEE-027.
+		InsecureSkipVerify: true, //nolint:gosec // see comment above
+		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			return sepTLS.VerifyPeerCertWithHardwareModuleSAN(rawCerts, caPool)
+		},
 		CurvePreferences: []gotls.CurveID{gotls.CurveP256},
 	}
 
