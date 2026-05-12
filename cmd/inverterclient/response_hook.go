@@ -11,13 +11,20 @@
 //     wire status applies to this edge" → skip.
 //  3. Honors the event's responseRequired bitmap (Table 32) via
 //     responseRequiredOn. A nil mask means "no opt-in" → skip.
-//  4. Calls (*SEP2Client).PostResponse with a 30s context. PostResponse
-//     already wraps a one-shot transient retry; IEEE-045 will replace
-//     that with proper retry / backoff / dead-letter.
+//  4. Calls inverter.PostResponseWithRetry with a 30s context and the
+//     documented IEEE-045 default retry schedule (3 attempts, 500ms
+//     initial backoff, 30s cap, 2.0× multiplier). The retry wrapper
+//     layers on top of (*SEP2Client).PostResponse's one-shot internal
+//     retry; transient 5xx failures are retried, 4xx and context errors
+//     are not. All-attempts-failed emits a dead-letter log line and
+//     returns a wrapped error — the hook logs it but does NOT block
+//     the state machine.
 //
-// The hook never blocks the state-machine Tick — Phase 6 entry's
-// PostResponse is synchronous, but its 30s context bounds the call. If
-// IEEE-045 needs async dispatch the wrapping happens there, not here.
+// The hook never blocks the state-machine Tick — PostResponseWithRetry
+// is synchronous, but its 30s ctx bounds total elapsed time. Async
+// dispatch is intentionally out of scope (the retry schedule worst case
+// — 500ms + 1s ≈ 1.5s of waits plus three in-flight HTTP requests —
+// fits comfortably inside Tick's cadence).
 //
 // Pike rules satisfied:
 //   - Errors are values: every PostResponse failure is wrapped with %w
@@ -39,20 +46,27 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
 
-// responsePOSTTimeout caps every PostResponse call from the hook. Sized
-// well above IEEE-043's HTTP request timeout (currently ~10s) to allow the
-// one-shot retry to complete without truncation, but bounded so a
-// pathological server does not stall the hook fan-out forever.
+// responsePOSTTimeout caps every PostResponseWithRetry call from the
+// hook. Sized to cover the IEEE-045 worst-case retry schedule (three
+// attempts at IEEE-043's ~10s HTTP timeout plus two backoffs of ~500ms
+// and ~1s) with comfortable headroom for a slow-but-recovering server.
 const responsePOSTTimeout = 30 * time.Second
 
 // responsePoster is the minimal SEP2Client surface the hook depends on.
 // Defined at the consumer per Pike's interface-at-the-consumer rule;
 // keeps the hook trivially testable with a httptest stub through
 // inverter.NewSEP2Client OR a hand-rolled fake that satisfies this
-// method set.
+// method set. The interface intentionally matches
+// inverter.ResponsePoster so a *SEP2Client (or any fake) flows through
+// PostResponseWithRetry without an adapter.
 type responsePoster interface {
 	PostResponse(ctx context.Context, replyToHref string, resp sep2.DERControlResponse) error
 }
+
+// defaultResponseRetryConfig is the IEEE-045 retry schedule the hook
+// applies to every Response POST. Centralised so the wire-up site in
+// main.go and the e2e test both observe the same defaults.
+var defaultResponseRetryConfig = inverter.DefaultResponseRetryConfig()
 
 // nowFunc is the test seam for CreatedDateTime. Production passes
 // time.Now (or the SEP2Client's Now() for time-sync alignment); tests
@@ -71,7 +85,17 @@ type nowFunc func() time.Time
 // now is the clock source for CreatedDateTime. Pass time.Now (or the
 // SEP2Client's Now method) in production; tests inject a fixed-time
 // closure.
-func responsePOSTHook(client responsePoster, lfdi string, now nowFunc) inverter.TransitionHook {
+//
+// retryCfg is the optional IEEE-045 retry schedule. When zero / omitted,
+// the documented production defaults from
+// inverter.DefaultResponseRetryConfig() apply (3 attempts, 500ms initial,
+// 30s cap, 2.0× multiplier). Tests pass a tight schedule so the suite
+// stays fast.
+func responsePOSTHook(client responsePoster, lfdi string, now nowFunc, retryCfg ...inverter.ResponseRetryConfig) inverter.TransitionHook {
+	cfg := defaultResponseRetryConfig
+	if len(retryCfg) > 0 {
+		cfg = retryCfg[0]
+	}
 	return func(prev, next inverter.EventState, evt *sep2.DERControl) {
 		// Auto-revert transitions (EVENT_COMPLETED → DEFAULT, EVENT_CANCELLED
 		// → DEFAULT) carry evt == nil per the IEEE-040 contract. There is no
@@ -118,12 +142,17 @@ func responsePOSTHook(client responsePoster, lfdi string, now nowFunc) inverter.
 			},
 		}
 
-		if err := client.PostResponse(ctx, evt.ReplyTo, resp); err != nil {
-			log.Printf("IEEE-044: response POST failed event=%q status=%d replyTo=%q: %v",
+		// IEEE-045: PostResponseWithRetry layers a 3-attempt exponential
+		// backoff plus dead-letter log on top of PostResponse's one-shot
+		// internal retry. On all-attempts-failed it returns a wrapped
+		// ErrResponseTransient; the hook logs that and moves on — the
+		// state machine MUST keep advancing per CSIP V1.2 CORE-022.
+		if err := inverter.PostResponseWithRetry(ctx, client, evt.ReplyTo, resp, cfg); err != nil {
+			log.Printf("IEEE-044/045: response POST failed event=%q status=%d replyTo=%q: %v",
 				evt.MRID, status, evt.ReplyTo, err)
 			return
 		}
-		log.Printf("IEEE-044: response POST ok event=%q status=%d replyTo=%q", evt.MRID, status, evt.ReplyTo)
+		log.Printf("IEEE-044/045: response POST ok event=%q status=%d replyTo=%q", evt.MRID, status, evt.ReplyTo)
 	}
 }
 

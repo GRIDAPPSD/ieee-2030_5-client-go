@@ -33,6 +33,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"math/rand/v2"
 	"strings"
 	"sync"
@@ -521,9 +522,11 @@ func TestResponsePOSTHook_NilResponseRequiredEmitsZeroPOSTs(t *testing.T) {
 func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
 	t.Parallel()
 	// First call returns a transient-wrapped error mirroring what
-	// PostResponse would surface on a persistent 5xx. The hook must
-	// log and return, NOT panic and NOT prevent subsequent transitions
-	// from firing.
+	// PostResponse would surface on a persistent 5xx. With IEEE-045's
+	// PostResponseWithRetry layered in, the hook will retry — so the
+	// first transition takes 2 PostResponse calls (attempt 1: transient,
+	// attempt 2: success). The hook must still log + move on with no
+	// panic / no state-machine wedge.
 	transient := fmt.Errorf("simulated 500: %w", inverter.ErrResponseTransient)
 	poster := &fakePoster{errsLeft: []error{transient}}
 
@@ -533,26 +536,110 @@ func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
 	tnow := fixedTestNow
 	clock := func() time.Time { return tnow }
 	sm, sched := newTestStateMachine(clock)
-	sm.AddTransitionHook(responsePOSTHook(poster, "lfdi-500", fixedNowFn))
+	// Tight retry cfg so the test does not burn the IEEE-045 default
+	// 500ms initial backoff per recovered failure.
+	tightRetry := inverter.ResponseRetryConfig{
+		MaxAttempts:       3,
+		InitialDelay:      1 * time.Millisecond,
+		MaxDelay:          5 * time.Millisecond,
+		BackoffMultiplier: 2.0,
+	}
+	sm.AddTransitionHook(responsePOSTHook(poster, "lfdi-500", fixedNowFn, tightRetry))
 
-	// Transition 1: DEFAULT→RECEIVED — hook fires, fake returns error.
+	// Transition 1: DEFAULT→RECEIVED — attempt 1 transient, attempt 2 OK.
 	sm.Tick(clock(), []sep2.DERControl{dc}, nil, sched)
-	if got := len(poster.Calls()); got != 1 {
-		t.Errorf("after RECEIVED transition: calls = %d, want 1", got)
+	if got := len(poster.Calls()); got != 2 {
+		t.Errorf("after RECEIVED transition: calls = %d, want 2 (one transient retry, then success)", got)
 	}
 
 	// Transition 2: RECEIVED→STARTED — hook MUST still fire.
 	tnow = fixedTestNow.Add(90 * time.Second)
 	sm.Tick(clock(), nil, nil, sched)
-	if got := len(poster.Calls()); got != 2 {
-		t.Errorf("after STARTED transition: calls = %d, want 2 (next transition must fire)", got)
+	if got := len(poster.Calls()); got != 3 {
+		t.Errorf("after STARTED transition: calls = %d, want 3 (next transition must fire)", got)
 	}
 
 	// Transition 3: STARTED→COMPLETED + silent revert.
 	tnow = fixedTestNow.Add(5 * time.Minute)
 	sm.Tick(clock(), nil, nil, sched)
-	if got := len(poster.Calls()); got != 3 {
-		t.Errorf("after COMPLETED transition: calls = %d, want 3", got)
+	if got := len(poster.Calls()); got != 4 {
+		t.Errorf("after COMPLETED transition: calls = %d, want 4", got)
+	}
+}
+
+// =============================================================================
+// IEEE-045 integration: state-machine transition → retry wrapper →
+// dead-letter log when all attempts fail.
+// =============================================================================
+
+// TestResponsePOSTHook_IEEE045DeadLetterOnPersistentTransient is the
+// Phase 6 end-to-end smoke test that ties IEEE-044 (hook wiring) and
+// IEEE-045 (retry + dead-letter) together. A persistent 5xx response
+// at the IEEE-040 state machine's DEFAULT→RECEIVED edge must:
+//
+//  1. Drive cfg.MaxAttempts PostResponse calls (retry schedule consumed).
+//  2. Emit a dead-letter log line carrying the event mRID and Table 31
+//     status so an operator can audit the dropped Response.
+//  3. NOT wedge the state machine — the next transition
+//     (RECEIVED→STARTED) must still fire its own Response POST.
+//
+// Pike rules satisfied: errors are values (dead-letter line preserves
+// %w chain to ErrResponseTransient), no goroutine leak (the test runs
+// synchronously on a fake retry clock effectively — InitialDelay is
+// 1ms via the tight cfg).
+func TestResponsePOSTHook_IEEE045DeadLetterOnPersistentTransient(t *testing.T) {
+	t.Parallel()
+	transient := fmt.Errorf("simulated 500: %w", inverter.ErrResponseTransient)
+	// Queue MaxAttempts transients so attempt 1 + 2 + 3 all fail on the
+	// first transition. Anything after that returns nil → the second
+	// transition succeeds in one shot.
+	poster := &fakePoster{errsLeft: []error{transient, transient, transient}}
+
+	mask := uint8(0x07)
+	dc := buildControl("EVT-DL-001", "https://server.example/rsps", &mask, 1*time.Minute, 60)
+
+	tnow := fixedTestNow
+	clock := func() time.Time { return tnow }
+	sm, sched := newTestStateMachine(clock)
+	tightRetry := inverter.ResponseRetryConfig{
+		MaxAttempts:       3,
+		InitialDelay:      1 * time.Millisecond,
+		MaxDelay:          5 * time.Millisecond,
+		BackoffMultiplier: 2.0,
+	}
+	sm.AddTransitionHook(responsePOSTHook(poster, "lfdi-dl", fixedNowFn, tightRetry))
+
+	// Capture log output so the dead-letter line can be asserted.
+	var buf strings.Builder
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	// Transition 1: DEFAULT→RECEIVED — 3 PostResponse attempts, all fail
+	// transiently → dead-letter log emitted.
+	sm.Tick(clock(), []sep2.DERControl{dc}, nil, sched)
+	if got := len(poster.Calls()); got != tightRetry.MaxAttempts {
+		t.Errorf("after RECEIVED transition: calls = %d, want %d (all retry attempts exhausted)", got, tightRetry.MaxAttempts)
+	}
+
+	logs := buf.String()
+	if !strings.Contains(logs, "DEAD-LETTER") {
+		t.Errorf("dead-letter log line missing; got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "EVT-DL-001") {
+		t.Errorf("dead-letter log missing event mRID; got:\n%s", logs)
+	}
+	if !strings.Contains(logs, fmt.Sprintf("status=%d", sep2.ResponseStatusEventReceived)) {
+		t.Errorf("dead-letter log missing status=%d; got:\n%s", sep2.ResponseStatusEventReceived, logs)
+	}
+
+	// Transition 2: RECEIVED→STARTED — no queued errs left → succeeds
+	// on the first attempt. Proves the state machine kept advancing.
+	tnow = fixedTestNow.Add(90 * time.Second)
+	sm.Tick(clock(), nil, nil, sched)
+	if got := len(poster.Calls()); got != tightRetry.MaxAttempts+1 {
+		t.Errorf("after STARTED transition: calls = %d, want %d (state machine must keep advancing)",
+			got, tightRetry.MaxAttempts+1)
 	}
 }
 
