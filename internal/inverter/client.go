@@ -438,11 +438,108 @@ func (c *SEP2Client) PutDERStatus(ctx context.Context, derstatusHref string, sta
 	return c.Put(ctx, derstatusHref, &status)
 }
 
-// GetDefaultDERControl fetches the default DER control for a program.
-func (c *SEP2Client) GetDefaultDERControl(ctx context.Context, path string) (sep2.DefaultDERControl, error) {
+// GetDERProgramList GETs the DERProgramList at the given href and decodes
+// it. CSIP V1.2 CORE-012 step 2 — for each FSA the EndDevice has been
+// assigned, the device walks the FSA's DERProgramListLink to enumerate the
+// DERPrograms bound to it. IEEE-036 lands ONLY the list GET + per-program
+// subtree fetch in cmd/inverterclient/main.go; Primacy + mRID selection of
+// the highest-priority DERProgram is deferred to IEEE-037 (the next ticket
+// in plan-1 phase 4).
+//
+// First-cut paging: appends `?l=255` to fetch the first page; cursor walking
+// for lists larger than 255 entries is deferred to a follow-up. Mirrors the
+// paging pattern in LookupOwnEndDevice (IEEE-029) and GetFSAList (IEEE-035).
+//
+// IEEE-036 tests deferred per Craig override 2026-05-12. Required coverage:
+//  1. Happy path: FSA returns DERProgramList with N entries; method returns
+//     the parsed list intact.
+//  2. Empty href: returns error matching "DERProgramList href required";
+//     no HTTP call.
+//  3. Server 404: error wrapped via c.Get, no panic.
+//  4. Malformed XML: error wrapped via c.Get, no panic.
+//  5. DERProgram with absent DefaultDERControlLink / DERControlListLink /
+//     DERCurveListLink: walker skips those GETs, cache entry still recorded.
+//  6. Pagination cap: list with > 255 entries — first 255 returned, rest
+//     deferred to cursor follow-up.
+//  7. Multi-FSA topology: each of 3 FSAs returns 2 DERPrograms; walker caches
+//     6 unique programs keyed by mRID.
+func (c *SEP2Client) GetDERProgramList(ctx context.Context, derProgramListHref string) (sep2.DERProgramList, error) {
+	if derProgramListHref == "" {
+		return sep2.DERProgramList{}, fmt.Errorf("DERProgramList href required")
+	}
+	sep := "?"
+	if strings.Contains(derProgramListHref, "?") {
+		sep = "&"
+	}
+	path := derProgramListHref + sep + "l=255"
+	var list sep2.DERProgramList
+	if err := c.Get(ctx, path, &list); err != nil {
+		return sep2.DERProgramList{}, fmt.Errorf("GET DERProgramList: %w", err)
+	}
+	return list, nil
+}
+
+// GetDefaultDERControl GETs the DefaultDERControl resource at the advertised
+// href. CSIP V1.2 CORE-012 step 2 — each DERProgram surfaces a DefaultDERControl
+// that the device applies as fallback when no active DERControl is in effect.
+// IEEE-036 fetches and caches it; consumption in ApplyControls is Phase 5.
+//
+// Empty href returns a sentinel error so callers can distinguish "link absent"
+// from a transport failure without inspecting wrapped errors.
+//
+// IEEE-036 tests deferred per Craig override 2026-05-12.
+func (c *SEP2Client) GetDefaultDERControl(ctx context.Context, defaultDERControlHref string) (sep2.DefaultDERControl, error) {
+	if defaultDERControlHref == "" {
+		return sep2.DefaultDERControl{}, fmt.Errorf("DefaultDERControl href required")
+	}
 	var dderc sep2.DefaultDERControl
-	err := c.Get(ctx, path, &dderc)
-	return dderc, err
+	if err := c.Get(ctx, defaultDERControlHref, &dderc); err != nil {
+		return sep2.DefaultDERControl{}, fmt.Errorf("GET DefaultDERControl: %w", err)
+	}
+	return dderc, nil
+}
+
+// GetDERControlList GETs the DERControlList at the advertised href and decodes
+// it. Mirrors GetDERProgramList's paging pattern (?l=255 first page; cursor
+// walking deferred). IEEE-036 caches the result per-program; scheduling and
+// application are Phase 5 (IEEE-038..).
+//
+// IEEE-036 tests deferred per Craig override 2026-05-12.
+func (c *SEP2Client) GetDERControlList(ctx context.Context, derControlListHref string) (sep2.DERControlList, error) {
+	if derControlListHref == "" {
+		return sep2.DERControlList{}, fmt.Errorf("DERControlList href required")
+	}
+	sep := "?"
+	if strings.Contains(derControlListHref, "?") {
+		sep = "&"
+	}
+	path := derControlListHref + sep + "l=255"
+	var list sep2.DERControlList
+	if err := c.Get(ctx, path, &list); err != nil {
+		return sep2.DERControlList{}, fmt.Errorf("GET DERControlList: %w", err)
+	}
+	return list, nil
+}
+
+// GetDERCurveList GETs the DERCurveList at the advertised href and decodes
+// it. Mirrors GetDERProgramList's paging pattern. IEEE-036 caches the result
+// per-program; curve lookup and interpolation are Phase 5.
+//
+// IEEE-036 tests deferred per Craig override 2026-05-12.
+func (c *SEP2Client) GetDERCurveList(ctx context.Context, derCurveListHref string) (sep2.DERCurveList, error) {
+	if derCurveListHref == "" {
+		return sep2.DERCurveList{}, fmt.Errorf("DERCurveList href required")
+	}
+	sep := "?"
+	if strings.Contains(derCurveListHref, "?") {
+		sep = "&"
+	}
+	path := derCurveListHref + sep + "l=255"
+	var list sep2.DERCurveList
+	if err := c.Get(ctx, path, &list); err != nil {
+		return sep2.DERCurveList{}, fmt.Errorf("GET DERCurveList: %w", err)
+	}
+	return list, nil
 }
 
 // CreateMirrorUsagePoint POSTs a MirrorUsagePoint registration to the

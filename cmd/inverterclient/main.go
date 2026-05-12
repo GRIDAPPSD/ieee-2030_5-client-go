@@ -36,7 +36,8 @@ func redactPIN(p uint) string {
 // pinPollInterval converts an IEEE 2030.5 pollRate (seconds, uint32) to a
 // time.Duration with the project's standard floor (60s) and default-on-zero
 // (30min) policy. Used by the Phase 2b idle loops (server-PIN-not-provisioned
-// and missing-RegistrationLink-in-CSIP-strict). Pattern mirrors IEEE-031.
+// and missing-RegistrationLink-in-CSIP-strict) and the Phase 2c FSAList /
+// DERProgram-walk idle loops (IEEE-035 / IEEE-036). Pattern mirrors IEEE-031.
 func pinPollInterval(rate uint32) time.Duration {
 	d := time.Duration(rate) * time.Second
 	if d <= 0 {
@@ -46,6 +47,59 @@ func pinPollInterval(rate uint32) time.Duration {
 		d = 60 * time.Second
 	}
 	return d
+}
+
+// walkDERProgramTree implements the IEEE-036 Phase 2c (continued) walk: for
+// each FSA whose DERProgramListLink is non-nil, GET the DERProgramList and
+// fetch each DERProgram's DefaultDERControl / DERControlList / DERCurveList
+// subtrees (when those links are non-nil). Programs are cached into `out`
+// keyed by mRID; if the same DERProgram is reachable from multiple FSAs the
+// later GET wins (DERProgram identity is its mRID per IEEE 2030.5 §10.1.3).
+//
+// Per-FSA missing-DERProgramListLink and per-DERProgram missing-subtree-link
+// are tolerated — the walker skips that level and continues. Transport / decode
+// failures are returned wrapped with `%w` so callers can `errors.Is`/`As` on
+// underlying causes. Context cancellation propagates through c.Get; this
+// function spawns no goroutines.
+//
+// IEEE-036 tests deferred per Craig override 2026-05-12. Required coverage
+// captured in the backlog ticket and the PR body.
+func walkDERProgramTree(
+	ctx context.Context,
+	client *inverter.SEP2Client,
+	fsaList sep2.FunctionSetAssignmentsList,
+	out map[string]sep2.DERProgram,
+) error {
+	for _, fsa := range fsaList.FunctionSetAssignments {
+		if fsa.DERProgramListLink == nil {
+			log.Printf("  FSA mRID=%s has no DERProgramListLink; skipping", fsa.MRID)
+			continue
+		}
+		progList, err := client.GetDERProgramList(ctx, fsa.DERProgramListLink.Href)
+		if err != nil {
+			return fmt.Errorf("FSA mRID=%s DERProgramList: %w", fsa.MRID, err)
+		}
+		log.Printf("  FSA mRID=%s: %d DERProgram(s)", fsa.MRID, len(progList.DERProgram))
+		for _, prog := range progList.DERProgram {
+			if prog.DefaultDERControlLink != nil {
+				if _, err := client.GetDefaultDERControl(ctx, prog.DefaultDERControlLink.Href); err != nil {
+					return fmt.Errorf("DERProgram mRID=%s DefaultDERControl: %w", prog.MRID, err)
+				}
+			}
+			if prog.DERControlListLink != nil {
+				if _, err := client.GetDERControlList(ctx, prog.DERControlListLink.Href); err != nil {
+					return fmt.Errorf("DERProgram mRID=%s DERControlList: %w", prog.MRID, err)
+				}
+			}
+			if prog.DERCurveListLink != nil {
+				if _, err := client.GetDERCurveList(ctx, prog.DERCurveListLink.Href); err != nil {
+					return fmt.Errorf("DERProgram mRID=%s DERCurveList: %w", prog.MRID, err)
+				}
+			}
+			out[prog.MRID] = prog
+		}
+	}
+	return nil
 }
 
 func main() {
@@ -385,9 +439,63 @@ func main() {
 		}
 	}
 	// fsaList is the Phase 2c cache seam consumed by IEEE-036 (FSA -> DERProgram
-	// tree walk) and IEEE-037 (Primacy + mRID selection). Logged once for
-	// operator visibility until IEEE-036 lands.
-	log.Printf("Phase 2c complete: cached %d FSA(s) for IEEE-036 tree walk", len(fsaList.FunctionSetAssignments))
+	// tree walk, below) and IEEE-037 (Primacy + mRID selection).
+	log.Printf("Phase 2c (FSAList): cached %d FSA(s)", len(fsaList.FunctionSetAssignments))
+
+	// Phase 2c (continued, IEEE-036): walk each FSA's DERProgramListLink and
+	// fetch each DERProgram's DefaultDERControl + DERControlList + DERCurveList
+	// subtrees. CSIP V1.2 CORE-012 step 2 — list discovery, NOT selection.
+	// Primacy + mRID selection of the highest-priority DERProgram is IEEE-037,
+	// the next ticket. Control application (consuming the cache) is Phase 5.
+	//
+	// The cache `derProgramsByMRID` is the seam IEEE-037 consumes. Keying on
+	// mRID matches the IEEE 2030.5 §10.1.3 list-ordering tie-break field; if
+	// the same DERProgram is reachable from multiple FSAs the later GET wins
+	// (acceptable per the spec — DERProgram resources are identified by mRID,
+	// not by FSA path).
+	//
+	// Per-FSA missing-DERProgramListLink: skip that FSA, walk the rest.
+	// Per-DERProgram missing-DefaultDERControlLink / DERControlListLink /
+	// DERCurveListLink: skip that subtree GET, still record the program. Empty
+	// aggregate program set across all FSAs:
+	//   - --csip strict: idle-loop on dcap.PollRate (same idiom IEEE-035 uses
+	//     for empty FSAList). ctx-cancel exits cleanly.
+	//   - --csip off OR --allow-unregistered: log and proceed with an empty
+	//     cache.
+	//
+	// IEEE-036 tests deferred per Craig override 2026-05-12. Required coverage
+	// captured in backlog (IEEE-036) and the PR body.
+	derProgramsByMRID := make(map[string]sep2.DERProgram)
+	if len(fsaList.FunctionSetAssignments) > 0 {
+		log.Println("=== Phase 2c: DERProgram Tree Walk ===")
+		for {
+			derProgramsByMRID = make(map[string]sep2.DERProgram)
+			if err := walkDERProgramTree(ctx, client, fsaList, derProgramsByMRID); err != nil {
+				log.Fatalf("walk DERProgram tree: %v", err)
+			}
+			if len(derProgramsByMRID) > 0 {
+				log.Printf("Phase 2c (DERProgram walk): cached %d DERProgram(s) across %d FSA(s)",
+					len(derProgramsByMRID), len(fsaList.FunctionSetAssignments))
+				break
+			}
+			if cfg.CSIP && !cfg.AllowUnregistered {
+				pollEvery := pinPollInterval(dcap.PollRate)
+				log.Printf("No DERPrograms enumerated across any FSA; re-polling every %s (CSIP V1.2 CORE-012 step 2 expects >=1 DERProgram per provisioned device)", pollEvery)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(pollEvery):
+				}
+				continue
+			}
+			log.Println("No DERPrograms enumerated; proceeding with empty cache (--csip off or --allow-unregistered)")
+			break
+		}
+	}
+	// derProgramsByMRID is consumed by IEEE-037 (Primacy + mRID selection) and
+	// then Phase 5 (ApplyControls). Logged once for operator visibility until
+	// IEEE-037 lands.
+	_ = derProgramsByMRID
 
 	// Phase 3: DER Setup — follow EndDevice.DERListLink to find the first
 	// DER, then PUT to its DERCapabilityLink / DERSettingsLink. DERStatus
