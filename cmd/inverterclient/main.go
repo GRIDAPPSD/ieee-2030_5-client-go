@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -36,6 +37,7 @@ func main() {
 	hmiPort := flag.Int("hmi-port", 8080, "HMI web dashboard port (0 to disable)")
 	listScenarios := flag.Bool("list-scenarios", false, "List available scenarios and exit")
 	flag.BoolVar(&cfg.CSIPStrict, "csip-strict", false, "Strict CSIP TLS: drop GCM fallback, only offer TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8")
+	flag.BoolVar(&cfg.CSIP, "csip", false, "CSIP mode: lookup own EndDevice in server's /edev list instead of POST-registering")
 	flag.Parse()
 
 	if *listScenarios {
@@ -113,15 +115,54 @@ func main() {
 		log.Fatalf("wait for advertised links: %v", err)
 	}
 
-	// Phase 2: Registration
-	log.Println("=== Phase 2: Registration ===")
-	edev, err := client.Register(ctx)
-	if err != nil {
-		log.Fatalf("register: %v", err)
+	// Phase 2: EndDevice acquisition.
+	//
+	// IEEE-029: CSIP mode (--csip) GETs the server's EndDeviceList and finds
+	// our own EndDevice by LFDI match — CSIP devices are pre-allowlisted
+	// out-of-band, so the device discovers a pre-provisioned EndDevice
+	// rather than POSTing /edev. If our LFDI is not in the list yet, idle
+	// and re-poll at dcap.PollRate (default 30s). IEEE 2030.5 mode (--csip
+	// off, the default) keeps the self-registration POST /edev path.
+	var edev sep2.EndDevice
+	if cfg.CSIP {
+		log.Println("=== Phase 2: EndDevice Lookup (CSIP) ===")
+		href := ""
+		if dcap.EndDeviceListLink != nil {
+			href = dcap.EndDeviceListLink.Href
+		}
+		if href == "" {
+			log.Fatalf("--csip set but DeviceCapability has no EndDeviceListLink")
+		}
+		for {
+			edev, err = client.LookupOwnEndDevice(ctx, href)
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, inverter.ErrEndDeviceNotFound) {
+				log.Fatalf("lookup own EndDevice: %v", err)
+			}
+			pollEvery := time.Duration(dcap.PollRate) * time.Second
+			if pollEvery <= 0 {
+				pollEvery = 30 * time.Second
+			}
+			log.Printf("Own EndDevice not in server list; re-polling every %s", pollEvery)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(pollEvery):
+			}
+		}
+		log.Printf("Found own EndDevice: href=%s SFDI=%s", edev.Href, edev.SFDI)
+	} else {
+		log.Println("=== Phase 2: Registration ===")
+		edev, err = client.Register(ctx)
+		if err != nil {
+			log.Fatalf("register: %v", err)
+		}
+		log.Printf("Registered: href=%s SFDI=%s", edev.Href, edev.SFDI)
 	}
 	edevID := extractID(edev.Href)
 	derID := "1" // default DER ID
-	log.Printf("Registered: href=%s SFDI=%s", edev.Href, edev.SFDI)
 
 	// Phase 3: DER Setup
 	log.Println("=== Phase 3: DER Setup ===")

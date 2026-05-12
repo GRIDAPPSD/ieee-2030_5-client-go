@@ -90,6 +90,15 @@ type SimConfig struct {
 	// of silently degrading. Default false retains GCM for interop with
 	// the in-tree test/dev server (see internal/tls/ccmserver.go).
 	CSIPStrict bool
+
+	// CSIP, when true, selects CSIP-mode EndDevice discovery: the inverter
+	// GETs the server's EndDeviceList and finds its own EndDevice by LFDI
+	// match instead of POSTing to /edev to self-register. CSIP devices are
+	// pre-allowlisted out-of-band; the device's job is to discover its
+	// pre-provisioned EndDevice, not to create one. If our LFDI is not in
+	// the list, the inverter idles and re-polls the list. Default false
+	// retains the IEEE 2030.5 self-registration path. See IEEE-029.
+	CSIP bool
 }
 
 // CurvePoint is a single point on a piecewise linear control curve.
