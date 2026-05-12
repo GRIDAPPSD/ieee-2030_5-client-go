@@ -104,8 +104,20 @@ type SimConfig struct {
 	// see echoed by the server's Registration resource (CSIP V1.2 BASIC-001
 	// step 5 / IEEE 2030.5 §10). IEEE-032 plumbs the value and logs it
 	// alongside the server-presented PIN; mismatch enforcement and the
-	// "0 = skip" sentinel land in IEEE-033.
+	// "0 = skip" sentinel land in IEEE-033. IEEE-034 corrects the mismatch
+	// branch to fatal-on-nonzero (rg.PIN==0 stays idle; nonzero mismatch is
+	// a wrong-device/server-pair condition and must fail loud).
 	ExpectedPIN uint
+
+	// AllowUnregistered, when true, bypasses the strict missing-RegistrationLink
+	// check in --csip mode and lets Phase 3+ proceed without a server-published
+	// Registration resource. Default false: in CSIP mode, a nil RegistrationLink
+	// triggers an idle-loop that re-fetches the EndDevice on dcap.PollRate until
+	// the server publishes the link (CSIP V1.2 BASIC-001 step 5 commissioning
+	// gate). Non-CSIP mode (--csip=false) ignores this flag — the legacy
+	// IEEE 2030.5 Register() POST path skips Phase 2b entirely.
+	// See IEEE-034.
+	AllowUnregistered bool
 }
 
 // CurvePoint is a single point on a piecewise linear control curve.
