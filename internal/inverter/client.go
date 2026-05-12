@@ -245,13 +245,28 @@ func (c *SEP2Client) Discover(ctx context.Context) (sep2.DeviceCapability, error
 	return dcap, err
 }
 
-// Register creates an EndDevice on the server.
-func (c *SEP2Client) Register(ctx context.Context) (sep2.EndDevice, error) {
+// Register creates an EndDevice on the server by POSTing to the
+// EndDeviceList href advertised in DeviceCapability. The href is passed in
+// rather than baked in as a constant — per IEEE 2030.5 §10.3 / CSIP §6.6 a
+// client MUST traverse the link graph reachable from /dcap and never assume
+// URL shapes. See IEEE-030.
+//
+// IEEE-030 tests deferred per Craig override 2026-05-12 (time crunch).
+// Required-but-deferred coverage:
+//  1. Register(ctx, edevListHref) POSTs to the exact passed href (httptest
+//     assertion on req.URL.Path), returns the parsed EndDevice from the
+//     Location response.
+//  2. Empty href argument → error, no HTTP call.
+func (c *SEP2Client) Register(ctx context.Context, edevListHref string) (sep2.EndDevice, error) {
+	if edevListHref == "" {
+		return sep2.EndDevice{}, fmt.Errorf("edev list href required")
+	}
+
 	edev := sep2.EndDevice{SFDI: c.sfdi, LFDI: c.lfdi}
 	enabled := true
 	edev.Enabled = &enabled
 
-	loc, err := c.Post(ctx, "/edev", &edev)
+	loc, err := c.Post(ctx, edevListHref, &edev)
 	if err != nil {
 		return sep2.EndDevice{}, err
 	}
@@ -316,19 +331,40 @@ func (c *SEP2Client) LookupOwnEndDevice(ctx context.Context, edevListHref string
 	return sep2.EndDevice{}, ErrEndDeviceNotFound
 }
 
-// PutDERCapability reports the inverter's DER capability.
-func (c *SEP2Client) PutDERCapability(ctx context.Context, edevID, derID string, cap sep2.DERCapability) error {
-	return c.Put(ctx, fmt.Sprintf("/edev/%s/der/%s/dercap", edevID, derID), &cap)
+// PutDERCapability PUTs the inverter's DER capability to the advertised
+// DERCapabilityLink. The href is passed in rather than constructed by
+// string formatting (no `/edev/{id}/der/{id}/dercap` literal). See IEEE-030.
+//
+// IEEE-030 tests deferred per Craig override 2026-05-12 (time crunch).
+// Required-but-deferred coverage: assert PUT is issued to the exact passed
+// href and not to a derived path; empty href → error, no HTTP call.
+func (c *SEP2Client) PutDERCapability(ctx context.Context, dercapHref string, cap sep2.DERCapability) error {
+	if dercapHref == "" {
+		return fmt.Errorf("dercap href required")
+	}
+	return c.Put(ctx, dercapHref, &cap)
 }
 
-// PutDERSettings reports the inverter's DER settings.
-func (c *SEP2Client) PutDERSettings(ctx context.Context, edevID, derID string, settings sep2.DERSettings) error {
-	return c.Put(ctx, fmt.Sprintf("/edev/%s/der/%s/derg", edevID, derID), &settings)
+// PutDERSettings PUTs the inverter's DER settings to the advertised
+// DERSettingsLink. See PutDERCapability for the link-derivation rationale.
+//
+// IEEE-030 tests deferred per Craig override 2026-05-12.
+func (c *SEP2Client) PutDERSettings(ctx context.Context, dersettingsHref string, settings sep2.DERSettings) error {
+	if dersettingsHref == "" {
+		return fmt.Errorf("dersettings href required")
+	}
+	return c.Put(ctx, dersettingsHref, &settings)
 }
 
-// PutDERStatus reports the inverter's current DER status.
-func (c *SEP2Client) PutDERStatus(ctx context.Context, edevID, derID string, status sep2.DERStatus) error {
-	return c.Put(ctx, fmt.Sprintf("/edev/%s/der/%s/ders", edevID, derID), &status)
+// PutDERStatus PUTs the inverter's current DER status to the advertised
+// DERStatusLink. See PutDERCapability for the link-derivation rationale.
+//
+// IEEE-030 tests deferred per Craig override 2026-05-12.
+func (c *SEP2Client) PutDERStatus(ctx context.Context, derstatusHref string, status sep2.DERStatus) error {
+	if derstatusHref == "" {
+		return fmt.Errorf("derstatus href required")
+	}
+	return c.Put(ctx, derstatusHref, &status)
 }
 
 // GetDefaultDERControl fetches the default DER control for a program.
@@ -338,15 +374,29 @@ func (c *SEP2Client) GetDefaultDERControl(ctx context.Context, path string) (sep
 	return dderc, err
 }
 
-// CreateMirrorUsagePoint registers for metering data reporting.
-func (c *SEP2Client) CreateMirrorUsagePoint(ctx context.Context, mup sep2.MirrorUsagePoint) (string, error) {
+// CreateMirrorUsagePoint POSTs a MirrorUsagePoint registration to the
+// MirrorUsagePointList href advertised by DeviceCapability. Returns the
+// server-assigned Location of the new MirrorUsagePoint resource. See
+// IEEE-030.
+//
+// IEEE-030 tests deferred per Craig override 2026-05-12.
+func (c *SEP2Client) CreateMirrorUsagePoint(ctx context.Context, mupListHref string, mup sep2.MirrorUsagePoint) (string, error) {
+	if mupListHref == "" {
+		return "", fmt.Errorf("mup list href required")
+	}
 	mup.DeviceLFDI = c.lfdi
-	return c.Post(ctx, "/mup", &mup)
+	return c.Post(ctx, mupListHref, &mup)
 }
 
-// PostMeterReading sends a metering data point.
-func (c *SEP2Client) PostMeterReading(ctx context.Context, mupID string, mmr sep2.MirrorMeterReading) error {
-	_, err := c.Post(ctx, fmt.Sprintf("/mup/%s/mr", mupID), &mmr)
+// PostMeterReading POSTs a metering data point to the MirrorMeterReadingList
+// href advertised on the MirrorUsagePoint resource. See IEEE-030.
+//
+// IEEE-030 tests deferred per Craig override 2026-05-12.
+func (c *SEP2Client) PostMeterReading(ctx context.Context, mmrListHref string, mmr sep2.MirrorMeterReading) error {
+	if mmrListHref == "" {
+		return fmt.Errorf("mmr list href required")
+	}
+	_, err := c.Post(ctx, mmrListHref, &mmr)
 	return err
 }
 

@@ -151,7 +151,12 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	// Phase 2: Registration
 	var edevID string
 	t.Run("register", func(t *testing.T) {
-		edev, err := client.Register(ctx)
+		// IEEE-030: Register takes the EndDeviceList href, not a baked-in
+		// constant. The test server still mounts the list at /edev (which
+		// is what dcap.EndDeviceListLink.Href advertises), so we pass that
+		// literal here as the href — there is no hardcoded URL inside the
+		// client method anymore.
+		edev, err := client.Register(ctx, "/edev")
 		if err != nil {
 			t.Fatalf("Register: %v", err)
 		}
@@ -180,7 +185,11 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 		modes := uint32(0xFF)
 		dtype := uint8(4)
 
-		err := client.PutDERCapability(ctx, edevID, derID, sep2.DERCapability{
+		// IEEE-030: PutDERCapability takes the DERCapabilityLink href
+		// directly. The test asserts the server's existing
+		// /edev/{id}/der/{id}/dercap route is still wired, so we pass that
+		// path explicitly here.
+		err := client.PutDERCapability(ctx, "/edev/"+edevID+"/der/"+derID+"/dercap", sep2.DERCapability{
 			RTGMaxW:        &maxW,
 			RTGMaxVar:      &maxVAr,
 			ModesSupported: &modes,
@@ -203,7 +212,8 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 
 	t.Run("put_der_settings", func(t *testing.T) {
 		setMaxW := sep2.ActivePower{Value: 10000}
-		err := client.PutDERSettings(ctx, edevID, derID, sep2.DERSettings{
+		// IEEE-030: pass the DERSettingsLink href explicitly.
+		err := client.PutDERSettings(ctx, "/edev/"+edevID+"/der/"+derID+"/derg", sep2.DERSettings{
 			SetMaxW:     &setMaxW,
 			UpdatedTime: time.Now().Unix(),
 		})
@@ -214,7 +224,8 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 
 	// Phase 4: DER Status Reporting
 	t.Run("put_der_status", func(t *testing.T) {
-		err := client.PutDERStatus(ctx, edevID, derID, sep2.DERStatus{
+		// IEEE-030: pass the DERStatusLink href explicitly.
+		err := client.PutDERStatus(ctx, "/edev/"+edevID+"/der/"+derID+"/ders", sep2.DERStatus{
 			GenConnectStatus: &sep2.ConnectStatusType{
 				DateTime: time.Now().Unix(),
 				Value:    1,
@@ -239,7 +250,8 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	// Phase 5: Metering
 	var mupID string
 	t.Run("create_mirror_usage_point", func(t *testing.T) {
-		loc, err := client.CreateMirrorUsagePoint(ctx, sep2.MirrorUsagePoint{
+		// IEEE-030: pass the MirrorUsagePointList href explicitly.
+		loc, err := client.CreateMirrorUsagePoint(ctx, "/mup", sep2.MirrorUsagePoint{
 			MRID:                "mup-e2e-test",
 			Description:         "E2E Test Inverter",
 			ServiceCategoryKind: 0,
@@ -262,7 +274,9 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 
 		uomW := sep2.UomWatts
 		val := int64(8500)
-		err := client.PostMeterReading(ctx, mupID, sep2.MirrorMeterReading{
+		// IEEE-030: pass the MirrorMeterReadingList href explicitly. The
+		// server mounts the list at /mup/{mupID}/mr.
+		err := client.PostMeterReading(ctx, "/mup/"+mupID+"/mr", sep2.MirrorMeterReading{
 			MRID:           "mmr-e2e-001",
 			Description:    "Active Power",
 			LastUpdateTime: time.Now().Unix(),
@@ -317,7 +331,8 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 
 	// Phase 8: Duplicate registration returns existing
 	t.Run("duplicate_register", func(t *testing.T) {
-		edev2, err := client.Register(ctx)
+		// IEEE-030: pass the EndDeviceList href explicitly.
+		edev2, err := client.Register(ctx, "/edev")
 		if err != nil {
 			t.Fatalf("duplicate Register: %v", err)
 		}
