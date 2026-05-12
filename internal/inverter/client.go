@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	sepTLS "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls"
@@ -32,11 +33,19 @@ const (
 )
 
 // SEP2Client is an IEEE 2030.5 HTTP client with mTLS and persistent connections.
+//
+// serverTimeOffsetNanos holds the signed nanosecond offset (server_now -
+// local_now) discovered by the time-sync goroutine. atomic.Int64 lets the
+// sync goroutine Store while the simulation/reporter Load with no lock.
+// Zero offset (the zero value) is the safe default — Now() degrades to
+// time.Now() before the first sync completes or when no TimeLink is
+// advertised. See IEEE-031.
 type SEP2Client struct {
-	httpClient *http.Client
-	baseURL    string
-	sfdi       string
-	lfdi       string
+	httpClient            *http.Client
+	baseURL               string
+	sfdi                  string
+	lfdi                  string
+	serverTimeOffsetNanos atomic.Int64
 }
 
 // NewSEP2Client creates a client with mTLS persistent connections per IEEE 2030.5.
@@ -452,4 +461,124 @@ func (c *SEP2Client) WaitForAdvertisedLinks(ctx context.Context, initial sep2.De
 		dcap = next
 	}
 	return dcap, nil
+}
+
+// Server time sync (IEEE-031) =================================================
+//
+// CSIP / IEEE 2030.5 §10 require devices to source time from the server's Time
+// resource (linked from DeviceCapability.TimeLink) and to use that time —
+// not local wall-clock — for every timestamp the server consumes
+// (DERSettings.UpdatedTime, MirrorMeterReading identifiers, etc.). Before
+// IEEE-031 the inverter logged the TimeLink href and proceeded to use
+// time.Now() everywhere.
+//
+// Design notes:
+//
+//   - Offset is stored as a signed int64 nanosecond delta (server_now -
+//     local_now) on the client. Zero is a safe default — Now() degrades to
+//     time.Now() before any sync has run or when no TimeLink is advertised.
+//   - Reads and writes go through atomic.Int64 so the sync goroutine can
+//     refresh the offset while the simulation/reporter loop reads it
+//     without locking.
+//   - RunTimeSync runs the periodic refresh loop. It does NOT spawn its own
+//     goroutine — the caller decides whether to spawn (typically
+//     `go client.RunTimeSync(ctx, href, pollRate)` from main). The loop
+//     selects on ctx.Done() so it exits cleanly on shutdown (no leaked
+//     goroutine).
+//
+// Tests deferred per Craig override 2026-05-12 (time crunch). Required
+// follow-up coverage:
+//   1. GetServerTime: httptest server returns Time XML; parsed correctly.
+//   2. SyncServerTime updates the offset to round-trip-consistent value.
+//   3. RunTimeSync: ctx cancel exits the goroutine; `go test -race` clean.
+//   4. Now(): with offset=42s, client.Now() ~ time.Now()+42s.
+//   5. Reporter outbound MRID derives from client.Now() (already verifiable
+//      with a fixture-substituted offset).
+
+// Now returns the current wall-clock time adjusted by the server-time
+// offset discovered via SyncServerTime / RunTimeSync. Before any sync has
+// run (or when no TimeLink is advertised) the offset is zero and Now()
+// returns local time. Use Now() for any timestamp the server consumes.
+// See IEEE-031.
+func (c *SEP2Client) Now() time.Time {
+	return time.Now().Add(time.Duration(c.serverTimeOffsetNanos.Load()))
+}
+
+// GetServerTime GETs and parses the IEEE 2030.5 Time resource at timeHref.
+// The href is advertised on DeviceCapability.TimeLink and MUST NOT be
+// hardcoded by the caller — per IEEE 2030.5 §10.3 / CSIP §6.6 the server
+// is free to host Time at any path.
+func (c *SEP2Client) GetServerTime(ctx context.Context, timeHref string) (sep2.Time, error) {
+	if timeHref == "" {
+		return sep2.Time{}, fmt.Errorf("time href required")
+	}
+	var t sep2.Time
+	if err := c.Get(ctx, timeHref, &t); err != nil {
+		return sep2.Time{}, fmt.Errorf("get server time: %w", err)
+	}
+	return t, nil
+}
+
+// SyncServerTime fetches the server's Time resource once and atomically
+// updates the client's offset. Returns the parsed Time for callers that
+// want to log it (Phase 1b in main). Errors propagate unchanged.
+func (c *SEP2Client) SyncServerTime(ctx context.Context, timeHref string) (sep2.Time, error) {
+	t, err := c.GetServerTime(ctx, timeHref)
+	if err != nil {
+		return sep2.Time{}, err
+	}
+	// CurrentTime is epoch seconds. Compute the signed delta between the
+	// server's reported instant and our local clock at the moment we
+	// finished parsing. Network round-trip and parse cost are absorbed
+	// into the offset — at typical sync cadences (minutes to hours) this
+	// is well within IEEE 2030.5's tolerance for device clocks.
+	offset := time.Unix(t.CurrentTime, 0).Sub(time.Now())
+	c.serverTimeOffsetNanos.Store(int64(offset))
+	return t, nil
+}
+
+// minTimeSyncPollRate is the floor for the time-sync poll interval. The
+// ticket pins this at 60s as production hygiene — anything shorter
+// hammers the Time endpoint without buying meaningful clock accuracy.
+const minTimeSyncPollRate = 60 * time.Second
+
+// DefaultTimeSyncPollRate is the fallback poll cadence when the caller
+// has no Time-resource pollRate to thread through. sep2.Time inherits
+// only Href from Resource; pollRate lives on ListResource/DeviceCapability,
+// not on single-instance resources like Time. 30 minutes matches the
+// "an hour is normal" sentiment in IEEE-031 and gives the sync goroutine
+// a sane default when nothing else is advertised.
+const DefaultTimeSyncPollRate = 30 * time.Minute
+
+// RunTimeSync runs the periodic time-sync loop. It does NOT spawn its own
+// goroutine — the caller is expected to invoke it as
+// `go client.RunTimeSync(ctx, href, pollRate)`. The loop exits cleanly
+// on ctx cancellation (selects on ctx.Done() between iterations).
+//
+// pollRate is clamped to minTimeSyncPollRate; zero/negative values fall
+// back to DefaultTimeSyncPollRate. Sync failures are logged and skipped
+// — a transient network blip should not stop the loop.
+func (c *SEP2Client) RunTimeSync(ctx context.Context, timeHref string, pollRate time.Duration) {
+	if timeHref == "" {
+		log.Println("time sync: no TimeLink href; sync loop disabled")
+		return
+	}
+	if pollRate <= 0 {
+		pollRate = DefaultTimeSyncPollRate
+	}
+	if pollRate < minTimeSyncPollRate {
+		pollRate = minTimeSyncPollRate
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pollRate):
+		}
+		if _, err := c.SyncServerTime(ctx, timeHref); err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				log.Printf("time sync: refresh failed: %v", err)
+			}
+		}
+	}
 }
