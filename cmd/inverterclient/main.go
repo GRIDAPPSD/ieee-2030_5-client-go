@@ -528,16 +528,13 @@ func main() {
 	// Phase 2c (continued, IEEE-037): apply IEEE 2030.5 §10.1.3 list-ordering
 	// + CSIP V1.2 CORE-012 step 2 selection over the IEEE-036 cache. Lowest
 	// Primacy wins; ties on Primacy broken by MRID lex-min. Empty cache →
-	// no selection; Phase 5's ApplyControls(nil, ...) seam at line below
-	// stays nil-base and falls back to its own default control.
+	// no selection; the simulation tick loop's ApplyControls call falls back
+	// to nil base via inverter.ActiveControlBase's rule-3 (no-op semantics).
 	//
-	// selectedDERProgram + selectedDefaultControlHref are the Phase 5
-	// consumption seam: Phase 5 (IEEE-038+) will GET the DefaultDERControl
-	// at selectedDefaultControlHref and pass its DERControlBase into
-	// ApplyControls instead of the current literal nil at the call site
-	// below. Until Phase 5 lands, the selection result is logged for
-	// operator visibility and the existing ApplyControls(nil, ...) path
-	// is preserved.
+	// selectedDERProgram + selectedDefaultControlHref feed IEEE-041 below:
+	// the href drives a one-shot GET of DefaultDERControl, whose base is the
+	// fallback applied whenever the IEEE-040 state machine is not in
+	// EVENT_STARTED.
 	selectedDERProgram, selected := inverter.SelectHighestPriority(derProgramsByMRID)
 	var selectedDefaultControlHref string
 	if selected {
@@ -547,12 +544,32 @@ func main() {
 		log.Printf("Phase 2c (Primacy selection): winner mRID=%s primacy=%d DefaultDERControlLink=%q",
 			selectedDERProgram.MRID, selectedDERProgram.Primacy, selectedDefaultControlHref)
 	} else {
-		log.Println("Phase 2c (Primacy selection): no DERProgram cached; Phase 5 will fall back to nil base")
+		log.Println("Phase 2c (Primacy selection): no DERProgram cached; ApplyControls will fall back to nil base via ActiveControlBase rule-3")
 	}
-	// Suppress unused-variable warning for the default-control href — IEEE-041
-	// will replace ApplyControls(nil, ...) at main.go:667 with the resolved
-	// default control derived from this href.
-	_ = selectedDefaultControlHref
+	// IEEE-041: GET the DefaultDERControl resource so the tick loop can fall
+	// back to it whenever the state machine reports anything other than
+	// EVENT_STARTED. walkDERProgramTree already validated the link (and
+	// discarded the value); we re-GET it here once selection is complete so
+	// the chosen program's default base is in scope at the consumption seam.
+	//
+	// Error handling: tolerant — log + leave defaultCtl nil. Mirrors the
+	// IEEE-035 / IEEE-036 missing-link policy: a server that advertises a
+	// default but fails to serve it should not crash the inverter; the
+	// helper's rule-3 fall-through gives the existing no-op semantics.
+	var defaultCtl *sep2.DefaultDERControl
+	if selectedDefaultControlHref != "" {
+		ddc, err := client.GetDefaultDERControl(ctx, selectedDefaultControlHref)
+		if err != nil {
+			log.Printf("Phase 2c (IEEE-041): GET DefaultDERControl %s: %v (continuing with no default base)",
+				selectedDefaultControlHref, err)
+		} else {
+			ddcCopy := ddc.Copy()
+			defaultCtl = &ddcCopy
+			hasBase := defaultCtl.DERControlBase != nil
+			log.Printf("Phase 2c (IEEE-041): resolved DefaultDERControl mRID=%s DERControlBase-present=%t",
+				defaultCtl.MRID, hasBase)
+		}
+	}
 
 	// Phase 5 entry (IEEE-038): start the DERControlList polling goroutine on
 	// the active DERProgram's DERControlListLink. The cache surfaces added /
@@ -639,10 +656,10 @@ func main() {
 	} else {
 		log.Println("Phase 5 (IEEE-040): no DERControlListLink on selected program; state-machine tick skipped")
 	}
-	// Suppress unused-variable warning for the state machine — IEEE-041 will
-	// consume sm.Current() in the simulation loop to pick the ApplyControls
-	// base.
-	_ = stateMachine
+	// stateMachine + defaultCtl are now live consumers — see the simulation
+	// tick loop below, which feeds inverter.ActiveControlBase(stateMachine.
+	// Current(), defaultCtl) into ApplyControls. IEEE-041 closes the
+	// long-standing ApplyControls(nil, ...) defect at this seam.
 
 	// Phase 3: DER Setup — follow EndDevice.DERListLink to find the first
 	// DER, then PUT to its DERCapabilityLink / DERSettingsLink. DERStatus
@@ -787,8 +804,14 @@ func main() {
 			irr := inverter.Irradiance(simTime)
 			maxP := inverter.MaxPowerW(irr)
 
-			// Apply controls (using nil base for now — TODO: poll server for active controls)
-			controls := inverter.ApplyControls(nil, currentGrid, maxP)
+			// IEEE-041: source the active control base from the Phase 5 state
+			// machine. EVENT_STARTED → the active event's DERControlBase;
+			// otherwise the program's DefaultDERControl base; otherwise nil
+			// (no CSIP server / no default provisioned → preserves the
+			// pre-IEEE-041 no-op semantics). See
+			// internal/inverter/applycontrols_base.go for the decision tree.
+			base := inverter.ActiveControlBase(stateMachine.Current(), defaultCtl)
+			controls := inverter.ApplyControls(base, currentGrid, maxP)
 
 			// Compute output
 			state := inverter.ComputeOutput(controls, currentGrid)
