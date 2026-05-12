@@ -99,6 +99,13 @@ type SimConfig struct {
 	// the list, the inverter idles and re-polls the list. Default false
 	// retains the IEEE 2030.5 self-registration path. See IEEE-029.
 	CSIP bool
+
+	// ExpectedPIN is the out-of-band-provisioned PIN that the device should
+	// see echoed by the server's Registration resource (CSIP V1.2 BASIC-001
+	// step 5 / IEEE 2030.5 §10). IEEE-032 plumbs the value and logs it
+	// alongside the server-presented PIN; mismatch enforcement and the
+	// "0 = skip" sentinel land in IEEE-033.
+	ExpectedPIN uint
 }
 
 // CurvePoint is a single point on a piecewise linear control curve.

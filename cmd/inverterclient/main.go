@@ -38,6 +38,7 @@ func main() {
 	listScenarios := flag.Bool("list-scenarios", false, "List available scenarios and exit")
 	flag.BoolVar(&cfg.CSIPStrict, "csip-strict", false, "Strict CSIP TLS: drop GCM fallback, only offer TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8")
 	flag.BoolVar(&cfg.CSIP, "csip", false, "CSIP mode: lookup own EndDevice in server's /edev list instead of POST-registering")
+	flag.UintVar(&cfg.ExpectedPIN, "pin", 0, "expected Registration PIN (0 = skip read; mismatch enforcement lands in IEEE-033)")
 	flag.Parse()
 
 	if *listScenarios {
@@ -194,6 +195,26 @@ func main() {
 			log.Fatalf("register: %v", err)
 		}
 		log.Printf("Registered: href=%s SFDI=%s", edev.Href, edev.SFDI)
+	}
+
+	// Phase 2b: Registration resource read (IEEE-032). CSIP V1.2 BASIC-001
+	// step 5 / IEEE 2030.5 §10 require the device to walk
+	// EndDevice.RegistrationLink and validate the server-presented pIN
+	// against an out-of-band-provisioned PIN. This ticket lands the GET and
+	// log-only output; PIN mismatch enforcement and idle-retry on an
+	// unprovisioned PIN are IEEE-033. Strict-mode missing-RegistrationLink
+	// behavior is IEEE-034. A GET failure here is non-fatal (back-compat
+	// for the local dev server which may not populate Registration).
+	if edev.RegistrationLink != nil {
+		log.Println("=== Phase 2b: Registration ===")
+		rg, err := client.GetRegistration(ctx, edev.RegistrationLink.Href)
+		if err != nil {
+			log.Printf("GET Registration failed (continuing without PIN check): %v", err)
+		} else {
+			log.Printf("Registration: href=%s pIN=%d (expected=%d)", edev.RegistrationLink.Href, rg.PIN, cfg.ExpectedPIN)
+		}
+	} else {
+		log.Println("EndDevice has no RegistrationLink; skipping Phase 2b")
 	}
 
 	// Phase 3: DER Setup — follow EndDevice.DERListLink to find the first
