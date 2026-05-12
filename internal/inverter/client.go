@@ -3,16 +3,17 @@ package inverter
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"time"
 
 	sepTLS "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls"
+	gotls "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls/gotls"
 	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
 
@@ -30,8 +31,23 @@ type SEP2Client struct {
 }
 
 // NewSEP2Client creates a client with mTLS persistent connections per IEEE 2030.5.
+//
+// The client uses the vendored gotls fork rather than stdlib crypto/tls so it
+// can negotiate TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8 (0xC0AE), the IEEE 2030.5
+// mandatory cipher. By default GCM is left in the cipher list as a fallback
+// so the simulator keeps working against permissive peers; setting
+// cfg.CSIPStrict drops the GCM entry and forces the handshake to fail
+// loudly against non-CSIP-conformant peers.
 func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
-	cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+	certPEM, err := os.ReadFile(cfg.CertFile)
+	if err != nil {
+		return nil, fmt.Errorf("read client cert %q: %w", cfg.CertFile, err)
+	}
+	keyPEM, err := os.ReadFile(cfg.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("read client key %q: %w", cfg.KeyFile, err)
+	}
+	cert, err := gotls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("load client cert %q: %w", cfg.CertFile, err)
 	}
@@ -45,16 +61,26 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 		return nil, fmt.Errorf("parse CA cert %q: no PEM data", cfg.CAFile)
 	}
 
-	tlsCfg := &tls.Config{
-		Certificates:     []tls.Certificate{cert},
-		RootCAs:          caPool,
-		MinVersion:       tls.VersionTLS12,
-		CurvePreferences: []tls.CurveID{tls.CurveP256},
+	cipherSuites := []uint16{gotls.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8}
+	if !cfg.CSIPStrict {
+		// 0xC02B is TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256. Mirrors the
+		// fallback the server registers in internal/tls/ccmserver.go so
+		// `make run-inverter` against `make run-ccm` keeps interoperating.
+		cipherSuites = append(cipherSuites, gotls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
 	}
 
-	// Derive SFDI/LFDI from the leaf cert that LoadX509KeyPair already
-	// parsed. Reading the cert file a second time and re-decoding the PEM
-	// (the previous behavior) was redundant and discarded errors from both
+	tlsCfg := &gotls.Config{
+		Certificates:     []gotls.Certificate{cert},
+		RootCAs:          caPool,
+		MinVersion:       gotls.VersionTLS12,
+		MaxVersion:       gotls.VersionTLS12,
+		CipherSuites:     cipherSuites,
+		CurvePreferences: []gotls.CurveID{gotls.CurveP256},
+	}
+
+	// Derive SFDI/LFDI from the leaf cert that X509KeyPair already parsed.
+	// Reading the cert file a second time and re-decoding the PEM (the
+	// previous behavior) was redundant and discarded errors from both
 	// os.ReadFile and pem.Decode, leaving a nil-pointer deref on the next
 	// line if either failed (IEEE-008).
 	if len(cert.Certificate) == 0 {
@@ -65,15 +91,23 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 		return nil, fmt.Errorf("parse client cert %q for identity: %w", cfg.CertFile, err)
 	}
 
+	transport := &http.Transport{
+		// gotls.Conn implements net.Conn so this composes cleanly with the
+		// stdlib http.Transport. We deliberately do NOT set TLSClientConfig
+		// here — stdlib's transport would try to use crypto/tls against it.
+		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &gotls.Dialer{Config: tlsCfg}
+			return dialer.DialContext(ctx, network, addr)
+		},
+		MaxIdleConns:        1,
+		MaxIdleConnsPerHost: 1,
+		IdleConnTimeout:     30 * time.Second,
+	}
+
 	return &SEP2Client{
 		httpClient: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig:     tlsCfg,
-				MaxIdleConns:        1,
-				MaxIdleConnsPerHost: 1,
-				IdleConnTimeout:     30 * time.Second,
-			},
-			Timeout: 30 * time.Second,
+			Transport: transport,
+			Timeout:   30 * time.Second,
 		},
 		baseURL: cfg.ServerURL,
 		sfdi:    sepTLS.SFDI(parsedCert),

@@ -15,19 +15,21 @@ import (
 
 	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/certs"
 	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/inverter"
+	sepTLS "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls"
 	gotls "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls/gotls"
 	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
 
 // ccmTestEnv is the shared TLS fixture for the CCM negotiation tests. It
 // generates a self-signed CA + server cert + device cert into t.TempDir and
-// writes the device side of the pair to disk for the inverter client to load.
+// writes both sides of the pair to disk so the listener and the inverter
+// client can each load through the production paths (NewCCMServerConfig and
+// NewSEP2Client respectively).
 type ccmTestEnv struct {
-	serverCertPEM []byte
-	serverKeyPEM  []byte
-	caCertPEM     []byte
-	caPool        *x509.CertPool
+	caPool *x509.CertPool
 
+	serverCertPath string
+	serverKeyPath  string
 	deviceCertPath string
 	deviceKeyPath  string
 	caCertPath     string
@@ -75,6 +77,8 @@ func newCCMTestEnv(t *testing.T) *ccmTestEnv {
 	}
 
 	tmpDir := t.TempDir()
+	srvCert := filepath.Join(tmpDir, "server.crt")
+	srvKey := filepath.Join(tmpDir, "server.key")
 	devCert := filepath.Join(tmpDir, "device.crt")
 	devKey := filepath.Join(tmpDir, "device.key")
 	caPath := filepath.Join(tmpDir, "ca.crt")
@@ -82,6 +86,8 @@ func newCCMTestEnv(t *testing.T) *ccmTestEnv {
 		path string
 		data []byte
 	}{
+		{srvCert, serverCertPEM},
+		{srvKey, serverKeyPEM},
 		{devCert, deviceCertPEM},
 		{devKey, deviceKeyPEM},
 		{caPath, caCertPEM},
@@ -92,10 +98,9 @@ func newCCMTestEnv(t *testing.T) *ccmTestEnv {
 	}
 
 	return &ccmTestEnv{
-		serverCertPEM:  serverCertPEM,
-		serverKeyPEM:   serverKeyPEM,
-		caCertPEM:      caCertPEM,
 		caPool:         caPool,
+		serverCertPath: srvCert,
+		serverKeyPath:  srvKey,
 		deviceCertPath: devCert,
 		deviceKeyPath:  devKey,
 		caCertPath:     caPath,
@@ -103,25 +108,19 @@ func newCCMTestEnv(t *testing.T) *ccmTestEnv {
 }
 
 // startGotlsListener boots a tiny gotls-backed HTTPS server with the supplied
-// cipher list. It returns the listening URL and captures the cipher suite the
-// most recent connection actually negotiated.
+// cipher list. It reuses the production NewCCMServerConfig so the verify hook
+// that tolerates IEEE 2030.5 device certs' critical HardwareModuleName SAN is
+// in play, then overrides the cipher suite list to control negotiation. It
+// returns the listening URL and captures the cipher suite the most recent
+// connection actually negotiated.
 func startGotlsListener(t *testing.T, env *ccmTestEnv, cipherSuites []uint16) (serverURL string, negotiated *atomic.Uint32, stop func()) {
 	t.Helper()
 
-	cert, err := gotls.X509KeyPair(env.serverCertPEM, env.serverKeyPEM)
+	cfg, err := sepTLS.NewCCMServerConfig(env.serverCertPath, env.serverKeyPath, env.caCertPath)
 	if err != nil {
-		t.Fatalf("server X509KeyPair: %v", err)
+		t.Fatalf("NewCCMServerConfig: %v", err)
 	}
-
-	cfg := &gotls.Config{
-		Certificates:     []gotls.Certificate{cert},
-		ClientCAs:        env.caPool,
-		ClientAuth:       gotls.RequireAndVerifyClientCert,
-		MinVersion:       gotls.VersionTLS12,
-		MaxVersion:       gotls.VersionTLS12,
-		CipherSuites:     cipherSuites,
-		CurvePreferences: []gotls.CurveID{gotls.CurveP256},
-	}
+	cfg.CipherSuites = cipherSuites
 
 	tcpL, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
