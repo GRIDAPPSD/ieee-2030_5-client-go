@@ -367,49 +367,39 @@ func main() {
 	// Primacy + mRID selection of the highest-priority DERProgram is IEEE-037,
 	// the next ticket. Control application (consuming the cache) is Phase 5.
 	//
+	// Extracted by IEEE-076 into runPhase2cDERProgramWalk so the 2 deferred
+	// IEEE-073 integration cases (#4 empty-aggregate idle-loop, #6 pollRate
+	// throttling) have a function seam to test against. The per-FSA /
+	// per-program tolerated missing-link policy lives in walkDERProgramTree;
+	// the outer-loop empty-aggregate idle-vs-proceed policy and the
+	// walk-error fatal path live in cmd/inverterclient/phase2c_derprogram.go.
+	//
 	// The cache `derProgramsByMRID` is the seam IEEE-037 consumes. Keying on
 	// mRID matches the IEEE 2030.5 §10.1.3 list-ordering tie-break field; if
 	// the same DERProgram is reachable from multiple FSAs the later GET wins
 	// (acceptable per the spec — DERProgram resources are identified by mRID,
 	// not by FSA path).
 	//
-	// Per-FSA missing-DERProgramListLink: skip that FSA, walk the rest.
-	// Per-DERProgram missing-DefaultDERControlLink / DERControlListLink /
-	// DERCurveListLink: skip that subtree GET, still record the program. Empty
-	// aggregate program set across all FSAs:
-	//   - --csip strict: idle-loop on dcap.PollRate (same idiom IEEE-035 uses
-	//     for empty FSAList). ctx-cancel exits cleanly.
-	//   - --csip off OR --allow-unregistered: log and proceed with an empty
-	//     cache.
+	// log.Fatalf stays HERE — main() is the exit-code owner. The extracted
+	// function returns *derProgramWalkFatal in place of the previous inline
+	// log.Fatalf, which main() unwraps via errors.As. ctx-cancel inside the
+	// function returns ctx.Err() (context.Canceled / DeadlineExceeded);
+	// main() treats that the same as the previous inline `return` on
+	// `<-ctx.Done()`.
 	//
-	// IEEE-036 tests deferred per Craig override 2026-05-12. Required coverage
-	// captured in backlog (IEEE-036) and the PR body.
+	// Empty FSAList short-circuits without entering the walk (preserves the
+	// prior inline `if len(fsaList.FunctionSetAssignments) > 0` guard).
 	derProgramsByMRID := make(map[string]sep2.DERProgram)
 	if len(fsaList.FunctionSetAssignments) > 0 {
-		log.Println("=== Phase 2c: DERProgram Tree Walk ===")
-		for {
-			derProgramsByMRID = make(map[string]sep2.DERProgram)
-			if err := walkDERProgramTree(ctx, client, fsaList, derProgramsByMRID); err != nil {
-				log.Fatalf("walk DERProgram tree: %v", err)
+		cache, err := runPhase2cDERProgramWalk(ctx, client, fsaList, cfg, dcap)
+		if err != nil {
+			var fe *derProgramWalkFatal
+			if errors.As(err, &fe) {
+				log.Fatalf("%s", fe.Error())
 			}
-			if len(derProgramsByMRID) > 0 {
-				log.Printf("Phase 2c (DERProgram walk): cached %d DERProgram(s) across %d FSA(s)",
-					len(derProgramsByMRID), len(fsaList.FunctionSetAssignments))
-				break
-			}
-			if cfg.CSIP && !cfg.AllowUnregistered {
-				pollEvery := pinPollInterval(dcap.PollRate)
-				log.Printf("No DERPrograms enumerated across any FSA; re-polling every %s (CSIP V1.2 CORE-012 step 2 expects >=1 DERProgram per provisioned device)", pollEvery)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(pollEvery):
-				}
-				continue
-			}
-			log.Println("No DERPrograms enumerated; proceeding with empty cache (--csip off or --allow-unregistered)")
-			break
+			return
 		}
+		derProgramsByMRID = cache
 	}
 	// Phase 2c (continued, IEEE-037): apply IEEE 2030.5 §10.1.3 list-ordering
 	// + CSIP V1.2 CORE-012 step 2 selection over the IEEE-036 cache. Lowest
