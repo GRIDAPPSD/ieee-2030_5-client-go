@@ -502,10 +502,15 @@ func main() {
 	// EVENT_RECEIVED → EVENT_STARTED. ApplyControlsWithCurves reads from
 	// it on every sim tick; cache miss falls back to IEEE 1547 default
 	// curves (see internal/inverter/controller.go).
+	//
+	// IEEE-044 switched the curve-refresh registration from OnTransition
+	// (replace-only) to AddTransitionHook (append). The Response POST
+	// hook below is the second consumer of the state machine's hook
+	// surface and must compose with this one. See response_hook.go.
 	curveCache := inverter.NewDERCurveCache()
 	if selected && selectedDERProgram.DERCurveListLink != nil {
 		curveListHref := selectedDERProgram.DERCurveListLink.Href
-		stateMachine.OnTransition(func(prev, next inverter.EventState, _ *sep2.DERControl) {
+		stateMachine.AddTransitionHook(func(prev, next inverter.EventState, _ *sep2.DERControl) {
 			// Fire only on the start-of-event edge. Cancellation before
 			// start never reaches EVENT_STARTED, so no fetch fires for a
 			// cancelled event. State-machine hooks run OUTSIDE its mutex
@@ -527,6 +532,15 @@ func main() {
 		})
 	} else if selected {
 		log.Println("Phase 5 (IEEE-042): no DERCurveListLink on selected program; curve refresh disabled (controller falls back to IEEE 1547 defaults)")
+	}
+
+	// IEEE-044: Wire state-machine transitions to PostResponse. The hook
+	// filters on evt.ReplyTo + evt.ResponseRequired + Table 31 status
+	// mapping internally; here we just register it. lfdi is the inverter's
+	// LFDI hex (set in Phase 2 via SEP2Client.LFDI()).
+	if selected {
+		stateMachine.AddTransitionHook(responsePOSTHook(client, client.LFDI(), client.Now))
+		log.Println("Phase 6 (IEEE-044): response POST hook installed")
 	}
 
 	if selected && selectedDERProgram.DERControlListLink != nil {

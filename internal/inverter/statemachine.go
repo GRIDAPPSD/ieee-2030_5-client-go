@@ -111,19 +111,30 @@ type TransitionHook func(prev, next EventState, evt *sep2.DERControl)
 // preferred entry point — it sets the mutex up explicitly and guards against
 // future field additions.
 //
-// Concurrency: a single sync.Mutex serializes Tick / OnTransition / Current.
-// The expected workload is one Tick per pollRate (30s–5min); the extra
-// read-parallelism an RWMutex would buy is not worth its complexity for a
-// single-event-scope state machine. The hook is invoked OUTSIDE the lock
-// (locked-callback antipattern avoided — Pike rule 3 is satisfied even
-// though no goroutine lives inside the state machine).
+// Concurrency: a single sync.Mutex serializes Tick / OnTransition /
+// AddTransitionHook / Current. The expected workload is one Tick per
+// pollRate (30s–5min); the extra read-parallelism an RWMutex would buy is
+// not worth its complexity for a single-event-scope state machine. Hooks
+// are invoked OUTSIDE the lock (locked-callback antipattern avoided —
+// Pike rule 3 is satisfied even though no goroutine lives inside the
+// state machine).
+//
+// Hook surface (IEEE-044, Phase 6 ticket 2 of 3):
+//   - OnTransition(hook) — replace-only. The single-hook slot; passing nil
+//     clears it. Test code swaps implementations in/out via this method.
+//   - AddTransitionHook(hook) — append. Each call adds a hook to a slice;
+//     every transition fires every appended hook in registration order
+//     PLUS the OnTransition slot (if set). Production code that wants to
+//     compose multiple concerns (e.g. IEEE-042 curve refresh + IEEE-044
+//     Response POST) registers each through AddTransitionHook.
 type StateMachine struct {
-	mu              sync.Mutex
-	state           EventState
-	activeMRID      string
-	activeDERCtrl   *sep2.DERControl
-	activeExpireAt  time.Time
-	hook            TransitionHook
+	mu             sync.Mutex
+	state          EventState
+	activeMRID     string
+	activeDERCtrl  *sep2.DERControl
+	activeExpireAt time.Time
+	hook           TransitionHook
+	hooks          []TransitionHook
 }
 
 // NewStateMachine constructs a state machine in DEFAULT. No required
@@ -134,15 +145,38 @@ func NewStateMachine() *StateMachine {
 	return &StateMachine{state: StateDefault}
 }
 
-// OnTransition installs the hook that runs on every state transition. Pass
-// nil to clear. Subsequent transitions invoke the hook OUTSIDE the state-
-// machine mutex. Phase 6 registers a Response-emitting hook here.
+// OnTransition installs the single replace-only hook slot. Pass nil to
+// clear. Subsequent transitions invoke the hook OUTSIDE the state-machine
+// mutex. The replace-only semantics make this the preferred surface for
+// test code that needs to swap implementations during a run.
 //
-// Replacing an existing hook is supported — Phase 6 may swap implementations
-// during testing without rebuilding the state machine.
+// Production code with multiple independent concerns (e.g. IEEE-042 curve
+// refresh AND IEEE-044 Response POST) should use AddTransitionHook instead,
+// which appends rather than replaces.
 func (sm *StateMachine) OnTransition(hook TransitionHook) {
 	sm.mu.Lock()
 	sm.hook = hook
+	sm.mu.Unlock()
+}
+
+// AddTransitionHook appends a hook to the multi-hook fan-out. Every
+// transition fires every appended hook in registration order, AFTER the
+// (optional) OnTransition slot fires. Hooks are invoked OUTSIDE the
+// state-machine mutex (same contract as OnTransition); a hook that blocks
+// holds up the caller's Tick loop and a hook that calls back into the
+// state machine cannot deadlock.
+//
+// There is no public removal API — hooks are expected to outlive the
+// state machine they're attached to (Phase 6 wires them once at startup
+// and never deregisters). A nil hook is a no-op append-attempt and is
+// silently ignored to keep callers' guarded "register if non-nil"
+// patterns clean.
+func (sm *StateMachine) AddTransitionHook(hook TransitionHook) {
+	if hook == nil {
+		return
+	}
+	sm.mu.Lock()
+	sm.hooks = append(sm.hooks, hook)
 	sm.mu.Unlock()
 }
 
@@ -205,16 +239,23 @@ func (sm *StateMachine) Tick(
 		if t.hook != nil {
 			t.hook(t.prev, t.next, t.evt)
 		}
+		for _, h := range t.hooks {
+			h(t.prev, t.next, t.evt)
+		}
 	}
 }
 
 // transition records a single state change for post-lock hook firing.
+// hook and hooks are captured at transition time so a mid-Tick
+// OnTransition / AddTransitionHook call is harmless — already-recorded
+// transitions fire against the pre-call snapshot.
 type transition struct {
-	prev EventState
-	next EventState
-	mRID string
-	evt  *sep2.DERControl
-	hook TransitionHook // captured at transition time so a mid-Tick OnTransition swap is harmless
+	prev  EventState
+	next  EventState
+	mRID  string
+	evt   *sep2.DERControl
+	hook  TransitionHook
+	hooks []TransitionHook
 }
 
 // tickLocked performs the scheduler forwarding and walks the transition
@@ -361,7 +402,7 @@ func (sm *StateMachine) computeTransitionsLocked(
 //   - active* fields cleared when next == DEFAULT.
 func (sm *StateMachine) transitionLocked(next EventState, mRID string, evt *sep2.DERControl) transition {
 	prev := sm.state
-	t := transition{prev: prev, next: next, mRID: mRID, evt: evt, hook: sm.hook}
+	t := transition{prev: prev, next: next, mRID: mRID, evt: evt, hook: sm.hook, hooks: snapshotHooks(sm.hooks)}
 	sm.state = next
 	if next == StateDefault {
 		sm.activeMRID = ""
@@ -377,5 +418,19 @@ func (sm *StateMachine) transitionLocked(next EventState, mRID string, evt *sep2
 // hold sm.mu.
 func (sm *StateMachine) recordTransitionLocked(prev, next EventState, mRID string, evt *sep2.DERControl) transition {
 	sm.state = next
-	return transition{prev: prev, next: next, mRID: mRID, evt: evt, hook: sm.hook}
+	return transition{prev: prev, next: next, mRID: mRID, evt: evt, hook: sm.hook, hooks: snapshotHooks(sm.hooks)}
+}
+
+// snapshotHooks returns an independent copy of the multi-hook slice so a
+// concurrent AddTransitionHook call does not race with mid-Tick hook
+// firing (post-lock). The slice is small (one or two entries in
+// practice); the copy cost is negligible vs. the simpler reasoning it
+// buys at the hook-firing boundary.
+func snapshotHooks(src []TransitionHook) []TransitionHook {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]TransitionHook, len(src))
+	copy(dst, src)
+	return dst
 }
