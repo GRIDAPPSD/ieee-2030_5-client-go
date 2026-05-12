@@ -366,6 +366,42 @@ func (c *SEP2Client) GetRegistration(ctx context.Context, registrationHref strin
 	return rg, nil
 }
 
+// GetFSAList GETs the FunctionSetAssignmentsList at the given href and decodes
+// it. The FSAList carries the function-set assignments (DERProgramListLink,
+// UsagePointListLink, DemandResponseProgramListLink) the server has bound to
+// this EndDevice. CSIP V1.2 CORE-012 step 1 — first move after the device is
+// confirmed commissioned. The tree walk per FSA (DERProgramList enumeration)
+// and Primacy + mRID program selection are deferred to IEEE-036 and IEEE-037
+// respectively (plan-1-csip-client-conformance phase 4).
+//
+// First-cut paging: appends `?l=255` to fetch the first page; cursor walking
+// for lists larger than 255 entries is deferred to a follow-up. Mirrors the
+// paging pattern in LookupOwnEndDevice (IEEE-029).
+//
+// IEEE-035 tests deferred per Craig override 2026-05-12. Required coverage:
+//  1. Happy path: stub server returns FSAList with N entries; method returns
+//     the parsed list intact.
+//  2. Empty href: returns error matching "FSAList href required"; no HTTP call.
+//  3. Server 404: error wrapped via c.Get, no panic.
+//  4. Malformed XML: error wrapped via c.Get, no panic.
+//  5. Pagination cap: list with > 255 entries — first 255 returned, rest
+//     deferred to cursor follow-up (no silent drop documented).
+func (c *SEP2Client) GetFSAList(ctx context.Context, fsaListHref string) (sep2.FunctionSetAssignmentsList, error) {
+	if fsaListHref == "" {
+		return sep2.FunctionSetAssignmentsList{}, fmt.Errorf("FSAList href required")
+	}
+	sep := "?"
+	if strings.Contains(fsaListHref, "?") {
+		sep = "&"
+	}
+	path := fsaListHref + sep + "l=255"
+	var list sep2.FunctionSetAssignmentsList
+	if err := c.Get(ctx, path, &list); err != nil {
+		return sep2.FunctionSetAssignmentsList{}, fmt.Errorf("GET FSAList: %w", err)
+	}
+	return list, nil
+}
+
 // PutDERCapability PUTs the inverter's DER capability to the advertised
 // DERCapabilityLink. The href is passed in rather than constructed by
 // string formatting (no `/edev/{id}/der/{id}/dercap` literal). See IEEE-030.

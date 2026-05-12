@@ -321,6 +321,74 @@ func main() {
 		}
 	}
 
+	// Phase 2c: FunctionSetAssignmentsList discovery (IEEE-035 — plan-1
+	// phase 4 entry). CSIP V1.2 CORE-012 step 1: after the device confirms
+	// it is commissioned (Phase 2b PIN match), walk
+	// EndDevice.FunctionSetAssignmentsListLink to enumerate the FSAs the
+	// server has bound to it.
+	//
+	// IEEE-035 lands ONLY the GET + this logging-and-cache block. The walk
+	// into each FSA's DERProgramListLink is IEEE-036; Primacy + mRID
+	// selection is IEEE-037. The `fsaList` variable below is the seam
+	// IEEE-036 consumes during its next-PR fold-in.
+	//
+	// Missing-FunctionSetAssignmentsListLink behavior mirrors IEEE-034's
+	// missing-RegistrationLink branch:
+	//   - --csip strict (default): fatal log citing CORE-012 step 1.
+	//     CSIP-conformant servers MUST publish this link on a provisioned
+	//     EndDevice; idling here would mask a server-side configuration
+	//     bug. (IEEE-036 may revisit this once it understands aggregator
+	//     topologies where the link could legitimately appear late.)
+	//   - --csip=false OR --allow-unregistered=true: log bypass, proceed.
+	//
+	// Empty-FSAList behavior:
+	//   - --csip strict: idle-loop on dcap.PollRate until at least one FSA
+	//     appears. EndDevice itself carries no pollRate (SubscribableResource
+	//     only), so we reuse dcap.PollRate the same way IEEE-029 and
+	//     IEEE-034 do. ctx-cancel exits the loop cleanly.
+	//   - --csip=false OR --allow-unregistered=true: accept empty list,
+	//     proceed.
+	//
+	// Tests deferred per Craig override 2026-05-12. Required coverage
+	// captured in backlog (IEEE-035) and the PR body.
+	var fsaList sep2.FunctionSetAssignmentsList
+	switch {
+	case edev.FunctionSetAssignmentsListLink == nil && (!cfg.CSIP || cfg.AllowUnregistered):
+		log.Println("EndDevice has no FunctionSetAssignmentsListLink; skipping Phase 2c (--csip off or --allow-unregistered)")
+	case edev.FunctionSetAssignmentsListLink == nil:
+		log.Fatalf("EndDevice has no FunctionSetAssignmentsListLink (CSIP V1.2 CORE-012 step 1 requires it); pass --allow-unregistered to bypass")
+	default:
+		log.Println("=== Phase 2c: FSAList Discovery ===")
+		for {
+			list, err := client.GetFSAList(ctx, edev.FunctionSetAssignmentsListLink.Href)
+			if err != nil {
+				log.Fatalf("GET FSAList: %v", err)
+			}
+			if len(list.FunctionSetAssignments) > 0 {
+				fsaList = list
+				log.Printf("FSAList: %d entries (paging cap 255; cursor walk deferred)", len(fsaList.FunctionSetAssignments))
+				break
+			}
+			if cfg.CSIP && !cfg.AllowUnregistered {
+				pollEvery := pinPollInterval(dcap.PollRate)
+				log.Printf("FSAList empty; re-polling every %s (CSIP V1.2 CORE-012 expects >=1 FSA per provisioned device)", pollEvery)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(pollEvery):
+				}
+				continue
+			}
+			log.Println("FSAList empty; proceeding (--csip off or --allow-unregistered)")
+			fsaList = list
+			break
+		}
+	}
+	// fsaList is the Phase 2c cache seam consumed by IEEE-036 (FSA -> DERProgram
+	// tree walk) and IEEE-037 (Primacy + mRID selection). Logged once for
+	// operator visibility until IEEE-036 lands.
+	log.Printf("Phase 2c complete: cached %d FSA(s) for IEEE-036 tree walk", len(fsaList.FunctionSetAssignments))
+
 	// Phase 3: DER Setup — follow EndDevice.DERListLink to find the first
 	// DER, then PUT to its DERCapabilityLink / DERSettingsLink. DERStatus
 	// goes through the reporter loop in Phase 5 against DERStatusLink.
