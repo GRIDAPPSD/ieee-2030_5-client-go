@@ -35,6 +35,7 @@ func main() {
 
 	hmiPort := flag.Int("hmi-port", 8080, "HMI web dashboard port (0 to disable)")
 	listScenarios := flag.Bool("list-scenarios", false, "List available scenarios and exit")
+	flag.BoolVar(&cfg.CSIPStrict, "csip-strict", false, "Strict CSIP TLS: drop GCM fallback, only offer TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8")
 	flag.Parse()
 
 	if *listScenarios {
