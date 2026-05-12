@@ -340,6 +340,32 @@ func (c *SEP2Client) LookupOwnEndDevice(ctx context.Context, edevListHref string
 	return sep2.EndDevice{}, ErrEndDeviceNotFound
 }
 
+// GetRegistration GETs the server-provided Registration resource at the given
+// href and decodes it. The Registration resource carries the server-assigned
+// pIN that CSIP V1.2 BASIC-001 step 5 / IEEE 2030.5 §10 expect the device to
+// match against its out-of-band provisioned PIN. IEEE-032 lands the read;
+// IEEE-033 will add mismatch enforcement and idle-retry on a not-yet-
+// provisioned PIN; IEEE-034 will add strict-mode missing-RegistrationLink
+// behavior.
+//
+// IEEE-032 tests deferred per Craig override 2026-05-12 (time crunch).
+// Required-but-deferred coverage:
+//   - happy path: stub server returns Registration with known PIN; method
+//     returns it parsed.
+//   - empty href: returns error matching "registration href required".
+//   - server returns 404: error wrapped via c.Get, no panic.
+//   - malformed XML: error wrapped via c.Get, no panic.
+func (c *SEP2Client) GetRegistration(ctx context.Context, registrationHref string) (sep2.Registration, error) {
+	if registrationHref == "" {
+		return sep2.Registration{}, fmt.Errorf("registration href required")
+	}
+	var rg sep2.Registration
+	if err := c.Get(ctx, registrationHref, &rg); err != nil {
+		return sep2.Registration{}, fmt.Errorf("GET registration: %w", err)
+	}
+	return rg, nil
+}
+
 // PutDERCapability PUTs the inverter's DER capability to the advertised
 // DERCapabilityLink. The href is passed in rather than constructed by
 // string formatting (no `/edev/{id}/der/{id}/dercap` literal). See IEEE-030.
