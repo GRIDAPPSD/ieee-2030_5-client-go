@@ -492,10 +492,33 @@ func main() {
 			break
 		}
 	}
-	// derProgramsByMRID is consumed by IEEE-037 (Primacy + mRID selection) and
-	// then Phase 5 (ApplyControls). Logged once for operator visibility until
-	// IEEE-037 lands.
-	_ = derProgramsByMRID
+	// Phase 2c (continued, IEEE-037): apply IEEE 2030.5 §10.1.3 list-ordering
+	// + CSIP V1.2 CORE-012 step 2 selection over the IEEE-036 cache. Lowest
+	// Primacy wins; ties on Primacy broken by MRID lex-min. Empty cache →
+	// no selection; Phase 5's ApplyControls(nil, ...) seam at line below
+	// stays nil-base and falls back to its own default control.
+	//
+	// selectedDERProgram + selectedDefaultControlHref are the Phase 5
+	// consumption seam: Phase 5 (IEEE-038+) will GET the DefaultDERControl
+	// at selectedDefaultControlHref and pass its DERControlBase into
+	// ApplyControls instead of the current literal nil at the call site
+	// below. Until Phase 5 lands, the selection result is logged for
+	// operator visibility and the existing ApplyControls(nil, ...) path
+	// is preserved.
+	selectedDERProgram, selected := inverter.SelectHighestPriority(derProgramsByMRID)
+	var selectedDefaultControlHref string
+	if selected {
+		if selectedDERProgram.DefaultDERControlLink != nil {
+			selectedDefaultControlHref = selectedDERProgram.DefaultDERControlLink.Href
+		}
+		log.Printf("Phase 2c (Primacy selection): winner mRID=%s primacy=%d DefaultDERControlLink=%q",
+			selectedDERProgram.MRID, selectedDERProgram.Primacy, selectedDefaultControlHref)
+	} else {
+		log.Println("Phase 2c (Primacy selection): no DERProgram cached; Phase 5 will fall back to nil base")
+	}
+	// Suppress unused-variable warnings until Phase 5 wires consumption.
+	_ = selectedDERProgram
+	_ = selectedDefaultControlHref
 
 	// Phase 3: DER Setup — follow EndDevice.DERListLink to find the first
 	// DER, then PUT to its DERCapabilityLink / DERSettingsLink. DERStatus
