@@ -8,12 +8,38 @@ import (
 
 // ApplyControls processes a DERControlBase and grid state to determine
 // the inverter's output. Implements IEEE 1547 priority ordering per section 4.7:
-//   a) connect/disconnect (highest)
-//   b) trip/ride-through
-//   c) volt-watt / freq-droop
-//   d) active power limit
-//   e) volt-var / watt-var / constant-PF / constant-Q
+//
+//	a) connect/disconnect (highest)
+//	b) trip/ride-through
+//	c) volt-watt / freq-droop
+//	d) active power limit
+//	e) volt-var / watt-var / constant-PF / constant-Q
+//
+// Curve-typed modes (Volt/Var, Volt/Watt) use the compiled-in IEEE 1547
+// default curves. Callers that have fetched server-supplied curves should
+// use ApplyControlsWithCurves (IEEE-042) instead.
 func ApplyControls(base *sep2.DERControlBase, grid GridState, maxPW float64) ControlOutputs {
+	return ApplyControlsWithCurves(base, grid, maxPW, nil)
+}
+
+// ApplyControlsWithCurves is ApplyControls with optional server-supplied
+// curve overrides. When `curves` is non-nil and contains a curve for the
+// requested CurveType (sep2.CurveTypeOpModVoltVar etc.), that curve is
+// used; otherwise the IEEE 1547 compiled-in default applies.
+//
+// `curves == nil` is equivalent to calling ApplyControls — no behavior
+// change for callers that haven't adopted the curve cache yet.
+//
+// IEEE-042 (Phase 5 closer): plumbs server-fetched DERCurves into the
+// control application path. cmd/inverterclient/main.go installs a
+// state-machine hook that populates the cache on EVENT_RECEIVED →
+// EVENT_STARTED transitions.
+func ApplyControlsWithCurves(
+	base *sep2.DERControlBase,
+	grid GridState,
+	maxPW float64,
+	curves *DERCurveCache,
+) ControlOutputs {
 	out := ControlOutputs{
 		ActivePowerW: maxPW,
 		Connected:    true,
@@ -42,10 +68,13 @@ func ApplyControls(base *sep2.DERControlBase, grid GridState, maxPW float64) Con
 		}
 	}
 
-	// Priority c: volt-watt (limits active power based on voltage)
+	// Priority c: volt-watt (limits active power based on voltage). Uses
+	// the server-supplied Volt/Watt curve if cached, else the IEEE 1547
+	// default. Pre-existing behavior: this branch fires under the
+	// OpModVoltVar guard (a quirk flagged in IEEE-041; out of scope for
+	// IEEE-042 to refactor).
 	if base.OpModVoltVar != nil {
-		// Volt-watt uses the default curve
-		curve := VoltWattDefaultCurve()
+		curve := lookupCurveOrDefault(curves, sep2.CurveTypeOpModVoltWatt, VoltWattDefaultCurve())
 		pFraction := EvaluateCurve(curve, grid.VoltsPU)
 		voltWattLimit := pFraction * Rating.RatedW
 		if voltWattLimit < out.ActivePowerW {
@@ -84,8 +113,9 @@ func ApplyControls(base *sep2.DERControlBase, grid GridState, maxPW float64) Con
 	// Priority e: reactive power modes (mutually exclusive)
 	switch {
 	case base.OpModVoltVar != nil:
-		// Volt-var: reactive power as function of voltage
-		curve := VoltVarDefaultCurve()
+		// Volt-var: reactive power as function of voltage. Uses the
+		// server-supplied Volt/Var curve if cached, else IEEE 1547 default.
+		curve := lookupCurveOrDefault(curves, sep2.CurveTypeOpModVoltVar, VoltVarDefaultCurve())
 		qFraction := EvaluateCurve(curve, grid.VoltsPU)
 		out.ReactivePowerVAr = qFraction * Rating.RatedVAr
 		out.Mode = ModeVoltVar
@@ -120,6 +150,19 @@ func ApplyControls(base *sep2.DERControlBase, grid GridState, maxPW float64) Con
 	}
 
 	return out
+}
+
+// lookupCurveOrDefault returns the cached curve for `curveType` when
+// present, else `fallback`. A nil cache also returns fallback. Extracted so
+// the curve-typed branches in ApplyControlsWithCurves stay readable.
+func lookupCurveOrDefault(cache *DERCurveCache, curveType uint8, fallback []CurvePoint) []CurvePoint {
+	if cache == nil {
+		return fallback
+	}
+	if points, ok := cache.Lookup(curveType); ok && len(points) > 0 {
+		return points
+	}
+	return fallback
 }
 
 // tanFromPF computes tan(acos(pf)) for power factor to var calculation.
