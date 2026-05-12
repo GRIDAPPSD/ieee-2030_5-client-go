@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	mathrand "math/rand/v2"
 	"net/http"
 	"os"
 	"os/signal"
@@ -47,6 +48,38 @@ func pinPollInterval(rate uint32) time.Duration {
 		d = 60 * time.Second
 	}
 	return d
+}
+
+// diffSnapshots computes added / cancelled buckets between two cache
+// snapshots for IEEE-040's state-machine tick. Added = mRIDs in curr not in
+// prev. Cancelled = mRIDs in prev not in curr OR mRIDs whose
+// EventStatus.CurrentStatus flipped to 2 (EventStatusCancelled) in curr.
+//
+// This is intentionally a TICK-LEVEL diff (prev-vs-curr) rather than the
+// CACHE-LEVEL diff DERControlCache.Diff produces (which compares a polled
+// list against the live cache state). The state machine needs per-tick
+// deltas so it can drive transitions exactly once per change.
+func diffSnapshots(prev, curr map[string]sep2.DERControl) (added, cancelled []sep2.DERControl) {
+	for mrid, c := range curr {
+		// Cancelled-in-curr regardless of prev — surfaces newly observed
+		// cancellations whether the event was previously seen or not.
+		if c.EventStatus != nil && c.EventStatus.CurrentStatus == sep2.EventStatusCancelled {
+			cancelled = append(cancelled, c.Copy())
+			continue
+		}
+		if _, existed := prev[mrid]; !existed {
+			added = append(added, c.Copy())
+		}
+	}
+	// mRIDs in prev but absent from curr — server removed them from the
+	// list. Treat as a benign cancellation so the state machine can revert
+	// the active event if it matches.
+	for mrid, p := range prev {
+		if _, stillThere := curr[mrid]; !stillThere {
+			cancelled = append(cancelled, p.Copy())
+		}
+	}
+	return added, cancelled
 }
 
 // walkDERProgramTree implements the IEEE-036 Phase 2c (continued) walk: for
@@ -549,9 +582,67 @@ func main() {
 	} else {
 		log.Println("Phase 5 (IEEE-038): no DERControlListLink on selected program; polling skipped")
 	}
-	// Suppress unused-variable warning for the cache — IEEE-039+ scheduler /
-	// state machine will consume it via Snapshot() and Diff().
-	_ = derControlCache
+	// Phase 5 entry (IEEE-040): state machine that ties IEEE-038's cache and
+	// IEEE-039's scheduler together. Drives DEFAULT ↔ EVENT_RECEIVED ↔
+	// EVENT_STARTED ↔ (EVENT_COMPLETED | EVENT_CANCELLED) → DEFAULT.
+	//
+	// The state-machine tick goroutine runs at the same cadence as the cache
+	// poll (dcap.PollRate, floored at 60s) so each tick can observe the
+	// freshest cache state. We hold a closure-local previous-snapshot map so
+	// cache.Diff yields added/cancelled buckets for THIS tick.
+	//
+	// pollDuration is duplicated rather than refactored — pinPollInterval
+	// lives in cmd/inverterclient and is out of scope to extract. The
+	// duplication is acknowledged in IEEE-040's ticket; the helper is the
+	// same internal/inverter.derControlPollDuration policy (60s floor,
+	// 30min default-on-zero).
+	//
+	// Hook left nil — Phase 6 (IEEE-043+) wires the Response Function Set
+	// emitter here. IEEE-041 reads sm.Current() in the simulation loop to
+	// pick the ApplyControls base.
+	sched := inverter.NewScheduler(client.Now, mathrand.New(mathrand.NewPCG(uint64(time.Now().UnixNano()), 0xCAFEBABE)))
+	stateMachine := inverter.NewStateMachine()
+	if selected && selectedDERProgram.DERControlListLink != nil {
+		tickInterval := pinPollInterval(dcap.PollRate)
+		log.Printf("Phase 5 (IEEE-040): starting state-machine tick interval=%s", tickInterval)
+		go func() {
+			t := time.NewTicker(tickInterval)
+			defer t.Stop()
+			prev := derControlCache.Snapshot()
+			tick := func() {
+				curr := derControlCache.Snapshot()
+				// Translate the cache to a fresh DERControl slice for Diff —
+				// Diff already returns Copy() values for added/cancelled.
+				next := make([]sep2.DERControl, 0, len(curr))
+				for _, v := range curr {
+					next = append(next, v)
+				}
+				// cache.Diff is computed against the live cache state, not
+				// against `prev`. We track `prev` so on the next iteration we
+				// see freshly-added events; the Diff signature consults the
+				// cache's internal map directly. For the state machine we want
+				// "deltas since LAST TICK", so use a manual diff against prev.
+				added, cancelled := diffSnapshots(prev, curr)
+				stateMachine.Tick(client.Now(), added, cancelled, sched)
+				prev = curr
+			}
+			tick() // initial tick so a fresh poll seeds the state machine.
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+				tick()
+			}
+		}()
+	} else {
+		log.Println("Phase 5 (IEEE-040): no DERControlListLink on selected program; state-machine tick skipped")
+	}
+	// Suppress unused-variable warning for the state machine — IEEE-041 will
+	// consume sm.Current() in the simulation loop to pick the ApplyControls
+	// base.
+	_ = stateMachine
 
 	// Phase 3: DER Setup — follow EndDevice.DERListLink to find the first
 	// DER, then PUT to its DERCapabilityLink / DERSettingsLink. DERStatus
