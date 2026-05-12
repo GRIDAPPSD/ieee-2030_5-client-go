@@ -516,9 +516,42 @@ func main() {
 	} else {
 		log.Println("Phase 2c (Primacy selection): no DERProgram cached; Phase 5 will fall back to nil base")
 	}
-	// Suppress unused-variable warnings until Phase 5 wires consumption.
-	_ = selectedDERProgram
+	// Suppress unused-variable warning for the default-control href — IEEE-041
+	// will replace ApplyControls(nil, ...) at main.go:667 with the resolved
+	// default control derived from this href.
 	_ = selectedDefaultControlHref
+
+	// Phase 5 entry (IEEE-038): start the DERControlList polling goroutine on
+	// the active DERProgram's DERControlListLink. The cache surfaces added /
+	// updated / cancelled events for the IEEE-039 scheduler and IEEE-040 state
+	// machine that follow.
+	//
+	// pollRate source: dcap.PollRate. The advertised list-level pollRate lives
+	// on the ListResource returned by the GET — not on the *ListLink — so we
+	// seed the loop with the device's top-level pollRate the same way IEEE-029
+	// / IEEE-034 / IEEE-035 reuse it. IEEE-039+ may switch to the list-level
+	// pollRate once one tick has populated the cache.
+	//
+	// Missing-DERControlListLink: log + skip. CORE-012 step 6 polling is
+	// conditional on the link existing; a DERProgram without DERControls
+	// (DefaultDERControl-only) is a valid CSIP shape.
+	derControlCache := inverter.NewDERControlCache()
+	if selected && selectedDERProgram.DERControlListLink != nil {
+		dercListHref := selectedDERProgram.DERControlListLink.Href
+		log.Printf("Phase 5 (IEEE-038): starting DERControlList poll href=%s pollRate=%ds",
+			dercListHref, dcap.PollRate)
+		go func() {
+			if err := client.PollDERControlList(ctx, dercListHref, dcap.PollRate, derControlCache); err != nil &&
+				!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				log.Printf("DERControlList poll loop exited: %v", err)
+			}
+		}()
+	} else {
+		log.Println("Phase 5 (IEEE-038): no DERControlListLink on selected program; polling skipped")
+	}
+	// Suppress unused-variable warning for the cache — IEEE-039+ scheduler /
+	// state machine will consume it via Snapshot() and Diff().
+	_ = derControlCache
 
 	// Phase 3: DER Setup — follow EndDevice.DERListLink to find the first
 	// DER, then PUT to its DERCapabilityLink / DERSettingsLink. DERStatus
