@@ -288,3 +288,22 @@ func (c *SEP2Client) PostMeterReading(ctx context.Context, mupID string, mmr sep
 	_, err := c.Post(ctx, fmt.Sprintf("/mup/%s/mr", mupID), &mmr)
 	return err
 }
+
+// pollDuration maps a DeviceCapability pollRate (seconds) to a wait
+// duration. Exposed as a var so tests can compress polling cadence without
+// faking time (see idle_export_test.go). Real implementation lands in the
+// GREEN commit of IEEE-028.
+var pollDuration = func(pollRateSec uint32) time.Duration {
+	if pollRateSec == 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(pollRateSec) * time.Second
+}
+
+// WaitForAdvertisedLinks is the IEEE-028 idle-poll seam.
+// RED stub: returns the initial DeviceCapability unchanged so the failing
+// tests can compile. The GREEN commit replaces this body with a real
+// re-poll loop honoring ctx and dcap.PollRate.
+func (c *SEP2Client) WaitForAdvertisedLinks(_ context.Context, initial sep2.DeviceCapability) (sep2.DeviceCapability, error) {
+	return initial, nil
+}
