@@ -155,6 +155,15 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 		httpClient: &http.Client{
 			Transport: transport,
 			Timeout:   30 * time.Second,
+			// Disable stdlib auto-follow on 3xx so 301 Moved Permanently
+			// surfaces as a *MovedError via classifyResponse instead of
+			// being silently followed. IEEE-047 will consume the
+			// *MovedError to update cached hrefs; IEEE-046 lands only the
+			// surfacing. http.ErrUseLastResponse tells the client to
+			// return the redirect response unmodified rather than follow.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 		baseURL: cfg.ServerURL,
 		sfdi:    sepTLS.SFDI(parsedCert),
@@ -169,6 +178,14 @@ func (c *SEP2Client) SFDI() string { return c.sfdi }
 func (c *SEP2Client) LFDI() string { return c.lfdi }
 
 // Get performs a GET request and unmarshals the XML response.
+//
+// Status-code mapping is delegated to classifyResponse: 200 OK returns the
+// parsed body with nil error; non-2xx codes return the appropriate typed
+// error (ErrBadRequest, ErrNotFound, ErrMethodNotAllowed, ErrNotImplemented,
+// *MovedError for redirects, ErrResponseTransient for 5xx). All errors are
+// wrapped with the method-and-URL context so the error message reads
+// "GET /edev: not found (404)" while callers can still match the underlying
+// sentinel via errors.Is. See IEEE-046 / errors.go.
 func (c *SEP2Client) Get(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
@@ -184,24 +201,34 @@ func (c *SEP2Client) Get(ctx context.Context, path string, out any) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %d %s", path, resp.StatusCode, string(body))
+	if err := classifyResponse(resp); err != nil {
+		// Drain the body for connection reuse even on the error path.
+		// Do not log the body — for 4xx it may echo the request payload
+		// (PII / XSS-in-log risk; see PostResponse precedent).
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return fmt.Errorf("GET %s: %w", path, err)
 	}
 
 	if out != nil {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("GET %s: read response: %w", path, err)
+		}
 		if err := xml.Unmarshal(body, out); err != nil {
-			return fmt.Errorf("unmarshal %s: %w", path, err)
+			return fmt.Errorf("GET %s: unmarshal: %w", path, err)
 		}
 	}
 	return nil
 }
 
 // Post performs a POST request with XML body and returns the Location header.
+//
+// Status-code mapping is delegated to classifyResponse: 200/201/204 return
+// the Location header value (empty when the server omits it) with nil error;
+// non-2xx codes return the appropriate typed error wrapped with method-and-
+// URL context. 201 Created is the spec-canonical POST success code and is
+// where the Location header carries the new-resource URI per CSIP V1.2 §6.6
+// / IEEE 2030.5 §10.3. See IEEE-046 / errors.go.
 func (c *SEP2Client) Post(ctx context.Context, path string, body any) (string, error) {
 	data, err := xml.Marshal(body)
 	if err != nil {
@@ -223,14 +250,17 @@ func (c *SEP2Client) Post(ctx context.Context, path string, body any) (string, e
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body) // drain for connection reuse
 
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("POST %s: %d", path, resp.StatusCode)
+	if err := classifyResponse(resp); err != nil {
+		return "", fmt.Errorf("POST %s: %w", path, err)
 	}
-
 	return resp.Header.Get("Location"), nil
 }
 
 // Put performs a PUT request with XML body.
+//
+// Status-code mapping is delegated to classifyResponse: 200/201/204 return
+// nil error; non-2xx codes return the appropriate typed error wrapped with
+// method-and-URL context. See IEEE-046 / errors.go.
 func (c *SEP2Client) Put(ctx context.Context, path string, body any) error {
 	data, err := xml.Marshal(body)
 	if err != nil {
@@ -252,8 +282,8 @@ func (c *SEP2Client) Put(ctx context.Context, path string, body any) error {
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("PUT %s: %d", path, resp.StatusCode)
+	if err := classifyResponse(resp); err != nil {
+		return fmt.Errorf("PUT %s: %w", path, err)
 	}
 	return nil
 }
