@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -26,6 +27,16 @@ import (
 // Callers in CSIP mode treat this as a transient "not yet provisioned"
 // condition and re-poll the list rather than aborting. See IEEE-029.
 var ErrEndDeviceNotFound = errors.New("end device not found in server list")
+
+// ErrResponseTransient is the sentinel error returned by PostResponse when
+// the server reports a transient failure (5xx, or a transport-level error
+// that survives the one-shot in-call retry). Phase 6 / IEEE-045 will
+// `errors.Is`-match against this to drive the exponential-backoff +
+// dead-letter retry policy without coupling to status-code parsing. The
+// sentinel is intentionally a bare leaf error; PostResponse wraps it with
+// %w plus contextual detail (status code, URL) so callers retain both the
+// pattern-match handle and the diagnostic chain. See IEEE-043 / IEEE-045.
+var ErrResponseTransient = errors.New("response POST transient failure")
 
 const (
 	contentTypeSEPXML = "application/sep+xml"
@@ -566,6 +577,166 @@ func (c *SEP2Client) PostMeterReading(ctx context.Context, mmrListHref string, m
 	}
 	_, err := c.Post(ctx, mmrListHref, &mmr)
 	return err
+}
+
+// resolveServerURL resolves a possibly-relative server-supplied href against
+// c.baseURL. Absolute hrefs (carrying a scheme) are returned verbatim;
+// relative hrefs are joined to baseURL so callers do not accidentally
+// double-prefix. Matches CSIP §6.6 / IEEE 2030.5 §10.3 — devices MUST treat
+// every advertised URI as opaque and resolve via RFC 3986, not by string
+// concatenation. Currently only PostResponse needs the full resolution
+// surface (Response.replyTo is the first href that the spec allows to be
+// absolute); the GET/PUT helpers still string-concat with c.baseURL because
+// every other advertised link in IEEE 2030.5 is a path under the server.
+// See IEEE-043.
+func (c *SEP2Client) resolveServerURL(href string) (string, error) {
+	u, err := url.Parse(href)
+	if err != nil {
+		return "", fmt.Errorf("parse href %q: %w", href, err)
+	}
+	if u.IsAbs() {
+		return u.String(), nil
+	}
+	base, err := url.Parse(c.baseURL)
+	if err != nil {
+		return "", fmt.Errorf("parse base URL %q: %w", c.baseURL, err)
+	}
+	return base.ResolveReference(u).String(), nil
+}
+
+// isTransientResponseStatus reports whether an HTTP status code from a
+// Response POST should be treated as a transient failure (i.e. retriable
+// per IEEE-045's future policy and pattern-matchable via
+// ErrResponseTransient). Anything in the 5xx band qualifies.
+func isTransientResponseStatus(code int) bool {
+	return code >= 500 && code <= 599
+}
+
+// PostResponse POSTs a DERControlResponse to the replyTo URI advertised on
+// the server-issued DERControl, per CSIP V1.2 CORE-022 and IEEE 2030.5
+// §10.10. The href may be relative (e.g. `/rsps/{rspSetID}/rsp`) or absolute
+// (e.g. `https://server/rsps/...`); both forms resolve correctly against
+// c.baseURL via resolveServerURL.
+//
+// Success criteria per CORE-022: the server returns 201 Created (typically
+// with a Location header pointing at the new Response resource) or 204 No
+// Content. Both are treated as success and the method returns nil. On 201
+// the Location header is logged at debug level — useful for tracing
+// duplicate-Response detection across retries, but not load-bearing for
+// behavior.
+//
+// Failure handling is split by status class so the upcoming IEEE-044 state
+// machine hook and IEEE-045 retry/dead-letter policy can pattern-match
+// without re-parsing:
+//
+//   - 4xx: wrapped error containing the status code and URL. The response
+//     body is NOT logged verbatim — it may echo XML that triggered the
+//     rejection and leaking it raises XSS-via-log and PII concerns. The
+//     wrapped error message is similarly status-only.
+//   - 5xx and transport-level errors: one in-call retry. If the retry also
+//     fails, the returned error wraps ErrResponseTransient so callers can
+//     `errors.Is(err, ErrResponseTransient)` to drive the upstream
+//     exponential-backoff policy (IEEE-045).
+//   - Other (1xx / 3xx): wrapped non-transient error. These should not
+//     occur in practice — IEEE 2030.5 servers do not redirect Response
+//     POSTs — but a hostile or misconfigured peer should not crash the
+//     client.
+//   - Context cancellation: returned unchanged via %w; callers can
+//     `errors.Is(err, context.Canceled)` / `errors.Is(err, context.DeadlineExceeded)`.
+//
+// The one-shot retry is intentionally surgical: full retry/backoff with
+// dead-lettering is IEEE-045's scope. PostResponse ships only the safety
+// net so a single dropped connection or 503 does not bubble straight to
+// the state-machine hook in IEEE-044. See IEEE-043 (this ticket) and the
+// `phase-6-response-function-set.md` plan doc.
+func (c *SEP2Client) PostResponse(ctx context.Context, replyToHref string, resp sep2.DERControlResponse) error {
+	if replyToHref == "" {
+		return fmt.Errorf("replyTo href required")
+	}
+
+	target, err := c.resolveServerURL(replyToHref)
+	if err != nil {
+		return fmt.Errorf("resolve replyTo: %w", err)
+	}
+
+	body, err := xml.Marshal(&resp)
+	if err != nil {
+		return fmt.Errorf("marshal DERControlResponse: %w", err)
+	}
+
+	// One-shot retry: attempt + (optional) single retry on transient
+	// failures. Keep the loop body straight-line — do not let it grow into
+	// IEEE-045's territory.
+	const maxAttempts = 2
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err := c.postResponseOnce(ctx, target, body)
+		if err == nil {
+			return nil
+		}
+		// Honor cancellation: never retry, never wrap with sentinel —
+		// ctx errors are the caller's signal.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("POST Response %s: %w", target, err)
+		}
+		lastErr = err
+		if !errors.Is(err, ErrResponseTransient) {
+			return err
+		}
+		// Transient — fall through to retry unless we are out of
+		// attempts.
+	}
+	return lastErr
+}
+
+// postResponseOnce performs a single Response POST attempt and classifies
+// the outcome. Transient failures (5xx, transport errors) are wrapped with
+// ErrResponseTransient so PostResponse's retry loop can pattern-match.
+// Non-transient failures are wrapped without the sentinel — callers must
+// not retry them.
+func (c *SEP2Client) postResponseOnce(ctx context.Context, target string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build POST Response request for %s: %w", target, err)
+	}
+	req.Header.Set("Content-Type", contentTypeSEPXML)
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Keep-Alive", keepAliveTimeout)
+
+	httpResp, err := c.httpClient.Do(req)
+	if err != nil {
+		// Surface context cancellation unwrapped-by-sentinel so the
+		// outer retry can short-circuit.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		// All other transport-level failures are transient by
+		// definition (connection refused, reset, TLS handshake mid-
+		// connection, etc). Wrap with the sentinel.
+		return fmt.Errorf("POST Response %s: %w: %v", target, ErrResponseTransient, err)
+	}
+	defer func() { _ = httpResp.Body.Close() }()
+	// Drain the body for connection reuse, but DO NOT log it (see method
+	// doc — body redaction is the policy).
+	_, _ = io.Copy(io.Discard, httpResp.Body)
+
+	switch {
+	case httpResp.StatusCode == http.StatusCreated:
+		if loc := httpResp.Header.Get("Location"); loc != "" {
+			log.Printf("PostResponse: 201 Created at %s (location=%s)", target, loc)
+		}
+		return nil
+	case httpResp.StatusCode == http.StatusNoContent:
+		return nil
+	case isTransientResponseStatus(httpResp.StatusCode):
+		return fmt.Errorf("POST Response %s: status %d: %w", target, httpResp.StatusCode, ErrResponseTransient)
+	case httpResp.StatusCode >= 400 && httpResp.StatusCode < 500:
+		// 4xx — non-retriable. Body deliberately NOT logged.
+		log.Printf("PostResponse: %d from %s (body redacted)", httpResp.StatusCode, target)
+		return fmt.Errorf("POST Response %s: client error status %d", target, httpResp.StatusCode)
+	default:
+		return fmt.Errorf("POST Response %s: unexpected status %d", target, httpResp.StatusCode)
+	}
 }
 
 // pollDuration maps a DeviceCapability pollRate (seconds) to a wait
