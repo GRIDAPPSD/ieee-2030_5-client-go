@@ -699,7 +699,12 @@ func (c *SEP2Client) SyncServerTime(ctx context.Context, timeHref string) (sep2.
 // minTimeSyncPollRate is the floor for the time-sync poll interval. The
 // ticket pins this at 60s as production hygiene — anything shorter
 // hammers the Time endpoint without buying meaningful clock accuracy.
-const minTimeSyncPollRate = 60 * time.Second
+//
+// Declared as a var (not const) solely so the IEEE-070 sweep tests can
+// drive the loop body via SetMinTimeSyncPollRateForTesting; the
+// production binary never writes to this. Mirrors the pollDuration
+// testability seam pattern established by IEEE-028.
+var minTimeSyncPollRate = 60 * time.Second
 
 // DefaultTimeSyncPollRate is the fallback poll cadence when the caller
 // has no Time-resource pollRate to thread through. sep2.Time inherits
