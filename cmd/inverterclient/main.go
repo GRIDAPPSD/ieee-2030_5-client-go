@@ -16,10 +16,15 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
 
+// defaultServerURL matches the Makefile's `run-inverter` SERVER_URL default
+// so invoking the binary directly behaves the same as `make run-inverter`.
+// See IEEE-026.
+const defaultServerURL = "https://localhost:8443"
+
 func main() {
 	cfg := inverter.SimConfig{}
 
-	flag.StringVar(&cfg.ServerURL, "server", "https://localhost:443", "IEEE 2030.5 server URL")
+	flag.StringVar(&cfg.ServerURL, "server", defaultServerURL, "IEEE 2030.5 server URL")
 	flag.StringVar(&cfg.CertFile, "cert", "certs/device.crt", "Client certificate PEM")
 	flag.StringVar(&cfg.KeyFile, "key", "certs/device.key", "Client private key PEM")
 	flag.StringVar(&cfg.CAFile, "ca", "certs/ca.crt", "CA certificate PEM")
