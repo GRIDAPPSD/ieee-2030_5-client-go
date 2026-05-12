@@ -121,7 +121,7 @@ func TestLookupOwnEndDevice_FindsByLFDI(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	edev, err := client.LookupOwnEndDevice(ctx, "/edev")
+	edev, _, err := client.LookupOwnEndDevice(ctx, "/edev")
 	if err != nil {
 		t.Fatalf("LookupOwnEndDevice: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestLookupOwnEndDevice_EmptyListReturnsNotFound(t *testing.T) {
 	defer cancel()
 
 	// First lookup: list empty → ErrEndDeviceNotFound.
-	_, err := client.LookupOwnEndDevice(ctx, "/edev")
+	_, _, err := client.LookupOwnEndDevice(ctx, "/edev")
 	if !errors.Is(err, inverter.ErrEndDeviceNotFound) {
 		t.Fatalf("LookupOwnEndDevice err = %v, want ErrEndDeviceNotFound", err)
 	}
@@ -212,7 +212,7 @@ func TestLookupOwnEndDevice_EmptyListReturnsNotFound(t *testing.T) {
 	// behavior under test. Zero Phase 3+ traffic must occur in this
 	// window because the inverter has no EndDevice to write against.
 	for i := 0; i < 2; i++ {
-		if _, err := client.LookupOwnEndDevice(ctx, "/edev"); !errors.Is(err, inverter.ErrEndDeviceNotFound) {
+		if _, _, err := client.LookupOwnEndDevice(ctx, "/edev"); !errors.Is(err, inverter.ErrEndDeviceNotFound) {
 			t.Fatalf("idle re-poll %d: err = %v, want ErrEndDeviceNotFound", i+1, err)
 		}
 	}
@@ -227,7 +227,7 @@ func TestLookupOwnEndDevice_EmptyListReturnsNotFound(t *testing.T) {
 	// Now the server provisions our device — flip the list and Lookup
 	// must succeed on the next call (advances out of the idle loop).
 	listEmpty.Store(false)
-	edev, err := client.LookupOwnEndDevice(ctx, "/edev")
+	edev, _, err := client.LookupOwnEndDevice(ctx, "/edev")
 	if err != nil {
 		t.Fatalf("LookupOwnEndDevice after provisioning: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestLookupOwnEndDevice_OtherLFDIsNotOurs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := client.LookupOwnEndDevice(ctx, "/edev")
+	_, _, err := client.LookupOwnEndDevice(ctx, "/edev")
 	if !errors.Is(err, inverter.ErrEndDeviceNotFound) {
 		t.Fatalf("err = %v, want ErrEndDeviceNotFound", err)
 	}
@@ -304,7 +304,7 @@ func TestLookupOwnEndDevice_CaseSensitiveLFDI(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := client.LookupOwnEndDevice(ctx, "/edev")
+	_, _, err := client.LookupOwnEndDevice(ctx, "/edev")
 	if !errors.Is(err, inverter.ErrEndDeviceNotFound) {
 		t.Errorf("lowercased LFDI matched: err = %v, want ErrEndDeviceNotFound (case-sensitive)", err)
 	}
@@ -330,7 +330,7 @@ func TestLookupOwnEndDevice_EmptyHrefErrors(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := client.LookupOwnEndDevice(ctx, "")
+	_, _, err := client.LookupOwnEndDevice(ctx, "")
 	if err == nil {
 		t.Fatal("LookupOwnEndDevice(ctx, \"\") returned nil error; want failure")
 	}
@@ -362,7 +362,7 @@ func TestLookupOwnEndDevice_ServerErrorIsWrapped(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := client.LookupOwnEndDevice(ctx, "/edev")
+	_, _, err := client.LookupOwnEndDevice(ctx, "/edev")
 	if err == nil {
 		t.Fatal("expected non-nil error from 500 response")
 	}
@@ -419,7 +419,7 @@ func TestRegister_CSIPOffFiresPOST(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	edev, err := client.Register(ctx, "/edev")
+	edev, _, err := client.Register(ctx, "/edev")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestRegister_PostsToExactHref(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			edev, err := client.Register(ctx, tc.listHref)
+			edev, _, err := client.Register(ctx, tc.listHref)
 			if err != nil {
 				t.Fatalf("Register: %v", err)
 			}
@@ -546,7 +546,7 @@ func TestRegister_PostsToExactHref(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		_, err := client.Register(ctx, "")
+		_, _, err := client.Register(ctx, "")
 		if err == nil {
 			t.Fatal("Register(ctx, \"\") returned nil error; want failure")
 		}

@@ -148,12 +148,22 @@ func runPhase2cFSAList(
 	default:
 		log.Println("=== Phase 2c: FSAList Discovery ===")
 		for {
-			list, err := client.GetFSAList(ctx, edev.FunctionSetAssignmentsListLink.Href)
+			// IEEE-047: on 301 GetFSAList returns the new FSAList base href
+			// (paging query stripped). Update the cached link on the
+			// EndDevice so the next idle-poll iteration and any other
+			// caller that re-reads edev.FunctionSetAssignmentsListLink
+			// uses the new URL directly.
+			list, newHref, err := client.GetFSAList(ctx, edev.FunctionSetAssignmentsListLink.Href)
 			if err != nil {
 				return sep2.FunctionSetAssignmentsList{}, &fsaListFatal{
 					reason: fmt.Sprintf("GET FSAList: %v", err),
 					inner:  err,
 				}
+			}
+			if newHref != "" {
+				log.Printf("FSAList: 301 follow — cached href %s → %s",
+					edev.FunctionSetAssignmentsListLink.Href, newHref)
+				edev.FunctionSetAssignmentsListLink.Href = newHref
 			}
 			if len(list.FunctionSetAssignments) > 0 {
 				fsaList = list

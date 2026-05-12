@@ -208,11 +208,14 @@ func (c *SEP2Client) PollDERControlList(
 
 	// Initial tick fires immediately so the cache populates without waiting
 	// a full interval — IEEE-039+ schedulers need a snapshot at startup.
-	if err := c.pollDERControlListOnce(ctx, href, cache); err != nil {
+	if newHref, err := c.pollDERControlListOnce(ctx, href, cache); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
 		log.Printf("DERControlList poll: initial fetch failed (continuing): %v", err)
+	} else if newHref != "" {
+		log.Printf("DERControlList poll: 301 follow — cached href %s → %s", href, newHref)
+		href = newHref
 	}
 
 	t := time.NewTicker(interval)
@@ -223,12 +226,18 @@ func (c *SEP2Client) PollDERControlList(
 			return ctx.Err()
 		case <-t.C:
 		}
-		if err := c.pollDERControlListOnce(ctx, href, cache); err != nil {
+		newHref, err := c.pollDERControlListOnce(ctx, href, cache)
+		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return err
 			}
 			// Recoverable — log and try again next tick.
 			log.Printf("DERControlList poll: fetch failed (continuing): %v", err)
+			continue
+		}
+		if newHref != "" {
+			log.Printf("DERControlList poll: 301 follow — cached href %s → %s", href, newHref)
+			href = newHref
 		}
 	}
 }
@@ -236,14 +245,19 @@ func (c *SEP2Client) PollDERControlList(
 // pollDERControlListOnce performs a single GET + cache refresh. Extracted so
 // the loop body stays small and tests can drive the I/O path directly. The
 // mutex is held only inside Diff/Refresh, never across the GET.
+//
+// IEEE-047: when the GET follows a 301, the new href (with paging query
+// stripped) is returned so the calling loop can update its local cached
+// href and stop paying a redirect on every subsequent tick. Empty newHref
+// means no follow happened.
 func (c *SEP2Client) pollDERControlListOnce(
 	ctx context.Context,
 	href string,
 	cache *DERControlCache,
-) error {
-	list, err := c.GetDERControlList(ctx, href)
+) (newHref string, err error) {
+	list, newHref, err := c.GetDERControlList(ctx, href)
 	if err != nil {
-		return fmt.Errorf("poll DERControlList %s: %w", href, err)
+		return "", fmt.Errorf("poll DERControlList %s: %w", href, err)
 	}
 	added, updated, cancelled := cache.Diff(list.DERControl)
 	total := cache.Refresh(list.DERControl)
@@ -251,5 +265,5 @@ func (c *SEP2Client) pollDERControlListOnce(
 		log.Printf("DERControlList poll: %d total (+%d new, ~%d updated, !%d cancelled)",
 			total, len(added), len(updated), len(cancelled))
 	}
-	return nil
+	return newHref, nil
 }

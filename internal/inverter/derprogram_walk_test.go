@@ -171,7 +171,7 @@ func TestGetDERProgramList_HappyPath(t *testing.T) {
 	})
 
 	client, ctx := newDERWalkTestClient(t, mux)
-	got, err := client.GetDERProgramList(ctx, derProgramListHref)
+	got, _, err := client.GetDERProgramList(ctx, derProgramListHref)
 	if err != nil {
 		t.Fatalf("GetDERProgramList: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestGetDERProgramList_EmptyHref(t *testing.T) {
 	mux.HandleFunc("/", func(_ http.ResponseWriter, _ *http.Request) { hits.Add(1) })
 
 	client, ctx := newDERWalkTestClient(t, mux)
-	got, err := client.GetDERProgramList(ctx, "")
+	got, _, err := client.GetDERProgramList(ctx, "")
 	if err == nil {
 		t.Fatalf("GetDERProgramList(ctx, \"\") returned nil error; got=%+v", got)
 	}
@@ -240,7 +240,7 @@ func TestGetDERProgramList_NotFound(t *testing.T) {
 	})
 
 	client, ctx := newDERWalkTestClient(t, mux)
-	got, err := client.GetDERProgramList(ctx, derProgramListHref)
+	got, _, err := client.GetDERProgramList(ctx, derProgramListHref)
 	if err == nil {
 		t.Fatalf("GetDERProgramList on 404 returned nil error; got=%+v", got)
 	}
@@ -274,7 +274,7 @@ func TestGetDERProgramList_MalformedXML(t *testing.T) {
 	})
 
 	client, ctx := newDERWalkTestClient(t, mux)
-	got, err := client.GetDERProgramList(ctx, derProgramListHref)
+	got, _, err := client.GetDERProgramList(ctx, derProgramListHref)
 	if err == nil {
 		t.Fatalf("GetDERProgramList on malformed XML returned nil error; got=%+v", got)
 	}
@@ -308,7 +308,7 @@ func TestGetDefaultDERControl_HappyPath(t *testing.T) {
 	})
 
 	client, ctx := newDERWalkTestClient(t, mux)
-	got, err := client.GetDefaultDERControl(ctx, defaultDERControlHref)
+	got, _, err := client.GetDefaultDERControl(ctx, defaultDERControlHref)
 	if err != nil {
 		t.Fatalf("GetDefaultDERControl: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestGetDefaultDERControl_EmptyHref(t *testing.T) {
 	mux.HandleFunc("/", func(_ http.ResponseWriter, _ *http.Request) { hits.Add(1) })
 
 	client, ctx := newDERWalkTestClient(t, mux)
-	got, err := client.GetDefaultDERControl(ctx, "")
+	got, _, err := client.GetDefaultDERControl(ctx, "")
 	if err == nil {
 		t.Fatalf("GetDefaultDERControl(ctx, \"\") returned nil error; got=%+v", got)
 	}
@@ -356,7 +356,7 @@ func TestGetDefaultDERControl_NotFound(t *testing.T) {
 	})
 
 	client, ctx := newDERWalkTestClient(t, mux)
-	got, err := client.GetDefaultDERControl(ctx, defaultDERControlHref)
+	got, _, err := client.GetDefaultDERControl(ctx, defaultDERControlHref)
 	if err == nil {
 		t.Fatalf("GetDefaultDERControl on 404 returned nil error; got=%+v", got)
 	}
@@ -387,7 +387,7 @@ func TestGetDefaultDERControl_MalformedXML(t *testing.T) {
 	})
 
 	client, ctx := newDERWalkTestClient(t, mux)
-	got, err := client.GetDefaultDERControl(ctx, defaultDERControlHref)
+	got, _, err := client.GetDefaultDERControl(ctx, defaultDERControlHref)
 	if err == nil {
 		t.Fatalf("GetDefaultDERControl on malformed XML returned nil error; got=%+v", got)
 	}
@@ -424,7 +424,7 @@ func TestGetDERControlList_HappyPath(t *testing.T) {
 	})
 
 	client, ctx := newDERWalkTestClient(t, mux)
-	got, err := client.GetDERControlList(ctx, derControlListHref)
+	got, _, err := client.GetDERControlList(ctx, derControlListHref)
 	if err != nil {
 		t.Fatalf("GetDERControlList: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestGetDERControlList_EmptyHref(t *testing.T) {
 	mux.HandleFunc("/", func(_ http.ResponseWriter, _ *http.Request) { hits.Add(1) })
 
 	client, ctx := newDERWalkTestClient(t, mux)
-	got, err := client.GetDERControlList(ctx, "")
+	got, _, err := client.GetDERControlList(ctx, "")
 	if err == nil {
 		t.Fatalf("GetDERControlList(ctx, \"\") returned nil error; got=%+v", got)
 	}
@@ -473,7 +473,7 @@ func TestGetDERControlList_NotFound(t *testing.T) {
 	})
 
 	client, ctx := newDERWalkTestClient(t, mux)
-	got, err := client.GetDERControlList(ctx, derControlListHref)
+	got, _, err := client.GetDERControlList(ctx, derControlListHref)
 	if err == nil {
 		t.Fatalf("GetDERControlList on 404 returned nil error; got=%+v", got)
 	}
@@ -504,7 +504,7 @@ func TestGetDERControlList_MalformedXML(t *testing.T) {
 	})
 
 	client, ctx := newDERWalkTestClient(t, mux)
-	got, err := client.GetDERControlList(ctx, derControlListHref)
+	got, _, err := client.GetDERControlList(ctx, derControlListHref)
 	if err == nil {
 		t.Fatalf("GetDERControlList on malformed XML returned nil error; got=%+v", got)
 	}
@@ -658,7 +658,7 @@ func TestDERListGets_AppendPagingHint(t *testing.T) {
 			callerHref:  derProgramListHref,
 			wantInQuery: "l=255",
 			call: func(c *inverter.SEP2Client, ctx context.Context, href string) error {
-				_, err := c.GetDERProgramList(ctx, href)
+				_, _, err := c.GetDERProgramList(ctx, href)
 				return err
 			},
 		},
@@ -668,7 +668,7 @@ func TestDERListGets_AppendPagingHint(t *testing.T) {
 			callerHref:  derProgramListHref + "?s=42",
 			wantInQuery: "s=42&l=255",
 			call: func(c *inverter.SEP2Client, ctx context.Context, href string) error {
-				_, err := c.GetDERProgramList(ctx, href)
+				_, _, err := c.GetDERProgramList(ctx, href)
 				return err
 			},
 		},
@@ -678,7 +678,7 @@ func TestDERListGets_AppendPagingHint(t *testing.T) {
 			callerHref:  derControlListHref,
 			wantInQuery: "l=255",
 			call: func(c *inverter.SEP2Client, ctx context.Context, href string) error {
-				_, err := c.GetDERControlList(ctx, href)
+				_, _, err := c.GetDERControlList(ctx, href)
 				return err
 			},
 		},
@@ -688,7 +688,7 @@ func TestDERListGets_AppendPagingHint(t *testing.T) {
 			callerHref:  derControlListHref + "?s=42",
 			wantInQuery: "s=42&l=255",
 			call: func(c *inverter.SEP2Client, ctx context.Context, href string) error {
-				_, err := c.GetDERControlList(ctx, href)
+				_, _, err := c.GetDERControlList(ctx, href)
 				return err
 			},
 		},

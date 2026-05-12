@@ -156,7 +156,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 		// is what dcap.EndDeviceListLink.Href advertises), so we pass that
 		// literal here as the href — there is no hardcoded URL inside the
 		// client method anymore.
-		edev, err := client.Register(ctx, "/edev")
+		edev, _, err := client.Register(ctx, "/edev")
 		if err != nil {
 			t.Fatalf("Register: %v", err)
 		}
@@ -201,7 +201,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 
 		// Verify it was stored by reading back
 		var cap sep2.DERCapability
-		err = client.Get(ctx, "/edev/"+edevID+"/der/"+derID+"/dercap", &cap)
+		_, err = client.Get(ctx, "/edev/"+edevID+"/der/"+derID+"/dercap", &cap)
 		if err != nil {
 			t.Fatalf("GET dercap: %v", err)
 		}
@@ -238,7 +238,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 
 		// Read back
 		var status sep2.DERStatus
-		err = client.Get(ctx, "/edev/"+edevID+"/der/"+derID+"/ders", &status)
+		_, err = client.Get(ctx, "/edev/"+edevID+"/der/"+derID+"/ders", &status)
 		if err != nil {
 			t.Fatalf("GET ders: %v", err)
 		}
@@ -297,7 +297,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	// Phase 6: Time resource
 	t.Run("get_time", func(t *testing.T) {
 		var tm sep2.Time
-		err := client.Get(ctx, "/tm", &tm)
+		_, err := client.Get(ctx, "/tm", &tm)
 		if err != nil {
 			t.Fatalf("GET /tm: %v", err)
 		}
@@ -309,7 +309,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	// Phase 7: Verify EndDevice list shows our device
 	t.Run("list_end_devices", func(t *testing.T) {
 		var list sep2.EndDeviceList
-		err := client.Get(ctx, "/edev", &list)
+		_, err := client.Get(ctx, "/edev", &list)
 		if err != nil {
 			t.Fatalf("GET /edev: %v", err)
 		}
@@ -332,7 +332,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	// Phase 8: Duplicate registration returns existing
 	t.Run("duplicate_register", func(t *testing.T) {
 		// IEEE-030: pass the EndDeviceList href explicitly.
-		edev2, err := client.Register(ctx, "/edev")
+		edev2, _, err := client.Register(ctx, "/edev")
 		if err != nil {
 			t.Fatalf("duplicate Register: %v", err)
 		}
@@ -346,7 +346,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	t.Run("get_default_der_control", func(t *testing.T) {
 		var dderc sep2.DefaultDERControl
 		// This path may not have data seeded, but should return an empty default (200)
-		err := client.Get(ctx, "/edev/"+edevID+"/fsa/1/derp/1/dderc", &dderc)
+		_, err := client.Get(ctx, "/edev/"+edevID+"/fsa/1/derp/1/dderc", &dderc)
 		if err != nil {
 			t.Fatalf("GET dderc: %v", err)
 		}

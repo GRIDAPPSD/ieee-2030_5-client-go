@@ -186,8 +186,43 @@ func (c *SEP2Client) LFDI() string { return c.lfdi }
 // wrapped with the method-and-URL context so the error message reads
 // "GET /edev: not found (404)" while callers can still match the underlying
 // sentinel via errors.Is. See IEEE-046 / errors.go.
-func (c *SEP2Client) Get(ctx context.Context, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+//
+// IEEE-047 follow-once semantics: when the first attempt returns a
+// *MovedError with a non-empty Location, the GET is re-issued exactly once
+// against the new URL. The new URL is returned as newHref so callers
+// holding a cached href can update their local copy; newHref is "" when no
+// follow happened (i.e. the 200 path or any non-3xx error). Subsequent
+// redirects on the retry propagate as a *MovedError without further retry
+// (no chain following per RFC 7231 §6.4.2 / CSIP V1.2 §6.6).
+func (c *SEP2Client) Get(ctx context.Context, path string, out any) (newHref string, err error) {
+	if err := c.getOnce(ctx, c.baseURL+path, path, out); err != nil {
+		var moved *MovedError
+		if errors.As(err, &moved) && moved.Location != "" {
+			// Single-hop follow. Resolve the new Location against the
+			// original request URL so relative Locations work; errors
+			// from the second attempt propagate as-is. Errors from
+			// resolution itself are wrapped with the original method
+			// context.
+			target, rerr := c.resolveServerURL(moved.Location)
+			if rerr != nil {
+				return "", fmt.Errorf("GET %s: resolve 301 Location: %w", path, rerr)
+			}
+			if rerr := c.getOnce(ctx, target, moved.Location, out); rerr != nil {
+				return "", rerr
+			}
+			return moved.Location, nil
+		}
+		return "", err
+	}
+	return "", nil
+}
+
+// getOnce performs a single GET attempt against rawURL. logPath supplies the
+// human-readable URL token used in error messages so the IEEE-046 message
+// shape ("GET /edev: not found (404)") survives both the original and the
+// post-follow attempt.
+func (c *SEP2Client) getOnce(ctx context.Context, rawURL, logPath string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
 	}
@@ -197,7 +232,7 @@ func (c *SEP2Client) Get(ctx context.Context, path string, out any) error {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", path, err)
+		return fmt.Errorf("GET %s: %w", logPath, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -206,16 +241,16 @@ func (c *SEP2Client) Get(ctx context.Context, path string, out any) error {
 		// Do not log the body — for 4xx it may echo the request payload
 		// (PII / XSS-in-log risk; see PostResponse precedent).
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return fmt.Errorf("GET %s: %w", path, err)
+		return fmt.Errorf("GET %s: %w", logPath, err)
 	}
 
 	if out != nil {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return fmt.Errorf("GET %s: read response: %w", path, err)
+			return fmt.Errorf("GET %s: read response: %w", logPath, err)
 		}
 		if err := xml.Unmarshal(body, out); err != nil {
-			return fmt.Errorf("GET %s: unmarshal: %w", path, err)
+			return fmt.Errorf("GET %s: unmarshal: %w", logPath, err)
 		}
 	}
 	return nil
@@ -229,13 +264,42 @@ func (c *SEP2Client) Get(ctx context.Context, path string, out any) error {
 // URL context. 201 Created is the spec-canonical POST success code and is
 // where the Location header carries the new-resource URI per CSIP V1.2 §6.6
 // / IEEE 2030.5 §10.3. See IEEE-046 / errors.go.
-func (c *SEP2Client) Post(ctx context.Context, path string, body any) (string, error) {
+//
+// IEEE-047 follow-once semantics: see Get. The marshalled XML body is held
+// in a []byte and wrapped in a fresh bytes.NewReader per attempt so the
+// retry re-sends the same payload (avoids the io.Reader-exhausted-on-retry
+// hazard). newHref is the new URL on follow, "" otherwise.
+func (c *SEP2Client) Post(ctx context.Context, path string, body any) (location string, newHref string, err error) {
 	data, err := xml.Marshal(body)
 	if err != nil {
-		return "", fmt.Errorf("marshal: %w", err)
+		return "", "", fmt.Errorf("marshal: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(data))
+	location, err = c.postOnce(ctx, c.baseURL+path, path, data)
+	if err == nil {
+		return location, "", nil
+	}
+	var moved *MovedError
+	if errors.As(err, &moved) && moved.Location != "" {
+		target, rerr := c.resolveServerURL(moved.Location)
+		if rerr != nil {
+			return "", "", fmt.Errorf("POST %s: resolve 301 Location: %w", path, rerr)
+		}
+		location, rerr = c.postOnce(ctx, target, moved.Location, data)
+		if rerr != nil {
+			return "", "", rerr
+		}
+		return location, moved.Location, nil
+	}
+	return "", "", err
+}
+
+// postOnce performs a single POST attempt against rawURL, returning the
+// Location header on success or a wrapped error otherwise. data is the
+// marshalled body; we re-wrap it in a fresh bytes.NewReader per call so the
+// retry path re-sends the same payload.
+func (c *SEP2Client) postOnce(ctx context.Context, rawURL, logPath string, data []byte) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(data))
 	if err != nil {
 		return "", err
 	}
@@ -245,13 +309,13 @@ func (c *SEP2Client) Post(ctx context.Context, path string, body any) (string, e
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("POST %s: %w", path, err)
+		return "", fmt.Errorf("POST %s: %w", logPath, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body) // drain for connection reuse
 
 	if err := classifyResponse(resp); err != nil {
-		return "", fmt.Errorf("POST %s: %w", path, err)
+		return "", fmt.Errorf("POST %s: %w", logPath, err)
 	}
 	return resp.Header.Get("Location"), nil
 }
@@ -261,13 +325,35 @@ func (c *SEP2Client) Post(ctx context.Context, path string, body any) (string, e
 // Status-code mapping is delegated to classifyResponse: 200/201/204 return
 // nil error; non-2xx codes return the appropriate typed error wrapped with
 // method-and-URL context. See IEEE-046 / errors.go.
-func (c *SEP2Client) Put(ctx context.Context, path string, body any) error {
+//
+// IEEE-047 follow-once semantics: see Get. The marshalled XML body is held
+// in a []byte and wrapped in a fresh bytes.NewReader per attempt.
+func (c *SEP2Client) Put(ctx context.Context, path string, body any) (newHref string, err error) {
 	data, err := xml.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
+		return "", fmt.Errorf("marshal: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+path, bytes.NewReader(data))
+	if err := c.putOnce(ctx, c.baseURL+path, path, data); err != nil {
+		var moved *MovedError
+		if errors.As(err, &moved) && moved.Location != "" {
+			target, rerr := c.resolveServerURL(moved.Location)
+			if rerr != nil {
+				return "", fmt.Errorf("PUT %s: resolve 301 Location: %w", path, rerr)
+			}
+			if rerr := c.putOnce(ctx, target, moved.Location, data); rerr != nil {
+				return "", rerr
+			}
+			return moved.Location, nil
+		}
+		return "", err
+	}
+	return "", nil
+}
+
+// putOnce performs a single PUT attempt against rawURL.
+func (c *SEP2Client) putOnce(ctx context.Context, rawURL, logPath string, data []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, rawURL, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -277,21 +363,26 @@ func (c *SEP2Client) Put(ctx context.Context, path string, body any) error {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("PUT %s: %w", path, err)
+		return fmt.Errorf("PUT %s: %w", logPath, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if err := classifyResponse(resp); err != nil {
-		return fmt.Errorf("PUT %s: %w", path, err)
+		return fmt.Errorf("PUT %s: %w", logPath, err)
 	}
 	return nil
 }
 
 // Discover fetches the DeviceCapability (entry point).
+//
+// On 301 the underlying Get follows once internally; the new /dcap URL is
+// not surfaced to the caller — the device-capability path is the root of
+// the entire link graph and the inverter holds no cached href to update.
+// Subsequent polls hit the original path again and re-follow if needed.
 func (c *SEP2Client) Discover(ctx context.Context) (sep2.DeviceCapability, error) {
 	var dcap sep2.DeviceCapability
-	err := c.Get(ctx, "/dcap", &dcap)
+	_, err := c.Get(ctx, "/dcap", &dcap)
 	return dcap, err
 }
 
@@ -307,26 +398,33 @@ func (c *SEP2Client) Discover(ctx context.Context) (sep2.DeviceCapability, error
 //     assertion on req.URL.Path), returns the parsed EndDevice from the
 //     Location response.
 //  2. Empty href argument → error, no HTTP call.
-func (c *SEP2Client) Register(ctx context.Context, edevListHref string) (sep2.EndDevice, error) {
+// On 301 against edevListHref the underlying Post follows once and surfaces
+// the new edev-list URL as newEdevListHref so the caller (typically
+// cmd/inverterclient/main.go) can update its cached href before subsequent
+// EndDeviceList traversals. newEdevListHref is "" when no follow happened.
+func (c *SEP2Client) Register(ctx context.Context, edevListHref string) (registered sep2.EndDevice, newEdevListHref string, err error) {
 	if edevListHref == "" {
-		return sep2.EndDevice{}, fmt.Errorf("edev list href required")
+		return sep2.EndDevice{}, "", fmt.Errorf("edev list href required")
 	}
 
 	edev := sep2.EndDevice{SFDI: c.sfdi, LFDI: c.lfdi}
 	enabled := true
 	edev.Enabled = &enabled
 
-	loc, err := c.Post(ctx, edevListHref, &edev)
+	loc, newEdevListHref, err := c.Post(ctx, edevListHref, &edev)
 	if err != nil {
-		return sep2.EndDevice{}, err
+		return sep2.EndDevice{}, "", err
 	}
 
-	// Read back the registered device
-	var registered sep2.EndDevice
+	// Read back the registered device. The Location returned by POST is the
+	// new resource itself (not an edev-list redirect), so we do not propagate
+	// its newHref further.
 	if loc != "" {
-		err = c.Get(ctx, loc, &registered)
+		if _, err := c.Get(ctx, loc, &registered); err != nil {
+			return sep2.EndDevice{}, newEdevListHref, err
+		}
 	}
-	return registered, err
+	return registered, newEdevListHref, nil
 }
 
 // LookupOwnEndDevice GETs the EndDeviceList at edevListHref and returns the
@@ -356,9 +454,13 @@ func (c *SEP2Client) Register(ctx context.Context, edevListHref string) (sep2.En
 //  3. --csip on, server list contains other LFDIs but not ours → ErrEndDeviceNotFound.
 //  4. --csip off → existing Register POST still fires /edev (no regression).
 //  5. Cursor paging: list > 255 entries (follow-up ticket; not filed yet).
-func (c *SEP2Client) LookupOwnEndDevice(ctx context.Context, edevListHref string) (sep2.EndDevice, error) {
+// IEEE-047: on 301 the underlying Get follows once and the new edev-list
+// href (with the ?l=255 page query stripped) is surfaced as
+// newEdevListHref so the caller can update its cached copy before the next
+// poll. newEdevListHref is "" when no follow happened.
+func (c *SEP2Client) LookupOwnEndDevice(ctx context.Context, edevListHref string) (edev sep2.EndDevice, newEdevListHref string, err error) {
 	if edevListHref == "" {
-		return sep2.EndDevice{}, fmt.Errorf("edev list href required")
+		return sep2.EndDevice{}, "", fmt.Errorf("edev list href required")
 	}
 
 	// First-cut paging: limit=255 on the first page.
@@ -369,16 +471,34 @@ func (c *SEP2Client) LookupOwnEndDevice(ctx context.Context, edevListHref string
 	path := edevListHref + sep + "l=255"
 
 	var list sep2.EndDeviceList
-	if err := c.Get(ctx, path, &list); err != nil {
-		return sep2.EndDevice{}, fmt.Errorf("get edev list: %w", err)
+	followedHref, err := c.Get(ctx, path, &list)
+	if err != nil {
+		return sep2.EndDevice{}, "", fmt.Errorf("get edev list: %w", err)
 	}
+	// Strip the trailing ?l=255 paging query from the followed URL so the
+	// caller's cached edev-list base href is updated, not the page URL.
+	newEdevListHref = stripPagingQuery(followedHref, sep)
 
 	for _, ed := range list.EndDevice {
 		if ed.LFDI == c.lfdi {
-			return ed, nil
+			return ed, newEdevListHref, nil
 		}
 	}
-	return sep2.EndDevice{}, ErrEndDeviceNotFound
+	return sep2.EndDevice{}, newEdevListHref, ErrEndDeviceNotFound
+}
+
+// stripPagingQuery removes a trailing "?l=255" or "&l=255" suffix from
+// followed. The wrapper methods append this paging query before issuing
+// GET; when the server redirects, the followed URL still carries the query
+// — we strip it so callers' cached base href is updated rather than the
+// paginated page URL. Returns followed unchanged when no follow happened
+// (followed == "") or when the suffix is not present.
+func stripPagingQuery(followed, sep string) string {
+	if followed == "" {
+		return ""
+	}
+	suffix := sep + "l=255"
+	return strings.TrimSuffix(followed, suffix)
 }
 
 // GetRegistration GETs the server-provided Registration resource at the given
@@ -396,12 +516,15 @@ func (c *SEP2Client) LookupOwnEndDevice(ctx context.Context, edevListHref string
 //   - empty href: returns error matching "registration href required".
 //   - server returns 404: error wrapped via c.Get, no panic.
 //   - malformed XML: error wrapped via c.Get, no panic.
+// On 301 the underlying Get follows once internally; the new Registration
+// href is not surfaced — Phase 2b reads Registration exactly once per
+// startup and the caller does not loop on this resource.
 func (c *SEP2Client) GetRegistration(ctx context.Context, registrationHref string) (sep2.Registration, error) {
 	if registrationHref == "" {
 		return sep2.Registration{}, fmt.Errorf("registration href required")
 	}
 	var rg sep2.Registration
-	if err := c.Get(ctx, registrationHref, &rg); err != nil {
+	if _, err := c.Get(ctx, registrationHref, &rg); err != nil {
 		return sep2.Registration{}, fmt.Errorf("GET registration: %w", err)
 	}
 	return rg, nil
@@ -427,20 +550,24 @@ func (c *SEP2Client) GetRegistration(ctx context.Context, registrationHref strin
 //  4. Malformed XML: error wrapped via c.Get, no panic.
 //  5. Pagination cap: list with > 255 entries — first 255 returned, rest
 //     deferred to cursor follow-up (no silent drop documented).
-func (c *SEP2Client) GetFSAList(ctx context.Context, fsaListHref string) (sep2.FunctionSetAssignmentsList, error) {
+// IEEE-047: on 301 the underlying Get follows once and the new FSAList href
+// (with the ?l=255 page query stripped) is surfaced as newFSAListHref so
+// the caller can update its cached copy. newFSAListHref is "" when no
+// follow happened.
+func (c *SEP2Client) GetFSAList(ctx context.Context, fsaListHref string) (list sep2.FunctionSetAssignmentsList, newFSAListHref string, err error) {
 	if fsaListHref == "" {
-		return sep2.FunctionSetAssignmentsList{}, fmt.Errorf("FSAList href required")
+		return sep2.FunctionSetAssignmentsList{}, "", fmt.Errorf("FSAList href required")
 	}
 	sep := "?"
 	if strings.Contains(fsaListHref, "?") {
 		sep = "&"
 	}
 	path := fsaListHref + sep + "l=255"
-	var list sep2.FunctionSetAssignmentsList
-	if err := c.Get(ctx, path, &list); err != nil {
-		return sep2.FunctionSetAssignmentsList{}, fmt.Errorf("GET FSAList: %w", err)
+	followedHref, err := c.Get(ctx, path, &list)
+	if err != nil {
+		return sep2.FunctionSetAssignmentsList{}, "", fmt.Errorf("GET FSAList: %w", err)
 	}
-	return list, nil
+	return list, stripPagingQuery(followedHref, sep), nil
 }
 
 // PutDERCapability PUTs the inverter's DER capability to the advertised
@@ -454,7 +581,11 @@ func (c *SEP2Client) PutDERCapability(ctx context.Context, dercapHref string, ca
 	if dercapHref == "" {
 		return fmt.Errorf("dercap href required")
 	}
-	return c.Put(ctx, dercapHref, &cap)
+	// IEEE-047: PUT follows once internally; new href not surfaced — DER
+	// setup PUTs fire exactly once per startup and the caller does not
+	// re-issue them.
+	_, err := c.Put(ctx, dercapHref, &cap)
+	return err
 }
 
 // PutDERSettings PUTs the inverter's DER settings to the advertised
@@ -465,7 +596,10 @@ func (c *SEP2Client) PutDERSettings(ctx context.Context, dersettingsHref string,
 	if dersettingsHref == "" {
 		return fmt.Errorf("dersettings href required")
 	}
-	return c.Put(ctx, dersettingsHref, &settings)
+	// IEEE-047: PUT follows once internally; new href not surfaced (see
+	// PutDERCapability).
+	_, err := c.Put(ctx, dersettingsHref, &settings)
+	return err
 }
 
 // PutDERStatus PUTs the inverter's current DER status to the advertised
@@ -476,7 +610,11 @@ func (c *SEP2Client) PutDERStatus(ctx context.Context, derstatusHref string, sta
 	if derstatusHref == "" {
 		return fmt.Errorf("derstatus href required")
 	}
-	return c.Put(ctx, derstatusHref, &status)
+	// IEEE-047: PUT follows once internally; new href not surfaced. The
+	// reporter loop calls this on each tick — a stale derStatusHref will
+	// pay one extra redirect per tick until restart. Acceptable scope.
+	_, err := c.Put(ctx, derstatusHref, &status)
+	return err
 }
 
 // GetDERProgramList GETs the DERProgramList at the given href and decodes
@@ -504,20 +642,24 @@ func (c *SEP2Client) PutDERStatus(ctx context.Context, derstatusHref string, sta
 //     deferred to cursor follow-up.
 //  7. Multi-FSA topology: each of 3 FSAs returns 2 DERPrograms; walker caches
 //     6 unique programs keyed by mRID.
-func (c *SEP2Client) GetDERProgramList(ctx context.Context, derProgramListHref string) (sep2.DERProgramList, error) {
+// IEEE-047: on 301 the underlying Get follows once and the new
+// DERProgramList href (with the ?l=255 page query stripped) is surfaced as
+// newDERProgramListHref so callers walking per-FSA hrefs can refresh their
+// reference. newDERProgramListHref is "" when no follow happened.
+func (c *SEP2Client) GetDERProgramList(ctx context.Context, derProgramListHref string) (list sep2.DERProgramList, newDERProgramListHref string, err error) {
 	if derProgramListHref == "" {
-		return sep2.DERProgramList{}, fmt.Errorf("DERProgramList href required")
+		return sep2.DERProgramList{}, "", fmt.Errorf("DERProgramList href required")
 	}
 	sep := "?"
 	if strings.Contains(derProgramListHref, "?") {
 		sep = "&"
 	}
 	path := derProgramListHref + sep + "l=255"
-	var list sep2.DERProgramList
-	if err := c.Get(ctx, path, &list); err != nil {
-		return sep2.DERProgramList{}, fmt.Errorf("GET DERProgramList: %w", err)
+	followedHref, err := c.Get(ctx, path, &list)
+	if err != nil {
+		return sep2.DERProgramList{}, "", fmt.Errorf("GET DERProgramList: %w", err)
 	}
-	return list, nil
+	return list, stripPagingQuery(followedHref, sep), nil
 }
 
 // GetDefaultDERControl GETs the DefaultDERControl resource at the advertised
@@ -529,15 +671,20 @@ func (c *SEP2Client) GetDERProgramList(ctx context.Context, derProgramListHref s
 // from a transport failure without inspecting wrapped errors.
 //
 // IEEE-036 tests deferred per Craig override 2026-05-12.
-func (c *SEP2Client) GetDefaultDERControl(ctx context.Context, defaultDERControlHref string) (sep2.DefaultDERControl, error) {
+// IEEE-047: on 301 the underlying Get follows once and the new
+// DefaultDERControl href is surfaced as newDefaultDERControlHref so the
+// caller (cmd/inverterclient/main.go's selectedDefaultControlHref) can
+// update its cached reference. newDefaultDERControlHref is "" when no
+// follow happened.
+func (c *SEP2Client) GetDefaultDERControl(ctx context.Context, defaultDERControlHref string) (dderc sep2.DefaultDERControl, newDefaultDERControlHref string, err error) {
 	if defaultDERControlHref == "" {
-		return sep2.DefaultDERControl{}, fmt.Errorf("DefaultDERControl href required")
+		return sep2.DefaultDERControl{}, "", fmt.Errorf("DefaultDERControl href required")
 	}
-	var dderc sep2.DefaultDERControl
-	if err := c.Get(ctx, defaultDERControlHref, &dderc); err != nil {
-		return sep2.DefaultDERControl{}, fmt.Errorf("GET DefaultDERControl: %w", err)
+	newDefaultDERControlHref, err = c.Get(ctx, defaultDERControlHref, &dderc)
+	if err != nil {
+		return sep2.DefaultDERControl{}, "", fmt.Errorf("GET DefaultDERControl: %w", err)
 	}
-	return dderc, nil
+	return dderc, newDefaultDERControlHref, nil
 }
 
 // GetDERControlList GETs the DERControlList at the advertised href and decodes
@@ -546,20 +693,25 @@ func (c *SEP2Client) GetDefaultDERControl(ctx context.Context, defaultDERControl
 // application are Phase 5 (IEEE-038..).
 //
 // IEEE-036 tests deferred per Craig override 2026-05-12.
-func (c *SEP2Client) GetDERControlList(ctx context.Context, derControlListHref string) (sep2.DERControlList, error) {
+// IEEE-047: on 301 the underlying Get follows once and the new
+// DERControlList href (with the ?l=255 page query stripped) is surfaced as
+// newDERControlListHref so the long-lived PollDERControlList loop can
+// update its local href and stop paying a redirect on every tick.
+// newDERControlListHref is "" when no follow happened.
+func (c *SEP2Client) GetDERControlList(ctx context.Context, derControlListHref string) (list sep2.DERControlList, newDERControlListHref string, err error) {
 	if derControlListHref == "" {
-		return sep2.DERControlList{}, fmt.Errorf("DERControlList href required")
+		return sep2.DERControlList{}, "", fmt.Errorf("DERControlList href required")
 	}
 	sep := "?"
 	if strings.Contains(derControlListHref, "?") {
 		sep = "&"
 	}
 	path := derControlListHref + sep + "l=255"
-	var list sep2.DERControlList
-	if err := c.Get(ctx, path, &list); err != nil {
-		return sep2.DERControlList{}, fmt.Errorf("GET DERControlList: %w", err)
+	followedHref, err := c.Get(ctx, path, &list)
+	if err != nil {
+		return sep2.DERControlList{}, "", fmt.Errorf("GET DERControlList: %w", err)
 	}
-	return list, nil
+	return list, stripPagingQuery(followedHref, sep), nil
 }
 
 // GetDERCurveList GETs the DERCurveList at the advertised href and decodes
@@ -567,6 +719,11 @@ func (c *SEP2Client) GetDERControlList(ctx context.Context, derControlListHref s
 // per-program; curve lookup and interpolation are Phase 5.
 //
 // IEEE-036 tests deferred per Craig override 2026-05-12.
+// IEEE-047: on 301 the underlying Get follows once internally; the new
+// href is not surfaced. DERCurveList is fetched on demand (event-start
+// hook) per-program; href reference is held inside the program struct and
+// a stale value will pay one extra redirect per event-start until restart.
+// Acceptable scope.
 func (c *SEP2Client) GetDERCurveList(ctx context.Context, derCurveListHref string) (sep2.DERCurveList, error) {
 	if derCurveListHref == "" {
 		return sep2.DERCurveList{}, fmt.Errorf("DERCurveList href required")
@@ -577,7 +734,7 @@ func (c *SEP2Client) GetDERCurveList(ctx context.Context, derCurveListHref strin
 	}
 	path := derCurveListHref + sep + "l=255"
 	var list sep2.DERCurveList
-	if err := c.Get(ctx, path, &list); err != nil {
+	if _, err := c.Get(ctx, path, &list); err != nil {
 		return sep2.DERCurveList{}, fmt.Errorf("GET DERCurveList: %w", err)
 	}
 	return list, nil
@@ -589,23 +746,31 @@ func (c *SEP2Client) GetDERCurveList(ctx context.Context, derCurveListHref strin
 // IEEE-030.
 //
 // IEEE-030 tests deferred per Craig override 2026-05-12.
+// IEEE-047: on 301 the underlying Post follows once internally; the new
+// mup-list href is not surfaced — MUP creation fires exactly once per
+// startup.
 func (c *SEP2Client) CreateMirrorUsagePoint(ctx context.Context, mupListHref string, mup sep2.MirrorUsagePoint) (string, error) {
 	if mupListHref == "" {
 		return "", fmt.Errorf("mup list href required")
 	}
 	mup.DeviceLFDI = c.lfdi
-	return c.Post(ctx, mupListHref, &mup)
+	loc, _, err := c.Post(ctx, mupListHref, &mup)
+	return loc, err
 }
 
 // PostMeterReading POSTs a metering data point to the MirrorMeterReadingList
 // href advertised on the MirrorUsagePoint resource. See IEEE-030.
 //
 // IEEE-030 tests deferred per Craig override 2026-05-12.
+// IEEE-047: on 301 the underlying Post follows once internally; the new
+// mmr-list href is not surfaced. Reporter posts to mmrHref on every tick;
+// a stale href pays one extra redirect per tick until restart. Acceptable
+// scope.
 func (c *SEP2Client) PostMeterReading(ctx context.Context, mmrListHref string, mmr sep2.MirrorMeterReading) error {
 	if mmrListHref == "" {
 		return fmt.Errorf("mmr list href required")
 	}
-	_, err := c.Post(ctx, mmrListHref, &mmr)
+	_, _, err := c.Post(ctx, mmrListHref, &mmr)
 	return err
 }
 
@@ -868,12 +1033,16 @@ func (c *SEP2Client) Now() time.Time {
 // The href is advertised on DeviceCapability.TimeLink and MUST NOT be
 // hardcoded by the caller — per IEEE 2030.5 §10.3 / CSIP §6.6 the server
 // is free to host Time at any path.
+// IEEE-047: on 301 the underlying Get follows once internally; the new
+// timeHref is not surfaced — RunTimeSync holds timeHref as a parameter and
+// a stale value will pay one extra redirect per sync tick. Acceptable
+// scope.
 func (c *SEP2Client) GetServerTime(ctx context.Context, timeHref string) (sep2.Time, error) {
 	if timeHref == "" {
 		return sep2.Time{}, fmt.Errorf("time href required")
 	}
 	var t sep2.Time
-	if err := c.Get(ctx, timeHref, &t); err != nil {
+	if _, err := c.Get(ctx, timeHref, &t); err != nil {
 		return sep2.Time{}, fmt.Errorf("get server time: %w", err)
 	}
 	return t, nil

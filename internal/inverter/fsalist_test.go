@@ -135,7 +135,7 @@ func TestGetFSAList_HappyPath(t *testing.T) {
 	})
 
 	client, ctx := newFSAListTestClient(t, mux)
-	got, err := client.GetFSAList(ctx, fsaListHref)
+	got, _, err := client.GetFSAList(ctx, fsaListHref)
 	if err != nil {
 		t.Fatalf("GetFSAList: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestGetFSAList_EmptyHref(t *testing.T) {
 	})
 
 	client, ctx := newFSAListTestClient(t, mux)
-	got, err := client.GetFSAList(ctx, "")
+	got, _, err := client.GetFSAList(ctx, "")
 	if err == nil {
 		t.Fatalf("GetFSAList(ctx, \"\") returned nil error; got=%+v", got)
 	}
@@ -215,7 +215,7 @@ func TestGetFSAList_NotFound(t *testing.T) {
 	})
 
 	client, ctx := newFSAListTestClient(t, mux)
-	got, err := client.GetFSAList(ctx, fsaListHref)
+	got, _, err := client.GetFSAList(ctx, fsaListHref)
 	if err == nil {
 		t.Fatalf("GetFSAList on 404 returned nil error; got=%+v", got)
 	}
@@ -253,7 +253,7 @@ func TestGetFSAList_MalformedXML(t *testing.T) {
 	})
 
 	client, ctx := newFSAListTestClient(t, mux)
-	got, err := client.GetFSAList(ctx, fsaListHref)
+	got, _, err := client.GetFSAList(ctx, fsaListHref)
 	if err == nil {
 		t.Fatalf("GetFSAList on malformed XML returned nil error; got=%+v", got)
 	}
@@ -312,7 +312,7 @@ func TestGetFSAList_AppendsPagingHint(t *testing.T) {
 			})
 
 			client, ctx := newFSAListTestClient(t, mux)
-			if _, err := client.GetFSAList(ctx, tc.callerHref); err != nil {
+			if _, _, err := client.GetFSAList(ctx, tc.callerHref); err != nil {
 				t.Fatalf("GetFSAList: %v", err)
 			}
 			got, _ := seenQuery.Load().(string)

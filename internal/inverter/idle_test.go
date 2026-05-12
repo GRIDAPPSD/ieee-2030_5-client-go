@@ -218,7 +218,7 @@ func TestDcapBecomesPopulated_ProceedsToPhase2(t *testing.T) {
 
 	// Now simulate Phase 2 — this is what main.go would do next. Pass the
 	// advertised EndDeviceListLink href per IEEE-030 (no hardcoded "/edev").
-	if _, err := client.Register(ctx, final.EndDeviceListLink.Href); err != nil {
+	if _, _, err := client.Register(ctx, final.EndDeviceListLink.Href); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

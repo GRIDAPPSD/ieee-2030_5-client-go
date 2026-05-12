@@ -72,7 +72,7 @@ func TestRouter_PostReturnsLocationOn201(t *testing.T) {
 	serverURL, _ := startIdleListener(t, env, mux)
 	client := newCSIPClient(t, env, serverURL, false)
 
-	edev, err := client.Register(testCtx(t), "/edev")
+	edev, _, err := client.Register(testCtx(t), "/edev")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -178,17 +178,27 @@ func TestRouter_PostMaps501ToErrNotImplemented(t *testing.T) {
 	}
 }
 
-// IEEE-046 case 8: 301 Moved Permanently surfaces as *MovedError with
-// Location populated, and stdlib auto-follow is disabled (the test would
-// fail if stdlib quietly re-issued the GET against the new path — the
-// follow handler bumps a counter that must stay at zero).
-func TestRouter_GetMaps301ToMovedErrorNoAutoFollow(t *testing.T) {
+// IEEE-046 case 8 (revised by IEEE-047): stdlib auto-follow remains
+// disabled — CheckRedirect must still return ErrUseLastResponse so 301s
+// reach classifyResponse rather than being silently swallowed by the
+// stdlib client. Surfacing as *MovedError is now visible at the
+// classifyResponse layer (errors_test.go cases) and via the *one-hop
+// follow* path exercised in TestGet301FollowsOnceAndReturnsBody below.
+// This case continues to assert stdlib does NOT auto-follow by routing
+// the followed request through our own handler and counting hits — a
+// stdlib auto-follow would issue a second request without our 301-aware
+// wrapper running, so the followHits counter would be 1 even if our
+// IEEE-047 wrapper never fired. We assert that the wrapper *did* fire
+// (one follow, body returned, no error), proving our path is in play
+// while stdlib's is not.
+func TestRouter_Get301FollowedOnceAndStdlibAutoFollowDisabled(t *testing.T) {
 	t.Parallel()
 	env := newCCMTestEnv(t)
 
-	var followHits atomic.Int32
+	var redirectHits, followHits atomic.Int32
 	mux := http.NewServeMux()
 	mux.HandleFunc("/dcap", func(w http.ResponseWriter, _ *http.Request) {
+		redirectHits.Add(1)
 		w.Header().Set("Location", "/v2/dcap")
 		w.WriteHeader(http.StatusMovedPermanently)
 	})
@@ -200,22 +210,18 @@ func TestRouter_GetMaps301ToMovedErrorNoAutoFollow(t *testing.T) {
 	serverURL, _ := startIdleListener(t, env, mux)
 	client := newCSIPClient(t, env, serverURL, true)
 
-	_, err := client.Discover(testCtx(t))
-	if err == nil {
-		t.Fatal("Discover: nil err, want *MovedError")
+	dcap, err := client.Discover(testCtx(t))
+	if err != nil {
+		t.Fatalf("Discover: %v, want nil (IEEE-047 follows 301 once)", err)
 	}
-	var me *inverter.MovedError
-	if !errors.As(err, &me) {
-		t.Fatalf("err = %v, want errors.As *MovedError", err)
+	if dcap.PollRate != 99 {
+		t.Errorf("dcap.PollRate = %d, want 99 (followed body returned)", dcap.PollRate)
 	}
-	if me.Status != http.StatusMovedPermanently {
-		t.Errorf("MovedError.Status = %d, want 301", me.Status)
+	if redirectHits.Load() != 1 {
+		t.Errorf("redirectHits = %d, want 1 (one 301 issued)", redirectHits.Load())
 	}
-	if me.Location != "/v2/dcap" {
-		t.Errorf("MovedError.Location = %q, want /v2/dcap", me.Location)
-	}
-	if followHits.Load() != 0 {
-		t.Errorf("stdlib auto-followed 301 (followHits=%d, want 0); CheckRedirect not wired", followHits.Load())
+	if followHits.Load() != 1 {
+		t.Errorf("followHits = %d, want 1 (IEEE-047 follow-once fired exactly once)", followHits.Load())
 	}
 }
 
@@ -254,7 +260,7 @@ func TestRouter_LookupOwnEndDeviceSemanticSentinel(t *testing.T) {
 	serverURL, _ := startIdleListener(t, env, mux)
 	client := newCSIPClient(t, env, serverURL, true)
 
-	_, err := client.LookupOwnEndDevice(testCtx(t), "/edev")
+	_, _, err := client.LookupOwnEndDevice(testCtx(t), "/edev")
 	if err == nil {
 		t.Fatal("LookupOwnEndDevice: nil err, want ErrEndDeviceNotFound")
 	}

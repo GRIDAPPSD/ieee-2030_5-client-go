@@ -146,12 +146,21 @@ func runPhase2bRegistration(
 			if edevListHref == "" {
 				return edev, &phase2bFatal{reason: "EndDeviceListLink lost between polls; cannot re-lookup own EndDevice"}
 			}
-			newEdev, err := client.LookupOwnEndDevice(ctx, edevListHref)
+			// IEEE-047: on 301 LookupOwnEndDevice surfaces the new edev-list
+			// base href; update our local copy so the next idle iteration
+			// hits the new URL directly. The follow has already happened
+			// inside LookupOwnEndDevice — newEdev is the live response.
+			newEdev, newEdevListHref, err := client.LookupOwnEndDevice(ctx, edevListHref)
 			if err != nil {
 				return edev, &phase2bFatal{
 					reason: fmt.Sprintf("re-lookup own EndDevice: %v", err),
 					inner:  err,
 				}
+			}
+			if newEdevListHref != "" {
+				log.Printf("Phase 2b re-lookup: 301 follow — cached edev-list href %s → %s",
+					edevListHref, newEdevListHref)
+				edevListHref = newEdevListHref
 			}
 			edev = newEdev
 		}

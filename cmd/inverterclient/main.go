@@ -108,19 +108,24 @@ func walkDERProgramTree(
 			log.Printf("  FSA mRID=%s has no DERProgramListLink; skipping", fsa.MRID)
 			continue
 		}
-		progList, err := client.GetDERProgramList(ctx, fsa.DERProgramListLink.Href)
+		// IEEE-047: GetDERProgramList / GetDefaultDERControl / GetDERControlList
+		// follow once on 301. The new hrefs are discarded here because this
+		// is a one-shot discovery walk (per-FSA, per-program); a stale
+		// per-program href will pay one extra redirect on the next
+		// rediscovery rather than per-tick. Acceptable scope.
+		progList, _, err := client.GetDERProgramList(ctx, fsa.DERProgramListLink.Href)
 		if err != nil {
 			return fmt.Errorf("FSA mRID=%s DERProgramList: %w", fsa.MRID, err)
 		}
 		log.Printf("  FSA mRID=%s: %d DERProgram(s)", fsa.MRID, len(progList.DERProgram))
 		for _, prog := range progList.DERProgram {
 			if prog.DefaultDERControlLink != nil {
-				if _, err := client.GetDefaultDERControl(ctx, prog.DefaultDERControlLink.Href); err != nil {
+				if _, _, err := client.GetDefaultDERControl(ctx, prog.DefaultDERControlLink.Href); err != nil {
 					return fmt.Errorf("DERProgram mRID=%s DefaultDERControl: %w", prog.MRID, err)
 				}
 			}
 			if prog.DERControlListLink != nil {
-				if _, err := client.GetDERControlList(ctx, prog.DERControlListLink.Href); err != nil {
+				if _, _, err := client.GetDERControlList(ctx, prog.DERControlListLink.Href); err != nil {
 					return fmt.Errorf("DERProgram mRID=%s DERControlList: %w", prog.MRID, err)
 				}
 			}
@@ -280,7 +285,16 @@ func main() {
 			log.Fatalf("--csip set but DeviceCapability has no EndDeviceListLink")
 		}
 		for {
-			edev, err = client.LookupOwnEndDevice(ctx, edevListHref)
+			// IEEE-047: on 301 LookupOwnEndDevice surfaces the new edev-list
+			// base href; store it locally so the next idle poll iteration
+			// (and the Phase 2b re-lookup) hits the new URL directly.
+			var newEdevListHref string
+			edev, newEdevListHref, err = client.LookupOwnEndDevice(ctx, edevListHref)
+			if newEdevListHref != "" {
+				log.Printf("Phase 2 lookup: 301 follow — cached edev-list href %s → %s",
+					edevListHref, newEdevListHref)
+				edevListHref = newEdevListHref
+			}
 			if err == nil {
 				break
 			}
@@ -304,9 +318,18 @@ func main() {
 		if edevListHref == "" {
 			log.Fatalf("DeviceCapability has no EndDeviceListLink; registration impossible")
 		}
-		edev, err = client.Register(ctx, edevListHref)
+		// IEEE-047: on 301 Register surfaces the new edev-list base href;
+		// store it locally so any downstream phase that re-uses edevListHref
+		// (Phase 2b re-lookup idle loop) hits the new URL directly.
+		var newEdevListHref string
+		edev, newEdevListHref, err = client.Register(ctx, edevListHref)
 		if err != nil {
 			log.Fatalf("register: %v", err)
+		}
+		if newEdevListHref != "" {
+			log.Printf("Phase 2 register: 301 follow — cached edev-list href %s → %s",
+				edevListHref, newEdevListHref)
+			edevListHref = newEdevListHref
 		}
 		log.Printf("Registered: href=%s SFDI=%s", edev.Href, edev.SFDI)
 	}
@@ -434,11 +457,20 @@ func main() {
 	// helper's rule-3 fall-through gives the existing no-op semantics.
 	var defaultCtl *sep2.DefaultDERControl
 	if selectedDefaultControlHref != "" {
-		ddc, err := client.GetDefaultDERControl(ctx, selectedDefaultControlHref)
+		// IEEE-047: on 301 GetDefaultDERControl surfaces the new href; log
+		// the follow for observability. The local selectedDefaultControlHref
+		// has no further reads in this code path (the DefaultDERControl is
+		// one-shot per startup), so we do not re-assign it — the follow has
+		// already happened inside GetDefaultDERControl.
+		ddc, newDefaultDERControlHref, err := client.GetDefaultDERControl(ctx, selectedDefaultControlHref)
 		if err != nil {
 			log.Printf("Phase 2c (IEEE-041): GET DefaultDERControl %s: %v (continuing with no default base)",
 				selectedDefaultControlHref, err)
 		} else {
+			if newDefaultDERControlHref != "" {
+				log.Printf("Phase 2c (IEEE-041): 301 follow — DefaultDERControl href %s → %s (one-shot; not re-cached)",
+					selectedDefaultControlHref, newDefaultDERControlHref)
+			}
 			ddcCopy := ddc.Copy()
 			defaultCtl = &ddcCopy
 			hasBase := defaultCtl.DERControlBase != nil
@@ -594,8 +626,17 @@ func main() {
 		log.Println("EndDevice has no DERListLink; skipping Phase 3 DER setup")
 	} else {
 		var derList sep2.DERList
-		if err := client.Get(ctx, edev.DERListLink.Href, &derList); err != nil {
+		// IEEE-047: on 301 client.Get surfaces the new DERList URL; one-shot
+		// Phase 3 setup so we log it for diagnostics rather than threading
+		// it onward (DER setup PUTs that follow are link-derived from
+		// derList.DER entries — no DERList href reuse downstream).
+		newDERListHref, err := client.Get(ctx, edev.DERListLink.Href, &derList)
+		if err != nil {
 			log.Fatalf("GET DER list %s: %v", edev.DERListLink.Href, err)
+		}
+		if newDERListHref != "" {
+			log.Printf("Phase 3 DER list: 301 follow — original %s → %s (one-shot; not cached)",
+				edev.DERListLink.Href, newDERListHref)
 		}
 		if len(derList.DER) == 0 {
 			log.Println("DER list empty; skipping Phase 3 DER setup")
@@ -668,8 +709,18 @@ func main() {
 			log.Printf("MirrorUsagePoint: %s", mupLoc)
 			// Read back the created resource to discover its
 			// MirrorMeterReadingListLink — we do not assume the URL.
+			// IEEE-047: on 301 client.Get surfaces the new MUP URL; update
+			// mupLoc so any future reference (none in the current code,
+			// but the var is the canonical hold-point) targets the new
+			// URL.
 			var mup sep2.MirrorUsagePoint
-			if err := client.Get(ctx, mupLoc, &mup); err != nil {
+			newMupLoc, err := client.Get(ctx, mupLoc, &mup)
+			if newMupLoc != "" {
+				log.Printf("Phase 4 MUP read-back: 301 follow — cached mupLoc %s → %s",
+					mupLoc, newMupLoc)
+				mupLoc = newMupLoc
+			}
+			if err != nil {
 				log.Printf("GET MirrorUsagePoint %s: %v (metering disabled)", mupLoc, err)
 			} else if mup.MirrorMeterReadingListLink == nil {
 				log.Println("MirrorUsagePoint has no MirrorMeterReadingListLink; metering disabled")
