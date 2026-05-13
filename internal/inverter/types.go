@@ -118,6 +118,15 @@ type SimConfig struct {
 	// IEEE 2030.5 Register() POST path skips Phase 2b entirely.
 	// See IEEE-034.
 	AllowUnregistered bool
+
+	// LogEventPEN is the IANA-registered Private Enterprise Number stamped
+	// into every LogEvent the inverter POSTs (IEEE 2030.5 §9.5 logEventPEN).
+	// Production deployments must register their own PEN with IANA and
+	// configure it here (--pen flag / SEP2_PEN env). Zero (default) means
+	// "no manufacturer namespace" — acceptable for test / interop, but
+	// downstream operators reading log archives cannot disambiguate codes
+	// across vendors without a real PEN. See IEEE-053.
+	LogEventPEN uint32
 }
 
 // CurvePoint is a single point on a piecewise linear control curve.

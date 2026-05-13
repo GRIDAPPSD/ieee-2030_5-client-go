@@ -48,6 +48,24 @@ var (
 	// Implemented. Per CSIP V1.2 §3.2.1 GEN.048 the server does not support
 	// the requested resource. Callers should log and bypass.
 	ErrNotImplemented = errors.New("not implemented (501)")
+
+	// ErrLogEventLinkAbsent is returned by PostLogEvent when the caller
+	// passes an empty logEventListHref. CSIP V1.2 BASIC-027 declares the
+	// LogEvent function set OPTIONAL — when an EndDevice does not advertise
+	// a LogEventListLink the alarm-class emitter must bypass with a warning,
+	// not abort. Callers branch on errors.Is(err, ErrLogEventLinkAbsent) to
+	// distinguish the "server gap" case from real POST failures. See
+	// IEEE-053 (Plan-1 Phase 9 entry) and IEEE-054 (wiring).
+	ErrLogEventLinkAbsent = errors.New("LogEventListLink absent")
+
+	// ErrRateLimited is returned by PostLogEvent when the configured
+	// LogEventRateLimiter denies the supplied logEventCode (e.g. the same
+	// trip fired twice within the rate-limit window). The emitter performs
+	// no HTTP traffic on a deny. Callers branch on errors.Is(err,
+	// ErrRateLimited) to silently drop the duplicate without escalating.
+	// The default (nil-limiter) policy is allow-all; the concrete limiter
+	// implementation is owned by IEEE-054. See IEEE-053.
+	ErrRateLimited = errors.New("LogEvent rate limited")
 )
 
 // MovedError signals a 3xx redirect (301/302/307/308). Carries the Location

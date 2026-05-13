@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -159,6 +160,22 @@ func main() {
 	flag.UintVar(&cfg.ExpectedPIN, "pin", 0, "expected Registration PIN (0 = skip match check; nonzero mismatch is fatal per IEEE-034)")
 	flag.BoolVar(&cfg.AllowUnregistered, "allow-unregistered", false, "bypass missing-RegistrationLink check in CSIP mode (dev/test only)")
 
+	// IEEE-053 Phase 9 entry: PEN (Private Enterprise Number) stamped into
+	// every outbound LogEvent. Env var SEP2_PEN seeds the default; the CLI
+	// flag still wins per stdlib flag.Parse() precedence. Default 0 means
+	// "no manufacturer namespace" — fine for test / interop, but production
+	// deployments MUST register their own PEN with IANA and pass it here
+	// so server-side log archives can disambiguate codes across vendors.
+	defaultPEN := uint64(0)
+	if envPEN := os.Getenv("SEP2_PEN"); envPEN != "" {
+		if v, perr := strconv.ParseUint(envPEN, 10, 32); perr == nil {
+			defaultPEN = v
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: SEP2_PEN=%q is not a valid uint32: %v\n", envPEN, perr)
+		}
+	}
+	penFlag := flag.Uint64("pen", defaultPEN, "IANA Private Enterprise Number stamped into outbound LogEvents (env: SEP2_PEN; 0 = no manufacturer namespace)")
+
 	// IEEE-049 Phase 8 entry: inbound HTTPS Notification listener. Default
 	// 127.0.0.1:0 binds a random local port; the IEEE-050 subscription POST
 	// will publish whatever we actually bound to. Empty string disables the
@@ -172,6 +189,14 @@ func main() {
 	notifyListen := flag.String("notify-listen", defaultNotifyListen, "inbound HTTPS Notification listener address (env: SEP2_NOTIFY_LISTEN; empty disables)")
 
 	flag.Parse()
+
+	// IEEE-053: clamp PEN to uint32 range. flag.Uint64Var lets us catch
+	// out-of-range input from CLI / env without silently truncating.
+	if *penFlag > 0xFFFFFFFF {
+		fmt.Fprintf(os.Stderr, "--pen=%d exceeds uint32 max (4294967295)\n", *penFlag)
+		os.Exit(1)
+	}
+	cfg.LogEventPEN = uint32(*penFlag)
 
 	if *listScenarios {
 		scenarios := inverter.AllScenarios()

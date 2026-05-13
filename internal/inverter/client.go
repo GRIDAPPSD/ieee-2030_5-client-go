@@ -57,6 +57,22 @@ type SEP2Client struct {
 	sfdi                  string
 	lfdi                  string
 	serverTimeOffsetNanos atomic.Int64
+
+	// pen is the IANA Private Enterprise Number stamped into every LogEvent
+	// the client POSTs (IEEE 2030.5 §9.5 logEventPEN). Sourced from
+	// SimConfig.LogEventPEN at construction. Zero means "no manufacturer
+	// namespace" — acceptable for test/interop, not for production. See
+	// IEEE-053. The field is read-only after NewSEP2Client returns;
+	// concurrent POSTs share a single value with no race.
+	pen uint32
+
+	// logEventLimiter is the rate-limit seam consumed by PostLogEvent.
+	// IEEE-054 plugs in a concrete implementation (max 1 LogEvent per
+	// logEventCode per minute); the default (nil) allows every POST
+	// through. The seam is intentionally an interface declared at the
+	// consumer (this package) and accepts a single method so the limiter
+	// can be a function adapter, a struct, or a stub. See IEEE-053.
+	logEventLimiter LogEventRateLimiter
 }
 
 // NewSEP2Client creates a client with mTLS persistent connections per IEEE 2030.5.
@@ -168,6 +184,7 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 		baseURL: cfg.ServerURL,
 		sfdi:    sepTLS.SFDI(parsedCert),
 		lfdi:    sepTLS.LFDI(parsedCert),
+		pen:     cfg.LogEventPEN,
 	}, nil
 }
 
@@ -176,6 +193,22 @@ func (c *SEP2Client) SFDI() string { return c.sfdi }
 
 // LFDI returns the client's Long Form Device Identifier.
 func (c *SEP2Client) LFDI() string { return c.lfdi }
+
+// PEN returns the IANA Private Enterprise Number this client stamps into
+// every LogEvent. Sourced from SimConfig.LogEventPEN at construction; zero
+// is the default (no manufacturer namespace). See IEEE-053.
+func (c *SEP2Client) PEN() uint32 { return c.pen }
+
+// SetLogEventRateLimiter installs a rate-limit gate consulted by every
+// PostLogEvent call. Passing nil disables rate limiting (allow-all, the
+// default). IEEE-054 owns the concrete limiter; IEEE-053 just exposes the
+// seam so tests and the simulator can plug in their own throttle.
+//
+// Not concurrency-safe with concurrent PostLogEvent: install the limiter
+// before any goroutine starts emitting events.
+func (c *SEP2Client) SetLogEventRateLimiter(rl LogEventRateLimiter) {
+	c.logEventLimiter = rl
+}
 
 // Get performs a GET request and unmarshals the XML response.
 //
