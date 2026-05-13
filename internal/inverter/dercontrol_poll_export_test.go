@@ -7,10 +7,16 @@ import "time"
 // sub-second cadence without faking time. Returns a restore func that puts
 // the production mapper back.
 //
+// IEEE-081: the mapper is held in an atomic.Pointer so this write is
+// race-safe against the concurrent read on PollDERControlList's
+// goroutine. Test seams that swap a function value behind a
+// goroutine-spawning production loop MUST go through the atomic accessor.
+//
 // Only linked into the _test binary (file ends in _test.go). Mirrors
 // SetPollDurationForTesting (IEEE-028).
 func SetDERControlPollDurationForTesting(fn func(pollRateSec uint32) time.Duration) (restore func()) {
-	prev := derControlPollDuration
-	derControlPollDuration = fn
-	return func() { derControlPollDuration = prev }
+	prev := derControlPollDurationPtr.Load()
+	next := pollDurationFunc(fn)
+	derControlPollDurationPtr.Store(&next)
+	return func() { derControlPollDurationPtr.Store(prev) }
 }
