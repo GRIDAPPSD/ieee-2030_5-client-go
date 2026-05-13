@@ -158,6 +158,19 @@ func main() {
 	flag.BoolVar(&cfg.CSIP, "csip", false, "CSIP mode: lookup own EndDevice in server's /edev list instead of POST-registering")
 	flag.UintVar(&cfg.ExpectedPIN, "pin", 0, "expected Registration PIN (0 = skip match check; nonzero mismatch is fatal per IEEE-034)")
 	flag.BoolVar(&cfg.AllowUnregistered, "allow-unregistered", false, "bypass missing-RegistrationLink check in CSIP mode (dev/test only)")
+
+	// IEEE-049 Phase 8 entry: inbound HTTPS Notification listener. Default
+	// 127.0.0.1:0 binds a random local port; the IEEE-050 subscription POST
+	// will publish whatever we actually bound to. Empty string disables the
+	// listener (no subscription/notification flow; fall back to polling).
+	// Env var SEP2_NOTIFY_LISTEN seeds the default but the CLI flag still
+	// wins per stdlib flag.Parse() precedence.
+	defaultNotifyListen := os.Getenv("SEP2_NOTIFY_LISTEN")
+	if defaultNotifyListen == "" {
+		defaultNotifyListen = "127.0.0.1:0"
+	}
+	notifyListen := flag.String("notify-listen", defaultNotifyListen, "inbound HTTPS Notification listener address (env: SEP2_NOTIFY_LISTEN; empty disables)")
+
 	flag.Parse()
 
 	if *listScenarios {
@@ -197,6 +210,28 @@ func main() {
 			log.Printf("HMI dashboard: http://localhost:%d", *hmiPort)
 			if err := hmiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Printf("HMI server error: %v", err)
+			}
+		}()
+	}
+
+	// IEEE-049 Phase 8 entry: inbound HTTPS Notification receiver. The
+	// listener uses the same gotls (CCM-8) stack as the outbound client
+	// and presents the device cert as its server cert. The dispatcher is
+	// the no-op default — IEEE-051 will replace it with the real Phase-5
+	// dispatcher. Empty --notify-listen disables the listener entirely.
+	//
+	// Failure policy: graceful bypass (per IEEE-048 philosophy). The
+	// receiver is optional — CSIP V1.2 CORE-018 recommends but does not
+	// require it; the inverter has working polling for every function set
+	// in scope. If cert load, TCP bind, or address resolution fails, log
+	// the error and continue with polling-only rather than crash.
+	notifyReceiver := startNotifyReceiver(cfg, *notifyListen, hmi)
+	if notifyReceiver != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := notifyReceiver.Stop(shutdownCtx); err != nil {
+				log.Printf("notify receiver stop: %v", err)
 			}
 		}()
 	}
