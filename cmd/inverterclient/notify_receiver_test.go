@@ -68,7 +68,7 @@ func TestStartNotifyReceiver_DisabledOnEmptyAddr(t *testing.T) {
 		CertFile: filepath.Join(t.TempDir(), "missing.crt"),
 		KeyFile:  filepath.Join(t.TempDir(), "missing.key"),
 		CAFile:   filepath.Join(t.TempDir(), "missing.ca"),
-	}, "", nil)
+	}, "", nil, nil)
 	if got != nil {
 		t.Fatalf("expected nil receiver for empty listen addr, got %+v", got)
 	}
@@ -86,7 +86,7 @@ func TestStartNotifyReceiver_GracefulBypassOnBadCerts(t *testing.T) {
 		CertFile: filepath.Join(t.TempDir(), "missing.crt"),
 		KeyFile:  filepath.Join(t.TempDir(), "missing.key"),
 		CAFile:   filepath.Join(t.TempDir(), "missing.ca"),
-	}, "127.0.0.1:0", nil)
+	}, "127.0.0.1:0", nil, nil)
 	if got != nil {
 		// Defensive cleanup in case a future regression returns a real
 		// receiver — don't leak a listener.
@@ -109,7 +109,7 @@ func TestStartNotifyReceiver_HappyPath(t *testing.T) {
 		CertFile: certFile,
 		KeyFile:  keyFile,
 		CAFile:   caFile,
-	}, "127.0.0.1:0", hmi)
+	}, "127.0.0.1:0", hmi, nil)
 	if rcv == nil {
 		t.Fatal("expected non-nil receiver for valid cert env")
 	}
@@ -118,6 +118,30 @@ func TestStartNotifyReceiver_HappyPath(t *testing.T) {
 	if got := hmi.NotifyAddr(); got == "" {
 		t.Error("HMI.NotifyAddr is empty; helper failed to publish bound address")
 	}
+}
+
+// TestStartNotifyReceiver_AcceptsCustomDispatcher asserts the IEEE-051
+// dispatcher seam: startNotifyReceiver forwards its dispatcher arg to
+// NewNotifyReceiver instead of forcing the NoopNotificationDispatcher.
+// This is the wiring point main() uses to install the real
+// *PhaseStateDispatcher (which is no-op until Register* is called).
+func TestStartNotifyReceiver_AcceptsCustomDispatcher(t *testing.T) {
+	t.Parallel()
+
+	certFile, keyFile, caFile := writeCertEnv(t)
+	d := inverter.NewPhaseStateDispatcher()
+
+	rcv := startNotifyReceiver(inverter.SimConfig{
+		CertFile: certFile,
+		KeyFile:  keyFile,
+		CAFile:   caFile,
+	}, "127.0.0.1:0", nil, d.Dispatch)
+	if rcv == nil {
+		t.Fatal("expected non-nil receiver")
+	}
+	defer func() { _ = rcv.Stop(context.Background()) }()
+	// The receiver came up; that's the contract. Behavioral coverage of
+	// dispatcher routing lives in internal/inverter/notification_dispatcher_test.go.
 }
 
 // TestStartNotifyReceiver_BindFailureBypass asserts that a bind failure
@@ -133,7 +157,7 @@ func TestStartNotifyReceiver_BindFailureBypass(t *testing.T) {
 		CertFile: certFile,
 		KeyFile:  keyFile,
 		CAFile:   caFile,
-	}, "this-is-not-a-valid-address", nil)
+	}, "this-is-not-a-valid-address", nil, nil)
 	if got != nil {
 		_ = got.Stop(context.Background())
 		t.Fatalf("expected nil receiver for malformed listen addr, got %+v", got)

@@ -216,16 +216,22 @@ func main() {
 
 	// IEEE-049 Phase 8 entry: inbound HTTPS Notification receiver. The
 	// listener uses the same gotls (CCM-8) stack as the outbound client
-	// and presents the device cert as its server cert. The dispatcher is
-	// the no-op default — IEEE-051 will replace it with the real Phase-5
-	// dispatcher. Empty --notify-listen disables the listener entirely.
+	// and presents the device cert as its server cert.
+	//
+	// IEEE-051: the receiver is wired with a *PhaseStateDispatcher whose
+	// Phase 5 dependencies (client, cache, DERControlListHref) are bound
+	// later via RegisterDERControlList once those values are known. Until
+	// then the dispatcher logs + drops (IEEE-049 no-op semantics) — the
+	// listener can come up before the DERControlList href is discovered
+	// during Phase 4.
 	//
 	// Failure policy: graceful bypass (per IEEE-048 philosophy). The
 	// receiver is optional — CSIP V1.2 CORE-018 recommends but does not
 	// require it; the inverter has working polling for every function set
 	// in scope. If cert load, TCP bind, or address resolution fails, log
 	// the error and continue with polling-only rather than crash.
-	notifyReceiver := startNotifyReceiver(cfg, *notifyListen, hmi)
+	notifyDispatcher := inverter.NewPhaseStateDispatcher()
+	notifyReceiver := startNotifyReceiver(cfg, *notifyListen, hmi, notifyDispatcher.Dispatch)
 	if notifyReceiver != nil {
 		defer func() {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -553,6 +559,21 @@ func main() {
 				log.Printf("DERControlList poll loop exited: %v", err)
 			}
 		}()
+		// IEEE-051: now that we know the DERControlListHref + cache + client,
+		// bind them into the dispatcher so the IEEE-049 /notify listener stops
+		// being a no-op. Polling stays active above; notifications additively
+		// cut the latency floor from pollRate to "as soon as server POSTs."
+		// Bypass when the receiver never came up (notifyReceiver == nil) —
+		// no listener means no inbound POSTs, so the dispatcher would never
+		// fire anyway. The Register call is still safe (idempotent), but the
+		// log line would be misleading without a corresponding listener.
+		if notifyReceiver != nil {
+			if err := notifyDispatcher.RegisterDERControlList(client, derControlCache, dercListHref); err != nil {
+				log.Printf("Phase 8 (IEEE-051): dispatcher Register failed (%v); notifications will log+drop", err)
+			} else {
+				log.Printf("Phase 8 (IEEE-051): notification dispatcher registered for DERControlList=%s", dercListHref)
+			}
+		}
 	} else {
 		log.Println("Phase 5 (IEEE-038): no DERControlListLink on selected program; polling skipped")
 	}

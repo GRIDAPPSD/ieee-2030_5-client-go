@@ -26,10 +26,26 @@ import (
 //
 // hmi may be nil; when non-nil, the chosen bind address is published to
 // the dashboard via SetNotifyAddr.
-func startNotifyReceiver(cfg inverter.SimConfig, listenAddr string, hmi *inverter.HMI) *inverter.NotifyReceiver {
+//
+// dispatcher is the per-Notification callback IEEE-049 hands every
+// well-formed POST. main() passes a *inverter.PhaseStateDispatcher (IEEE-051)
+// constructed before Phase 5 wiring is done; the dispatcher self-handles
+// the unregistered case (log + drop) so the listener can come up before
+// the DERControlList href is known.
+func startNotifyReceiver(
+	cfg inverter.SimConfig,
+	listenAddr string,
+	hmi *inverter.HMI,
+	dispatcher inverter.NotificationDispatcher,
+) *inverter.NotifyReceiver {
 	if listenAddr == "" {
 		log.Println("Notification receiver: disabled (--notify-listen empty); subscription flow off, polling-only")
 		return nil
+	}
+
+	if dispatcher == nil {
+		// Fallback for callers that haven't been migrated yet. Safe default.
+		dispatcher = inverter.NoopNotificationDispatcher
 	}
 
 	rcv, err := inverter.NewNotifyReceiver(inverter.NotifyReceiverConfig{
@@ -37,7 +53,7 @@ func startNotifyReceiver(cfg inverter.SimConfig, listenAddr string, hmi *inverte
 		KeyFile:    cfg.KeyFile,
 		CAFile:     cfg.CAFile,
 		ListenAddr: listenAddr,
-		Dispatcher: inverter.NoopNotificationDispatcher,
+		Dispatcher: dispatcher,
 	})
 	if err != nil {
 		log.Printf("Notification receiver: NewNotifyReceiver failed (%v); falling back to polling-only", err)
