@@ -449,3 +449,190 @@ func TestPhaseStateDispatcher_GetError_ContextCancelled_LogsAndReturns(t *testin
 		t.Fatalf("expected 1 call; got %d", fake.callCount())
 	}
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// IEEE-052: CancelHook on status=1 notifications (CORE-019 step 13).
+// ──────────────────────────────────────────────────────────────────────
+
+// TestPhaseStateDispatcher_Status1_InvokesCancelHook covers the core
+// IEEE-052 contract: status=1 with a registered CancelHook fires the
+// hook with the SubscribedResource href, and does NOT trigger a GET.
+func TestPhaseStateDispatcher_Status1_InvokesCancelHook(t *testing.T) {
+	t.Parallel()
+	const listHref = "/edev/1/derp/1/derc"
+	const subscribedHref = "/edev/1/fsa"
+
+	fake := &fakeDERControlListFetcher{}
+	cache := NewDERControlCache()
+	d := NewPhaseStateDispatcher()
+	if err := d.RegisterDERControlList(fake, cache, listHref); err != nil {
+		t.Fatalf("register DERControlList: %v", err)
+	}
+
+	var (
+		mu        sync.Mutex
+		gotHrefs  []string
+	)
+	d.RegisterCancelHook(func(h string) {
+		mu.Lock()
+		gotHrefs = append(gotHrefs, h)
+		mu.Unlock()
+	})
+
+	d.Dispatch(context.Background(), sep2.Notification{
+		Resource:           sep2.Resource{Href: subscribedHref},
+		SubscribedResource: subscribedHref,
+		Status:             sep2.NotificationStatusSubscripted, // status=1
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(gotHrefs) != 1 {
+		t.Fatalf("CancelHook fired %d times, want 1", len(gotHrefs))
+	}
+	if gotHrefs[0] != subscribedHref {
+		t.Errorf("CancelHook href = %q, want %q", gotHrefs[0], subscribedHref)
+	}
+	if fake.callCount() != 0 {
+		t.Errorf("status=1 must not trigger GET; got %d calls", fake.callCount())
+	}
+}
+
+// TestPhaseStateDispatcher_Status1_NoHookFallsBackToLogDrop verifies
+// back-compat with IEEE-051: when no CancelHook is registered, status=1
+// is a clean log+drop (no panic, no GET).
+func TestPhaseStateDispatcher_Status1_NoHookFallsBackToLogDrop(t *testing.T) {
+	t.Parallel()
+	const listHref = "/edev/1/derp/1/derc"
+	fake := &fakeDERControlListFetcher{}
+	cache := NewDERControlCache()
+	d := NewPhaseStateDispatcher()
+	if err := d.RegisterDERControlList(fake, cache, listHref); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	// Note: RegisterCancelHook intentionally NOT called.
+
+	d.Dispatch(context.Background(), sep2.Notification{
+		SubscribedResource: "/edev/1/fsa",
+		Status:             sep2.NotificationStatusSubscripted,
+	})
+
+	if got := fake.callCount(); got != 0 {
+		t.Errorf("status=1 should not GET; got %d calls", got)
+	}
+}
+
+// TestPhaseStateDispatcher_RegisterCancelHook_NilClears verifies that
+// passing nil clears a previously-registered hook (status=1 reverts to
+// the IEEE-049/051 log+drop semantics).
+func TestPhaseStateDispatcher_RegisterCancelHook_NilClears(t *testing.T) {
+	t.Parallel()
+	const listHref = "/edev/1/derp/1/derc"
+	fake := &fakeDERControlListFetcher{}
+	cache := NewDERControlCache()
+	d := NewPhaseStateDispatcher()
+	if err := d.RegisterDERControlList(fake, cache, listHref); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	var fired atomic.Int32
+	d.RegisterCancelHook(func(_ string) { fired.Add(1) })
+	d.RegisterCancelHook(nil) // clear
+
+	d.Dispatch(context.Background(), sep2.Notification{
+		SubscribedResource: "/edev/1/fsa",
+		Status:             sep2.NotificationStatusSubscripted,
+	})
+
+	if got := fired.Load(); got != 0 {
+		t.Errorf("cleared hook still fired %d times", got)
+	}
+}
+
+// TestPhaseStateDispatcher_RegisterCancelHook_Idempotent verifies that
+// re-registering replaces (not appends) the hook.
+func TestPhaseStateDispatcher_RegisterCancelHook_Idempotent(t *testing.T) {
+	t.Parallel()
+	const listHref = "/edev/1/derp/1/derc"
+	fake := &fakeDERControlListFetcher{}
+	cache := NewDERControlCache()
+	d := NewPhaseStateDispatcher()
+	if err := d.RegisterDERControlList(fake, cache, listHref); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	var firstFired, secondFired atomic.Int32
+	d.RegisterCancelHook(func(_ string) { firstFired.Add(1) })
+	d.RegisterCancelHook(func(_ string) { secondFired.Add(1) })
+
+	d.Dispatch(context.Background(), sep2.Notification{
+		SubscribedResource: "/edev/1/fsa",
+		Status:             sep2.NotificationStatusSubscripted,
+	})
+
+	if firstFired.Load() != 0 {
+		t.Errorf("first hook should be replaced; fired %d times", firstFired.Load())
+	}
+	if secondFired.Load() != 1 {
+		t.Errorf("second hook should fire once; fired %d times", secondFired.Load())
+	}
+}
+
+// TestPhaseStateDispatcher_ConcurrentStatus1Dispatches exercises the
+// race detector: many goroutines Dispatch status=1 notifications
+// concurrently. The CancelHook records hrefs under its own mutex.
+// Race-clean expectation: -race reports nothing; all N hook invocations
+// observed.
+func TestPhaseStateDispatcher_ConcurrentStatus1Dispatches(t *testing.T) {
+	t.Parallel()
+	const listHref = "/edev/1/derp/1/derc"
+	fake := &fakeDERControlListFetcher{}
+	cache := NewDERControlCache()
+	d := NewPhaseStateDispatcher()
+	if err := d.RegisterDERControlList(fake, cache, listHref); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	var hookCalls atomic.Int32
+	d.RegisterCancelHook(func(_ string) { hookCalls.Add(1) })
+
+	const n = 100
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			d.Dispatch(context.Background(), sep2.Notification{
+				SubscribedResource: fmt.Sprintf("/edev/1/sub-target-%d", i),
+				Status:             sep2.NotificationStatusSubscripted,
+			})
+		}(i)
+	}
+	// Mix in a few non-cancellation dispatches so the GET path also
+	// participates in the race detector run.
+	wg.Add(10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			defer wg.Done()
+			d.Dispatch(context.Background(), sep2.Notification{
+				Resource: sep2.Resource{Href: listHref},
+				Status:   sep2.NotificationStatusChanged,
+			})
+		}()
+	}
+	// Bounded wait — soft guard against goroutine leak on regression.
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Dispatch goroutines did not finish in 5s")
+	}
+
+	if got := hookCalls.Load(); got != n {
+		t.Errorf("hookCalls = %d, want %d", got, n)
+	}
+}

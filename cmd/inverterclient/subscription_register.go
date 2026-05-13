@@ -78,16 +78,19 @@ type subscriptionPoster interface {
 //   - PostSubscription returns any other error → log warning, continue with
 //     the next resource. Future resources may still succeed.
 //
-// Returns a map keyed by the subscribed resource href → the server-assigned
-// subscription href. IEEE-052 will consume this map for the cancellation
-// path.
+// Returns a *subscriptionRegistry (IEEE-052) — a mutex-guarded wrapper
+// around the subscribed-resource-href → server-assigned-subscription-href
+// map. IEEE-052 wires registry.CancelHookFunc() as the dispatcher's
+// CancelHook so status=1 notifications free the inverter-side entry.
+// Always returns a non-nil registry so callers can wire it
+// unconditionally; an empty registry is a no-op for the cancel hook.
 func registerSubscriptions(
 	ctx context.Context,
 	client subscriptionPoster,
 	edev sep2.EndDevice,
 	notifyURL string,
-) map[string]string {
-	out := make(map[string]string)
+) *subscriptionRegistry {
+	out := newSubscriptionRegistry(nil)
 
 	if notifyURL == "" {
 		log.Println("Subscription register: no /notify receiver URL; subscription flow disabled, polling-only")
@@ -136,7 +139,7 @@ func registerSubscriptions(
 			continue
 		}
 		log.Printf("Subscription register: subscribed to %s at %s (server href %s)", t.label, t.href, subHref)
-		out[t.href] = subHref
+		out.Add(t.href, subHref)
 	}
 
 	return out

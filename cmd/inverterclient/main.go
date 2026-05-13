@@ -412,7 +412,14 @@ func main() {
 		edev,
 		notifyURLForReceiver(notifyReceiver),
 	)
-	_ = subscriptionsByResource // IEEE-052 will consume; silence the linter until then.
+	// IEEE-052 Phase 8 ticket 4 of 4 (final): wire the registry's Cancel
+	// method as the dispatcher's CancelHook so status=1 notifications
+	// (CSIP V1.2 CORE-019 step 13: "subscription cancelled by server")
+	// free the inverter-side subscription entry. Polling for the affected
+	// resource continues unaffected — the hook only cleans local state
+	// so a future re-subscription attempt can fire again. Safe to wire
+	// even when the registry is empty (no entries → cancel is a no-op).
+	notifyDispatcher.RegisterCancelHook(subscriptionsByResource.CancelHookFunc())
 
 	// Phase 2c: FunctionSetAssignmentsList discovery (IEEE-035 — plan-1
 	// phase 4 entry). Extracted by IEEE-075 into runPhase2cFSAList so the

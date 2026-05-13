@@ -23,10 +23,12 @@
 // state-machine transition on the next tick (≤ tickInterval latency).
 // Polling stays active; notifications just lower the floor.
 //
-// Out of scope (IEEE-052 territory):
-//   - status=1 (subscription cancelled) → fallback to polling-only.
-//     This dispatcher logs and drops; IEEE-052 will replace the drop
-//     with real fallback logic.
+// IEEE-052 (this file): status=1 (subscription cancelled by server,
+// CORE-019 step 13) now invokes a registered CancelHook so the caller
+// can free its subscription-tracking state. Polling stays active for
+// the cancelled resource — IEEE-052 only frees inverter-side state
+// (the server already knows it cancelled the subscription, it told us
+// via the Notification we are handling here).
 
 package inverter
 
@@ -64,14 +66,29 @@ type derControlListFetcher interface {
 // in the struct), so the RWMutex is held only across the configuration
 // read. The actual GET + cache update do not block other dispatches.
 //
-// IEEE-052 will add Status=1 cancellation tracking; for now status=1 is
-// logged + dropped.
+// IEEE-052: status=1 cancellation tracking is delegated to an optional
+// CancelHook supplied by the caller (cmd/inverterclient wraps a
+// subscription registry). When unset, status=1 logs + drops as before
+// (IEEE-049/051 default).
 type PhaseStateDispatcher struct {
 	mu                 sync.RWMutex
 	client             derControlListFetcher
 	cache              *DERControlCache
 	derControlListHref string
+	// cancelHook is the optional IEEE-052 seam invoked on status=1
+	// notifications. Nil-safe: a nil hook means log + drop. Defined as
+	// a func so the dispatcher does not import the cmd-side registry
+	// type — keeps internal/inverter library-friendly.
+	cancelHook CancelHook
 }
+
+// CancelHook is the IEEE-052 seam invoked on status=1 notifications.
+// Receives the cancelled subscription's subscribedResource href (the
+// thing the inverter subscribed TO) so the caller can free its
+// subscription-tracking state. Implementations MUST be safe for
+// concurrent invocation — notifications arrive on independent net/http
+// goroutines.
+type CancelHook func(subscribedHref string)
 
 // NewPhaseStateDispatcher returns a dispatcher with no Phase 5 wiring.
 // Callers MUST call RegisterDERControlList before notifications are
@@ -120,14 +137,32 @@ func (d *PhaseStateDispatcher) RegisterDERControlList(
 	return nil
 }
 
+// RegisterCancelHook installs the IEEE-052 cancel hook invoked on every
+// status=1 (subscription cancelled by server) notification. Idempotent:
+// subsequent calls replace the previous hook. Passing nil clears the
+// hook (status=1 reverts to log+drop, IEEE-049/051 semantics).
+//
+// The hook is invoked WITHOUT the dispatcher's mutex held — implementations
+// are free to take their own locks without deadlock risk against this
+// dispatcher. Implementations MUST be safe for concurrent invocation
+// because notifications arrive on independent net/http goroutines.
+func (d *PhaseStateDispatcher) RegisterCancelHook(hook CancelHook) {
+	d.mu.Lock()
+	d.cancelHook = hook
+	d.mu.Unlock()
+}
+
 // Dispatch is the NotificationDispatcher entry point. Bound as a method
 // value (`dispatcher.Dispatch`) when passed to NotifyReceiverConfig.
 // Matches the func(ctx, sep2.Notification) signature exactly.
 //
 // Behavior:
 //
-//  1. status==1 (Subscription cancelled, CORE-019 step 13) → log + drop.
-//     IEEE-052 territory.
+//  1. status==1 (Subscription cancelled, CORE-019 step 13) → invoke the
+//     registered CancelHook with n.SubscribedResource, log, return.
+//     Polling for the cancelled resource is unaffected; the hook only
+//     frees inverter-side subscription-tracking state. If no hook is
+//     registered, log + drop (IEEE-049/051 semantics).
 //  2. Not yet registered → log + drop (IEEE-049 no-op semantics).
 //  3. Changed-resource href identification (in order of preference):
 //     n.Href (Resource.Href in the body) → n.NewResourceURI → n.SubscribedResource.
@@ -143,9 +178,24 @@ func (d *PhaseStateDispatcher) RegisterDERControlList(
 func (d *PhaseStateDispatcher) Dispatch(ctx context.Context, n sep2.Notification) {
 	if n.Status == sep2.NotificationStatusSubscripted {
 		// Per CORE-019 step 13, status=1 means "Subscription cancelled by
-		// server." IEEE-051 logs + drops; IEEE-052 will flip the inverter
-		// back to polling-only for the affected resource.
-		log.Printf("Notification dispatcher: status=1 (subscription cancelled) for subscribedResource=%q — log+drop (IEEE-052 will handle fallback)",
+		// server." IEEE-052: invoke the registered CancelHook so the
+		// caller can free its subscription-tracking state. Polling for
+		// the affected resource is unaffected — the independent polling
+		// loop continues at its configured cadence. If no hook is
+		// registered (e.g. unit tests, early-startup window), fall back
+		// to log + drop.
+		d.mu.RLock()
+		hook := d.cancelHook
+		d.mu.RUnlock()
+		if hook != nil {
+			// Invoke without the dispatcher mutex held so the hook can
+			// take its own locks without risk of deadlock.
+			hook(n.SubscribedResource)
+			log.Printf("Notification dispatcher: status=1 (subscription cancelled by server) for subscribedResource=%q — cancel hook invoked, polling continues",
+				n.SubscribedResource)
+			return
+		}
+		log.Printf("Notification dispatcher: status=1 (subscription cancelled by server) for subscribedResource=%q — no cancel hook registered, log+drop",
 			n.SubscribedResource)
 		return
 	}

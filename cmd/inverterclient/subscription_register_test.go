@@ -69,11 +69,11 @@ func TestRegisterSubscriptions_HappyPathBothResources(t *testing.T) {
 	if len(p.calls) != 2 {
 		t.Fatalf("PostSubscription calls = %d, want 2", len(p.calls))
 	}
-	if got := out["/edev/1/fsa"]; got != "/edev/1/sub/sub-FSA" {
-		t.Errorf("FSA sub href = %q, want /edev/1/sub/sub-FSA", got)
+	if got, ok := out.Lookup("/edev/1/fsa"); !ok || got != "/edev/1/sub/sub-FSA" {
+		t.Errorf("FSA sub href = %q (ok=%v), want /edev/1/sub/sub-FSA", got, ok)
 	}
-	if got := out["/edev/1/der"]; got != "/edev/1/sub/sub-DER" {
-		t.Errorf("DER sub href = %q, want /edev/1/sub/sub-DER", got)
+	if got, ok := out.Lookup("/edev/1/der"); !ok || got != "/edev/1/sub/sub-DER" {
+		t.Errorf("DER sub href = %q (ok=%v), want /edev/1/sub/sub-DER", got, ok)
 	}
 	// Notify URL passed through verbatim
 	if p.calls[0].notifyURL != "https://inv/notify" {
@@ -88,8 +88,8 @@ func TestRegisterSubscriptions_NoNotifyURLDisabled(t *testing.T) {
 	if len(p.calls) != 0 {
 		t.Errorf("PostSubscription calls = %d, want 0 when notifyURL empty", len(p.calls))
 	}
-	if len(out) != 0 {
-		t.Errorf("returned map len = %d, want 0", len(out))
+	if out.Len() != 0 {
+		t.Errorf("returned registry len = %d, want 0", out.Len())
 	}
 }
 
@@ -100,8 +100,8 @@ func TestRegisterSubscriptions_NoSubscriptionListLinkDisabled(t *testing.T) {
 	if len(p.calls) != 0 {
 		t.Errorf("PostSubscription calls = %d, want 0 without SubscriptionListLink", len(p.calls))
 	}
-	if len(out) != 0 {
-		t.Errorf("returned map len = %d, want 0", len(out))
+	if out.Len() != 0 {
+		t.Errorf("returned registry len = %d, want 0", out.Len())
 	}
 }
 
@@ -112,8 +112,8 @@ func TestRegisterSubscriptions_NoChildLinksDisabled(t *testing.T) {
 	if len(p.calls) != 0 {
 		t.Errorf("PostSubscription calls = %d, want 0 with no FSA/DER links", len(p.calls))
 	}
-	if len(out) != 0 {
-		t.Errorf("returned map len = %d, want 0", len(out))
+	if out.Len() != 0 {
+		t.Errorf("returned registry len = %d, want 0", out.Len())
 	}
 }
 
@@ -131,8 +131,8 @@ func TestRegisterSubscriptions_405AbortsLoop(t *testing.T) {
 	if len(p.calls) != 1 {
 		t.Errorf("PostSubscription calls = %d, want 1 (loop aborted on 405)", len(p.calls))
 	}
-	if len(out) != 0 {
-		t.Errorf("returned map len = %d, want 0 on 405", len(out))
+	if out.Len() != 0 {
+		t.Errorf("returned registry len = %d, want 0 on 405", out.Len())
 	}
 }
 
@@ -150,11 +150,11 @@ func TestRegisterSubscriptions_PerResourceErrorContinues(t *testing.T) {
 	if len(p.calls) != 2 {
 		t.Errorf("PostSubscription calls = %d, want 2", len(p.calls))
 	}
-	if out["/edev/1/fsa"] != "" {
-		t.Errorf("failed resource leaked into map: %q", out["/edev/1/fsa"])
+	if _, ok := out.Lookup("/edev/1/fsa"); ok {
+		t.Errorf("failed resource leaked into registry")
 	}
-	if out["/edev/1/der"] != "/edev/1/sub/sub-DER" {
-		t.Errorf("successful resource missing: %q", out["/edev/1/der"])
+	if got, ok := out.Lookup("/edev/1/der"); !ok || got != "/edev/1/sub/sub-DER" {
+		t.Errorf("successful resource missing: %q (ok=%v)", got, ok)
 	}
 }
 
@@ -172,8 +172,8 @@ func TestRegisterSubscriptions_ContextCancelAborts(t *testing.T) {
 	if len(p.calls) != 1 {
 		t.Errorf("PostSubscription calls = %d, want 1 (aborted on ctx)", len(p.calls))
 	}
-	if len(out) != 0 {
-		t.Errorf("returned map len = %d, want 0", len(out))
+	if out.Len() != 0 {
+		t.Errorf("returned registry len = %d, want 0", out.Len())
 	}
 }
 
