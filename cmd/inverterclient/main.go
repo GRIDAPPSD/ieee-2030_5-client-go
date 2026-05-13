@@ -391,6 +391,23 @@ func main() {
 		edev = newEdev
 	}
 
+	// IEEE-050 Phase 8 ticket 2 of 4: register Subscriptions with the SEP2
+	// server so it can POST Notifications to the IEEE-049 /notify listener.
+	// Runs after Phase 2b (we now know our EndDevice and its links) and
+	// before Phase 2c (the rest of the link-graph walk doesn't depend on
+	// subscription state). All failure modes degrade to polling — never
+	// fatal — so CSIP V1.2's "recommended but not required" subscription
+	// flow stays optional. The returned map keys are the subscribed
+	// resource hrefs; values are the server-assigned subscription hrefs
+	// (consumed by IEEE-052 for cancellation handling).
+	subscriptionsByResource := registerSubscriptions(
+		ctx,
+		client,
+		edev,
+		notifyURLForReceiver(notifyReceiver),
+	)
+	_ = subscriptionsByResource // IEEE-052 will consume; silence the linter until then.
+
 	// Phase 2c: FunctionSetAssignmentsList discovery (IEEE-035 — plan-1
 	// phase 4 entry). Extracted by IEEE-075 into runPhase2cFSAList so the
 	// deferred IEEE-072 integration cases have a function seam to test
