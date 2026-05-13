@@ -471,9 +471,11 @@ func (c *SEP2Client) Register(ctx context.Context, edevListHref string) (registe
 // LFDI (callers idle and re-poll in that case — see cmd/inverterclient).
 // All underlying transport/decode failures are wrapped with %w.
 //
-// LFDI match is exact case-sensitive string equality on the upper-hex 40-char
-// form produced by internal/tls.LFDI (`fmt.Sprintf("%X", ...)`); the server
-// stores LFDIs the same way.
+// LFDI match is case-insensitive (strings.EqualFold) against the upper-hex
+// 40-char form produced by internal/tls.LFDI (`fmt.Sprintf("%X", ...)`).
+// External IEEE 2030.5 / CSIP servers commonly emit lowercase `<lFDI>` on
+// the wire — xs:hexBinary is case-insensitive per W3C XML Schema Part 2 —
+// so byte-equality silently misses provisioned devices. See IEEE-113.
 //
 // First-cut paging: appends `?l=255` to fetch the first page. Cursor walking
 // for lists larger than 255 entries is deferred to a follow-up ticket
@@ -513,7 +515,7 @@ func (c *SEP2Client) LookupOwnEndDevice(ctx context.Context, edevListHref string
 	newEdevListHref = stripPagingQuery(followedHref, sep)
 
 	for _, ed := range list.EndDevice {
-		if ed.LFDI == c.lfdi {
+		if strings.EqualFold(ed.LFDI, c.lfdi) {
 			return ed, newEdevListHref, nil
 		}
 	}
