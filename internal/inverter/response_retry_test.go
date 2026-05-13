@@ -397,10 +397,16 @@ func TestPostResponseWithRetry_BackoffCappedByMaxDelay(t *testing.T) {
 
 func TestPostResponseWithRetry_DeadLetterLog(t *testing.T) {
 	// Deliberately serial — captureLogs swaps log.Default()'s writer,
-	// which is global state. Parallel runs with other captureLogs-using
-	// tests (IEEE-043's response_post_test.go suite) can interleave the
-	// global-writer reset and produce intermittent -race failures. Same
-	// constraint Pike Y3 flagged.
+	// which is global state. Even with the IEEE-081 mutex guarding
+	// concurrent captureLogs callers, any OTHER t.Parallel() test in
+	// this package that emits log.Printf lines while this test holds
+	// the capture buffer will write into that buffer (the global
+	// writer is shared) and race with buf.String(). The only
+	// race-clean option is to run this test in the serial phase
+	// (before parallel tests resume) — Go's testing runtime
+	// guarantees serial tests complete before parallel tests start.
+	// Refactoring production log.Printf to an injectable logger is
+	// out of scope for IEEE-081 (would change package API).
 	cfg := tightCfg()
 	poster := &fakePoster{errs: []error{
 		transientErr("a1"), transientErr("a2"), transientErr("a3"),

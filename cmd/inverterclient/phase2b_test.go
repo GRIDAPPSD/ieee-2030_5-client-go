@@ -50,6 +50,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,15 +59,30 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
 
+// captureLogMu serializes captureLog callers so concurrent goroutines
+// inside one test don't race on the global-writer swap. The bigger
+// constraint — callers MUST NOT be t.Parallel() because any sibling
+// parallel test emitting log.Printf lines will land in the captured
+// buffer — is documented on captureLog below (IEEE-081).
+var captureLogMu sync.Mutex
+
 // captureLog redirects the default logger's output to a bytes.Buffer for
 // the duration of the test. The pre-test prefix + flags are restored in
 // t.Cleanup; callers may call .String() on the returned buffer to assert
 // on emitted lines.
 //
-// Tests that capture the log MUST NOT use t.Parallel(): log.Default() is
-// process-global state and parallel tests would interleave.
+// IEEE-081 contract: Tests that capture the log MUST NOT use t.Parallel().
+// log.Default() is process-global state and any t.Parallel() sibling test
+// that emits log.Printf lines will write into the captured buffer AND
+// race buf.String(). Go's testing runtime runs serial tests in a single
+// goroutine BEFORE resuming queued parallel tests, so serial captureLog
+// callers complete with no concurrent log writers. The captureLogMu
+// mutex below is a secondary guard against future
+// captureLog-from-multiple-goroutines misuse within one test; it is NOT
+// sufficient on its own.
 func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
+	captureLogMu.Lock()
 	var buf bytes.Buffer
 	prevWriter := log.Writer()
 	prevFlags := log.Flags()
@@ -78,6 +94,7 @@ func captureLog(t *testing.T) *bytes.Buffer {
 		log.SetOutput(prevWriter)
 		log.SetFlags(prevFlags)
 		log.SetPrefix(prevPrefix)
+		captureLogMu.Unlock()
 	})
 	return &buf
 }

@@ -934,16 +934,35 @@ func (c *SEP2Client) postResponseOnce(ctx context.Context, target string, body [
 	}
 }
 
-// pollDuration maps a DeviceCapability pollRate (seconds) to a wait
-// duration. Zero/unset pollRate falls back to 30s — a conservative default
-// matching the example values in IEEE 2030.5 / CSIP. Exposed as a var so
-// tests can compress polling cadence without faking time
-// (see idle_export_test.go). See IEEE-028.
-var pollDuration = func(pollRateSec uint32) time.Duration {
+// pollDurationFunc is the mapper signature for pollRate → wait duration.
+// A named type so we can store it in an atomic.Pointer below.
+type pollDurationFunc func(pollRateSec uint32) time.Duration
+
+// defaultPollDuration is the production mapper. Zero/unset pollRate falls
+// back to 30s — a conservative default matching the example values in
+// IEEE 2030.5 / CSIP. See IEEE-028.
+func defaultPollDuration(pollRateSec uint32) time.Duration {
 	if pollRateSec == 0 {
 		return 30 * time.Second
 	}
 	return time.Duration(pollRateSec) * time.Second
+}
+
+// pollDurationPtr holds the current mapper. Stored in an atomic.Pointer
+// so tests can compress polling cadence (SetPollDurationForTesting) while
+// (*SEP2Client).WaitForAdvertisedLinks reads in another goroutine — no
+// race (IEEE-081). Production binaries never write past the init.
+var pollDurationPtr atomic.Pointer[pollDurationFunc]
+
+func init() {
+	fn := pollDurationFunc(defaultPollDuration)
+	pollDurationPtr.Store(&fn)
+}
+
+// pollDuration returns the wait duration for a DeviceCapability pollRate
+// (seconds). Race-safe against test seam swaps.
+func pollDuration(pollRateSec uint32) time.Duration {
+	return (*pollDurationPtr.Load())(pollRateSec)
 }
 
 // dcapHasAnyLink reports whether a DeviceCapability advertises at least one
@@ -1070,11 +1089,23 @@ func (c *SEP2Client) SyncServerTime(ctx context.Context, timeHref string) (sep2.
 // ticket pins this at 60s as production hygiene — anything shorter
 // hammers the Time endpoint without buying meaningful clock accuracy.
 //
-// Declared as a var (not const) solely so the IEEE-070 sweep tests can
-// drive the loop body via SetMinTimeSyncPollRateForTesting; the
-// production binary never writes to this. Mirrors the pollDuration
+// Stored as nanoseconds in an atomic.Int64 so the IEEE-070 sweep tests
+// can swap the floor via SetMinTimeSyncPollRateForTesting without racing
+// against (*SEP2Client).RunTimeSync's read in another goroutine
+// (IEEE-081). Production code reads via getMinTimeSyncPollRate(); the
+// production binary itself never writes. Mirrors the pollDuration
 // testability seam pattern established by IEEE-028.
-var minTimeSyncPollRate = 60 * time.Second
+var minTimeSyncPollRateNanos atomic.Int64
+
+func init() {
+	minTimeSyncPollRateNanos.Store(int64(60 * time.Second))
+}
+
+// getMinTimeSyncPollRate returns the current time-sync poll-rate floor.
+// Race-safe against concurrent SetMinTimeSyncPollRateForTesting calls.
+func getMinTimeSyncPollRate() time.Duration {
+	return time.Duration(minTimeSyncPollRateNanos.Load())
+}
 
 // DefaultTimeSyncPollRate is the fallback poll cadence when the caller
 // has no Time-resource pollRate to thread through. sep2.Time inherits
@@ -1100,8 +1131,8 @@ func (c *SEP2Client) RunTimeSync(ctx context.Context, timeHref string, pollRate 
 	if pollRate <= 0 {
 		pollRate = DefaultTimeSyncPollRate
 	}
-	if pollRate < minTimeSyncPollRate {
-		pollRate = minTimeSyncPollRate
+	if floor := getMinTimeSyncPollRate(); pollRate < floor {
+		pollRate = floor
 	}
 	for {
 		select {

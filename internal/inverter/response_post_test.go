@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,6 +37,15 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/inverter"
 	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
 )
+
+// captureLogsMu serializes concurrent captureLogs calls. The helper swaps
+// log.Default()'s output writer, which is a single global slot — two
+// t.Parallel() tests calling captureLogs would otherwise interleave their
+// SetOutput calls AND their Printf writes, producing intermittent -race
+// failures (Pike Y3 / Pike DD trail; IEEE-081). Holding the mutex for the
+// duration of fn keeps the global swap atomic from the test's perspective
+// without changing the production log path or the inverter package API.
+var captureLogsMu sync.Mutex
 
 // sampleDERControlResponse returns a populated DERControlResponse the test
 // server will see on the wire. Status=2 (Started) per IEEE 2030.5-2023
@@ -58,12 +68,28 @@ func sampleDERControlResponse() sep2.DERControlResponse {
 // production PostResponse path uses for both the 201-Location trace and
 // the 4xx redacted warning; capturing here is the only way to assert body
 // redaction without rebuilding the logger seam.
+//
+// IEEE-081 contract: callers MUST be serial (no t.Parallel()).
+// log.Default() is process-global — any other t.Parallel() test running
+// concurrently with a captureLogs caller will log.Printf into the captured
+// buffer (because we've SetOutput'd it) AND race buf.String(). Go's test
+// runtime runs serial tests in a single goroutine BEFORE resuming queued
+// parallel tests, so serial captureLogs callers complete with no
+// concurrent log writers. The captureLogsMu mutex below is a secondary
+// guard against future captureLogs-from-multiple-goroutines misuse; it is
+// NOT sufficient on its own (see response_retry_test.go dead-letter
+// comment).
+//
+// Refactoring production log.Printf to an injectable logger would lift
+// this constraint but is out of scope for IEEE-081.
 func captureLogs(t *testing.T, fn func()) string {
 	t.Helper()
+	captureLogsMu.Lock()
+	defer captureLogsMu.Unlock()
 	var buf bytes.Buffer
 	prev := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(prev) })
+	defer log.SetOutput(prev)
 	fn()
 	return buf.String()
 }
@@ -87,7 +113,8 @@ func readBodyBytes(t *testing.T, r *http.Request) []byte {
 // =============================================================================
 
 func TestPostResponse_201CreatedHappyPath(t *testing.T) {
-	t.Parallel()
+	// IEEE-081: captureLogs callers must be serial — log.Default() is
+	// process-global. See response_post_test.go captureLogs godoc.
 	env := newCCMTestEnv(t)
 
 	var hits atomic.Int32
@@ -260,7 +287,8 @@ func TestPostResponse_AbsoluteHrefBypassesBaseURL(t *testing.T) {
 // =============================================================================
 
 func TestPostResponse_400BadRequestRedactsBody(t *testing.T) {
-	t.Parallel()
+	// IEEE-081: captureLogs callers must be serial — log.Default() is
+	// process-global. See response_post_test.go captureLogs godoc.
 	env := newCCMTestEnv(t)
 
 	const secretBody = "<Error><Detail>do-not-leak-this-string</Detail></Error>"

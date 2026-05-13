@@ -588,7 +588,12 @@ func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
 // synchronously on a fake retry clock effectively — InitialDelay is
 // 1ms via the tight cfg).
 func TestResponsePOSTHook_IEEE045DeadLetterOnPersistentTransient(t *testing.T) {
-	t.Parallel()
+	// IEEE-081: deliberately serial — captureLog (and the inline
+	// SetOutput pattern below) swaps log.Default()'s writer, which is
+	// process-global. Any t.Parallel() sibling test that emits log
+	// lines via production code while we hold the capture would race
+	// on the buffer. Go's test runtime runs serial tests before
+	// resuming parallel tests, so this captures cleanly.
 	transient := fmt.Errorf("simulated 500: %w", inverter.ErrResponseTransient)
 	// Queue MaxAttempts transients so attempt 1 + 2 + 3 all fail on the
 	// first transition. Anything after that returns nil → the second

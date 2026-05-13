@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
@@ -33,15 +34,13 @@ import (
 //   - DERCurve retrieval (IEEE-042).
 //   - Response POSTs on status transitions (Phase 6 / IEEE-043+).
 
-// derControlPollDuration maps an IEEE 2030.5 pollRate (seconds, uint32) to a
-// time.Duration with the project's standard floor (60s) and default-on-zero
-// (30min) policy. Mirrors pinPollInterval in cmd/inverterclient/main.go but
-// kept package-local in internal/inverter so the polling loop can be unit-
-// tested without crossing the cmd boundary.
-//
-// Exposed as a var so tests can swap in a tight cadence — see
-// dercontrol_poll_export_test.go. Pattern mirrors IEEE-028's pollDuration.
-var derControlPollDuration = func(pollRateSec uint32) time.Duration {
+// defaultDERControlPollDuration maps an IEEE 2030.5 pollRate (seconds,
+// uint32) to a time.Duration with the project's standard floor (60s) and
+// default-on-zero (30min) policy. Mirrors pinPollInterval in
+// cmd/inverterclient/main.go but kept package-local in internal/inverter
+// so the polling loop can be unit-tested without crossing the cmd
+// boundary.
+func defaultDERControlPollDuration(pollRateSec uint32) time.Duration {
 	d := time.Duration(pollRateSec) * time.Second
 	if d <= 0 {
 		d = 30 * time.Minute
@@ -50,6 +49,24 @@ var derControlPollDuration = func(pollRateSec uint32) time.Duration {
 		d = 60 * time.Second
 	}
 	return d
+}
+
+// derControlPollDurationPtr holds the current mapper. Stored in an
+// atomic.Pointer so tests can swap in a tight cadence
+// (SetDERControlPollDurationForTesting) while
+// (*SEP2Client).PollDERControlList reads on its own goroutine — no race
+// (IEEE-081). Pattern mirrors IEEE-028's pollDuration.
+var derControlPollDurationPtr atomic.Pointer[pollDurationFunc]
+
+func init() {
+	fn := pollDurationFunc(defaultDERControlPollDuration)
+	derControlPollDurationPtr.Store(&fn)
+}
+
+// derControlPollDuration returns the wait duration for a DERControlList
+// pollRate (seconds). Race-safe against test seam swaps.
+func derControlPollDuration(pollRateSec uint32) time.Duration {
+	return (*derControlPollDurationPtr.Load())(pollRateSec)
 }
 
 // DERControlCache holds the most recent DERControlList snapshot keyed by
