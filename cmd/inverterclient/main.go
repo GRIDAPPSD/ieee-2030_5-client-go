@@ -846,6 +846,27 @@ func main() {
 	// a silent no-op (see reporter.go).
 	reporter := inverter.NewReporter(client, derStatusHref, mmrHref)
 
+	// IEEE-054: wire the LogEvent rate-limiter + alarm transition detector.
+	//
+	// Source the LogEventList href from EndDevice.LogEventListLink (set by
+	// IEEE-030's registration/lookup). An empty/missing link means the
+	// server doesn't advertise the OPTIONAL LogEvent function set —
+	// NewAlarmDetector degrades to a no-op in that case (Evaluate becomes
+	// free) so the simulator runs without complaint.
+	var logEventListHref string
+	if edev.LogEventListLink != nil {
+		logEventListHref = edev.LogEventListLink.Href
+	}
+	logEventLimiter := inverter.NewPerCodeLogEventLimiter(inverter.DefaultLogEventWindow, time.Now)
+	client.SetLogEventRateLimiter(logEventLimiter)
+	alarmDetector := inverter.NewAlarmDetector(client, logEventListHref)
+	if logEventListHref == "" {
+		log.Println("IEEE-054: EndDevice has no LogEventListLink; alarm-LogEvent emit disabled (graceful bypass)")
+	} else {
+		log.Printf("IEEE-054: alarm-LogEvent emit enabled — href=%s window=%v",
+			logEventListHref, logEventLimiter.Window())
+	}
+
 	// Phase 5: Simulation Loop
 	log.Printf("=== Phase 5: Simulation — %s ===", scenario.Name)
 
@@ -854,6 +875,15 @@ func main() {
 	stepIdx := 0
 	currentGrid := inverter.GridState{VoltsPU: 1.0, FreqHz: 60.0, Time: simTime}
 	lastReport := time.Time{}
+	// IEEE-054: track contiguous abnormal-condition duration so the trip
+	// curves in ridethrough.go have a duration argument. Reset on every
+	// nominal-grid tick.
+	abnormalSince := time.Time{}
+	// IEEE-054: track pre-disturbance active power for the FreqDroop /
+	// LE_ACTIVE_LIMIT classification. Captured on each nominal tick;
+	// freeze during disturbance so the classification sees the original
+	// setpoint, not the curtailed value.
+	preDisturbancePW := 0.0
 
 	ticker := time.NewTicker(cfg.TickInterval)
 	defer ticker.Stop()
@@ -906,6 +936,35 @@ func main() {
 
 			// Compute output
 			state := inverter.ComputeOutput(controls, currentGrid)
+
+			// IEEE-054: edge-triggered alarm-class detection. Track
+			// abnormal-condition duration so the IEEE 1547 trip curves
+			// see the right `dur` argument. Track the pre-disturbance
+			// active-power setpoint so LE_ACTIVE_LIMIT classification
+			// sees the unclipped value.
+			isNormalGrid := currentGrid.VoltsPU >= 0.88 && currentGrid.VoltsPU <= 1.10 &&
+				currentGrid.FreqHz >= 59.0 && currentGrid.FreqHz <= 60.5
+			if isNormalGrid {
+				abnormalSince = time.Time{}
+				preDisturbancePW = state.ActivePowerW
+			} else if abnormalSince.IsZero() {
+				abnormalSince = simTime
+			}
+			abnormalDur := time.Duration(0)
+			if !abnormalSince.IsZero() {
+				abnormalDur = simTime.Sub(abnormalSince)
+			}
+			alarmDetector.Evaluate(ctx, inverter.AlarmInputs{
+				Grid:             currentGrid,
+				Connected:        state.Connected,
+				Energized:        state.Energized,
+				ActivePowerW:     state.ActivePowerW,
+				ReactivePowerVAr: state.ReactivePowerVAr,
+				PreDisturbancePW: preDisturbancePW,
+				RatedVAr:         inverter.Rating.RatedVA, // RatedVAr ≈ RatedVA for unity-PF inverter
+				AbnormalDuration: abnormalDur,
+				Time:             simTime,
+			})
 
 			// Broadcast to HMI
 			if hmi != nil {
