@@ -244,19 +244,16 @@ func main() {
 	// exits cleanly when the inverter's root context cancels (Ctrl-C
 	// handler already wired). If TimeLink is absent the inverter
 	// degrades to local clock — log it and proceed.
+	//
+	// IEEE-048: extracted into runPhase1bTimeSync so the previously-fatal
+	// log.Fatalf on Time-resource fetch failure is replaced with graceful
+	// bypass (Phase 7 exit criterion 1). See phase1b_timesync.go.
 	log.Println("=== Phase 1b: Time Sync ===")
-	if dcap.TimeLink != nil {
-		serverTime, err := client.SyncServerTime(ctx, dcap.TimeLink.Href)
-		if err != nil {
-			log.Fatalf("initial server time sync %s: %v", dcap.TimeLink.Href, err)
-		}
-		offset := client.Now().Sub(time.Now())
-		log.Printf("Server time: %s (offset from local: %s)",
-			time.Unix(serverTime.CurrentTime, 0).UTC().Format(time.RFC3339),
-			offset)
-		go client.RunTimeSync(ctx, dcap.TimeLink.Href, inverter.DefaultTimeSyncPollRate)
-	} else {
-		log.Println("DeviceCapability has no TimeLink; using local clock for outbound timestamps")
+	if err := runPhase1bTimeSync(ctx, client, dcap); err != nil {
+		// Only context.Canceled / context.DeadlineExceeded reach here under
+		// the Phase 7 graceful-bypass policy; treat them the same as every
+		// other ctx-cancel exit in main().
+		return
 	}
 
 	// Phase 2: EndDevice acquisition.
@@ -625,65 +622,75 @@ func main() {
 	if edev.DERListLink == nil {
 		log.Println("EndDevice has no DERListLink; skipping Phase 3 DER setup")
 	} else {
-		var derList sep2.DERList
 		// IEEE-047: on 301 client.Get surfaces the new DERList URL; one-shot
 		// Phase 3 setup so we log it for diagnostics rather than threading
 		// it onward (DER setup PUTs that follow are link-derived from
 		// derList.DER entries — no DERList href reuse downstream).
-		newDERListHref, err := client.Get(ctx, edev.DERListLink.Href, &derList)
-		if err != nil {
-			log.Fatalf("GET DER list %s: %v", edev.DERListLink.Href, err)
-		}
-		if newDERListHref != "" {
-			log.Printf("Phase 3 DER list: 301 follow — original %s → %s (one-shot; not cached)",
-				edev.DERListLink.Href, newDERListHref)
-		}
-		if len(derList.DER) == 0 {
-			log.Println("DER list empty; skipping Phase 3 DER setup")
-		} else {
-			// First DER only — multi-DER inverters are a follow-up.
-			der := derList.DER[0]
+		// IEEE-048: extracted into fetchDERListForSetup so the previously-
+		// fatal log.Fatalf on DER-list fetch failure is replaced with
+		// graceful bypass (Phase 7 exit criterion 1). See phase3_derlist.go.
+		derList, ok, newDERListHref, err := fetchDERListForSetup(ctx, client, edev.DERListLink.Href)
+		switch {
+		case err != nil:
+			// Only context.Canceled / context.DeadlineExceeded reach here
+			// under the Phase 7 graceful-bypass policy; treat them the same
+			// as every other ctx-cancel exit in main().
+			return
+		case !ok:
+			// fetchDERListForSetup already logged the bypass cause. Fall
+			// through to the rest of main() with Phase 3 skipped.
+		default:
+			if newDERListHref != "" {
+				log.Printf("Phase 3 DER list: 301 follow — original %s → %s (one-shot; not cached)",
+					edev.DERListLink.Href, newDERListHref)
+			}
+			if len(derList.DER) == 0 {
+				log.Println("DER list empty; skipping Phase 3 DER setup")
+			} else {
+				// First DER only — multi-DER inverters are a follow-up.
+				der := derList.DER[0]
 
-			maxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
-			maxVAr := sep2.ReactivePower{Value: int64(inverter.Rating.RatedVAr)}
-			modesSupported := uint32(0xFF) // all modes
-			derType := uint8(4)            // PV inverter
+				maxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
+				maxVAr := sep2.ReactivePower{Value: int64(inverter.Rating.RatedVAr)}
+				modesSupported := uint32(0xFF) // all modes
+				derType := uint8(4)            // PV inverter
 
-			if der.DERCapabilityLink != nil {
-				if err := client.PutDERCapability(ctx, der.DERCapabilityLink.Href, sep2.DERCapability{
-					RTGMaxW:        &maxW,
-					RTGMaxVar:      &maxVAr,
-					ModesSupported: &modesSupported,
-					Type:           &derType,
-				}); err != nil {
-					log.Printf("PUT DERCapability: %v (continuing)", err)
+				if der.DERCapabilityLink != nil {
+					if err := client.PutDERCapability(ctx, der.DERCapabilityLink.Href, sep2.DERCapability{
+						RTGMaxW:        &maxW,
+						RTGMaxVar:      &maxVAr,
+						ModesSupported: &modesSupported,
+						Type:           &derType,
+					}); err != nil {
+						log.Printf("PUT DERCapability: %v (continuing)", err)
+					}
+				} else {
+					log.Println("DER has no DERCapabilityLink; skipping DERCapability PUT")
 				}
-			} else {
-				log.Println("DER has no DERCapabilityLink; skipping DERCapability PUT")
-			}
 
-			setMaxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
-			if der.DERSettingsLink != nil {
-				// IEEE-031: outbound timestamp — use the server-synced clock
-				// rather than local wall-clock. Before any TimeLink sync runs
-				// client.Now() degrades to time.Now(), so this is safe even
-				// when no TimeLink was advertised.
-				if err := client.PutDERSettings(ctx, der.DERSettingsLink.Href, sep2.DERSettings{
-					SetMaxW:     &setMaxW,
-					UpdatedTime: client.Now().Unix(),
-				}); err != nil {
-					log.Printf("PUT DERSettings: %v (continuing)", err)
+				setMaxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
+				if der.DERSettingsLink != nil {
+					// IEEE-031: outbound timestamp — use the server-synced clock
+					// rather than local wall-clock. Before any TimeLink sync runs
+					// client.Now() degrades to time.Now(), so this is safe even
+					// when no TimeLink was advertised.
+					if err := client.PutDERSettings(ctx, der.DERSettingsLink.Href, sep2.DERSettings{
+						SetMaxW:     &setMaxW,
+						UpdatedTime: client.Now().Unix(),
+					}); err != nil {
+						log.Printf("PUT DERSettings: %v (continuing)", err)
+					}
+				} else {
+					log.Println("DER has no DERSettingsLink; skipping DERSettings PUT")
 				}
-			} else {
-				log.Println("DER has no DERSettingsLink; skipping DERSettings PUT")
-			}
 
-			if der.DERStatusLink != nil {
-				derStatusHref = der.DERStatusLink.Href
-			} else {
-				log.Println("DER has no DERStatusLink; Phase 5 status reporting disabled")
+				if der.DERStatusLink != nil {
+					derStatusHref = der.DERStatusLink.Href
+				} else {
+					log.Println("DER has no DERStatusLink; Phase 5 status reporting disabled")
+				}
+				log.Println("DER capability and settings reported")
 			}
-			log.Println("DER capability and settings reported")
 		}
 	}
 
