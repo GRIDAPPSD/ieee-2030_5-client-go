@@ -274,22 +274,35 @@ func TestLookupOwnEndDevice_OtherLFDIsNotOurs(t *testing.T) {
 
 }
 
-// TestLookupOwnEndDevice_CaseSensitiveLFDI is the IEEE-029 case 3 sharpening:
-// the production code uses exact case-sensitive string equality against the
-// uppercase-hex 40-char LFDI form produced by internal/tls.LFDI. A list
-// entry whose LFDI is the lowercased version of ours must still miss.
-func TestLookupOwnEndDevice_CaseSensitiveLFDI(t *testing.T) {
+// TestLookupOwnEndDevice_CaseInsensitiveLFDI codifies the IEEE-113 fix:
+// IEEE 2030.5 / CSIP servers commonly emit lowercase `<lFDI>` on the wire
+// (xs:hexBinary is case-insensitive per W3C XML Schema Part 2; SunSpec test
+// PKI documents the canonical LFDI in lowercase). The Go client computes
+// its own LFDI as uppercase via fmt.Sprintf("%X", ...) in internal/tls.LFDI.
+// LookupOwnEndDevice MUST match across cases — case-sensitive equality
+// produced a silent CSIP interop failure (caller idle-polls forever on a
+// false ErrEndDeviceNotFound) before IEEE-113 switched the comparison to
+// strings.EqualFold.
+//
+// This test supersedes the pre-IEEE-113 TestLookupOwnEndDevice_CaseSensitiveLFDI
+// fixture, which asserted the bug as expected behavior.
+func TestLookupOwnEndDevice_CaseInsensitiveLFDI(t *testing.T) {
 	t.Parallel()
 	env := newCCMTestEnv(t)
 
 	// Stand up a placeholder listener so we can build the client and
-	// learn its LFDI; the real listener with the lowercased entry comes
-	// next.
+	// learn its (uppercase) LFDI; the real listener echoes back the
+	// lowercased form to simulate an external server.
 	probeMux := http.NewServeMux()
 	probeURL, probeStop := startIdleListener(t, env, probeMux)
 	probeClient := newCSIPClient(t, env, probeURL, true)
-	ourLower := strings.ToLower(probeClient.LFDI())
+	ourUpper := probeClient.LFDI()
+	ourLower := strings.ToLower(ourUpper)
 	probeStop()
+
+	if ourUpper == ourLower {
+		t.Fatalf("client LFDI %q is not uppercase-hex; test premise broken", ourUpper)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/edev", func(w http.ResponseWriter, _ *http.Request) {
@@ -304,9 +317,15 @@ func TestLookupOwnEndDevice_CaseSensitiveLFDI(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, _, err := client.LookupOwnEndDevice(ctx, "/edev")
-	if !errors.Is(err, inverter.ErrEndDeviceNotFound) {
-		t.Errorf("lowercased LFDI matched: err = %v, want ErrEndDeviceNotFound (case-sensitive)", err)
+	edev, _, err := client.LookupOwnEndDevice(ctx, "/edev")
+	if err != nil {
+		t.Fatalf("LookupOwnEndDevice: err = %v, want nil (lowercase LFDI must match uppercase client LFDI)", err)
+	}
+	// The returned EndDevice carries the server's on-the-wire LFDI casing;
+	// we only care that the match succeeded and that the same record came
+	// back. Compare case-insensitively for symmetry with the fix.
+	if !strings.EqualFold(edev.LFDI, ourUpper) {
+		t.Errorf("matched edev.LFDI = %q, want case-fold equal to %q", edev.LFDI, ourUpper)
 	}
 }
 
