@@ -23,8 +23,9 @@ type HMIDataPoint struct {
 
 // HMI serves the real-time web dashboard with Apache ECharts.
 type HMI struct {
-	mu      sync.RWMutex
-	clients map[chan []byte]struct{}
+	mu         sync.RWMutex
+	clients    map[chan []byte]struct{}
+	notifyAddr string
 }
 
 // NewHMI creates a new HMI server.
@@ -32,6 +33,23 @@ func NewHMI() *HMI {
 	return &HMI{
 		clients: make(map[chan []byte]struct{}),
 	}
+}
+
+// SetNotifyAddr records the bound address of the IEEE-049 Notification
+// receiver so the dashboard can surface it to the operator. Empty string
+// signals "no listener bound." Safe to call concurrently with reads.
+func (h *HMI) SetNotifyAddr(addr string) {
+	h.mu.Lock()
+	h.notifyAddr = addr
+	h.mu.Unlock()
+}
+
+// NotifyAddr returns the most recently recorded Notification receiver
+// address. Safe to call concurrently with SetNotifyAddr.
+func (h *HMI) NotifyAddr() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.notifyAddr
 }
 
 // Broadcast sends a data point to all connected WebSocket clients.
@@ -58,7 +76,22 @@ func (h *HMI) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.handleDashboard)
 	mux.HandleFunc("/ws", h.handleWebSocket)
+	mux.HandleFunc("/notify-addr", h.handleNotifyAddr)
 	return mux
+}
+
+// handleNotifyAddr returns the IEEE-049 Notification receiver address as
+// plain text. Returns the literal "disabled" when no address is recorded.
+// Useful for operator scripts that want to know where to point a server-
+// side subscription POST.
+func (h *HMI) handleNotifyAddr(w http.ResponseWriter, _ *http.Request) {
+	addr := h.NotifyAddr()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if addr == "" {
+		_, _ = fmt.Fprintln(w, "disabled")
+		return
+	}
+	_, _ = fmt.Fprintf(w, "https://%s/notify\n", addr)
 }
 
 func (h *HMI) handleDashboard(w http.ResponseWriter, r *http.Request) {
