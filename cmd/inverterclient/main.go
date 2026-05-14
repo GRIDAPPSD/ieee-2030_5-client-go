@@ -233,7 +233,7 @@ func main() {
 		}
 		go func() {
 			log.Printf("HMI dashboard: http://localhost:%d", *hmiPort)
-			if err := hmiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := hmiServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("HMI server error: %v", err)
 			}
 		}()
