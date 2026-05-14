@@ -24,6 +24,28 @@ import (
 // See IEEE-026.
 const defaultServerURL = "https://localhost:8443"
 
+// HMI server timeout defaults. The HMI is a local dashboard, but zero
+// timeouts still allow Slowloris exhaustion against an unprotected port.
+const (
+	hmiReadHeaderTimeout = 10 * time.Second
+	hmiReadTimeout       = 30 * time.Second
+	hmiWriteTimeout      = 30 * time.Second
+	hmiIdleTimeout       = 120 * time.Second
+)
+
+// newHMIServer constructs the HMI http.Server with bounded timeouts.
+// port is the TCP port to bind. The handler is set by the caller after HMI
+// initialisation (see hmi.Handler()).
+func newHMIServer(port int) *http.Server {
+	return &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		ReadHeaderTimeout: hmiReadHeaderTimeout,
+		ReadTimeout:       hmiReadTimeout,
+		WriteTimeout:      hmiWriteTimeout,
+		IdleTimeout:       hmiIdleTimeout,
+	}
+}
+
 // redactPIN masks all but the last 2 digits of a PIN. Per IEEE 2030.5 §8.2.1
 // the last digit is a check digit; the trailing 2 digits are conventional
 // in security UIs for redaction that preserves the check-digit signature
@@ -227,10 +249,8 @@ func main() {
 	var hmi *inverter.HMI
 	if *hmiPort > 0 {
 		hmi = inverter.NewHMI()
-		hmiServer := &http.Server{
-			Addr:    fmt.Sprintf(":%d", *hmiPort),
-			Handler: hmi.Handler(),
-		}
+		hmiServer := newHMIServer(*hmiPort)
+		hmiServer.Handler = hmi.Handler()
 		go func() {
 			log.Printf("HMI dashboard: http://localhost:%d", *hmiPort)
 			if err := hmiServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
