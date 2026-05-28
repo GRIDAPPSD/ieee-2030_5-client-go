@@ -7,7 +7,8 @@ const DefaultDroopPct = 5.0
 
 // FreqDroop calculates the active power adjustment for frequency droop response.
 // Per IEEE 1547 section 6.5.2.7:
-//   deltaP = -(deltaF / (droopPct/100 * nominalHz)) * ratedW
+//
+//	deltaP = -(deltaF / (droopPct/100 * nominalHz)) * ratedW
 //
 // Returns the adjusted active power in watts, clamped to [0, preDisturbancePW].
 // droopPct is a percentage (e.g., 5.0 = 5%).

@@ -13,14 +13,14 @@ func TestIrradiance(t *testing.T) {
 		want float64
 		tol  float64
 	}{
-		{0, 0, 0, 0},           // midnight
-		{6, 0, 0, 1},           // sunrise (sin(0) = 0)
-		{9, 0, 707, 5},         // sin(π/4) ≈ 0.707
-		{12, 0, 1000, 1},       // noon peak
-		{15, 0, 707, 5},        // afternoon sin(3π/4) ≈ 0.707
-		{18, 0, 0, 1},          // sunset
-		{21, 0, 0, 0},          // night
-		{3, 0, 0, 0},           // night
+		{0, 0, 0, 0},     // midnight
+		{6, 0, 0, 1},     // sunrise (sin(0) = 0)
+		{9, 0, 707, 5},   // sin(π/4) ≈ 0.707
+		{12, 0, 1000, 1}, // noon peak
+		{15, 0, 707, 5},  // afternoon sin(3π/4) ≈ 0.707
+		{18, 0, 0, 1},    // sunset
+		{21, 0, 0, 0},    // night
+		{3, 0, 0, 0},     // night
 	}
 
 	for _, tt := range tests {

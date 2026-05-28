@@ -9,15 +9,15 @@ import (
 
 // HMIDataPoint is a single data sample sent to the web UI via WebSocket.
 type HMIDataPoint struct {
-	Time    string  `json:"time"`    // formatted timestamp
-	SimTime string  `json:"simTime"` // simulation time
-	P       float64 `json:"p"`       // active power (W)
-	Q       float64 `json:"q"`       // reactive power (VAr)
-	PF      float64 `json:"pf"`      // power factor
-	V       float64 `json:"v"`       // voltage (p.u.)
-	F       float64 `json:"f"`       // frequency (Hz)
-	Mode    string  `json:"mode"`    // control mode name
-	Connected bool  `json:"connected"`
+	Time       string  `json:"time"`    // formatted timestamp
+	SimTime    string  `json:"simTime"` // simulation time
+	P          float64 `json:"p"`       // active power (W)
+	Q          float64 `json:"q"`       // reactive power (VAr)
+	PF         float64 `json:"pf"`      // power factor
+	V          float64 `json:"v"`       // voltage (p.u.)
+	F          float64 `json:"f"`       // frequency (Hz)
+	Mode       string  `json:"mode"`    // control mode name
+	Connected  bool    `json:"connected"`
 	Irradiance float64 `json:"irradiance"` // W/m²
 }
 

@@ -57,15 +57,15 @@ type LogEventEmitter interface {
 // stamped into the alarm-onset record but not into the LogEvent itself
 // (the emitter pulls server-synced time from c.Now()).
 type AlarmInputs struct {
-	Grid              GridState
-	Connected         bool
-	Energized         bool
-	ActivePowerW      float64 // post-curtailment active power
-	ReactivePowerVAr  float64 // post-VV reactive power
-	PreDisturbancePW  float64 // active power setpoint before any curtailment
-	RatedVAr          float64 // for the |Q|/rated threshold check
-	AbnormalDuration  time.Duration
-	Time              time.Time
+	Grid             GridState
+	Connected        bool
+	Energized        bool
+	ActivePowerW     float64 // post-curtailment active power
+	ReactivePowerVAr float64 // post-VV reactive power
+	PreDisturbancePW float64 // active power setpoint before any curtailment
+	RatedVAr         float64 // for the |Q|/rated threshold check
+	AbnormalDuration time.Duration
+	Time             time.Time
 }
 
 // AlarmState is the per-class on/off bit the detector remembers
@@ -78,13 +78,13 @@ type AlarmInputs struct {
 // machine already tracks the bits so adding the emit site is a
 // one-liner.
 type AlarmState struct {
-	VoltageLow      bool
-	VoltageHigh     bool
-	FrequencyLow    bool
-	FrequencyHigh   bool
-	ReactiveLimit   bool
-	ActiveLimit     bool
-	GenDisable      bool
+	VoltageLow    bool
+	VoltageHigh   bool
+	FrequencyLow  bool
+	FrequencyHigh bool
+	ReactiveLimit bool
+	ActiveLimit   bool
+	GenDisable    bool
 }
 
 // AlarmDetector is the edge-triggered alarm tracker. Construct via

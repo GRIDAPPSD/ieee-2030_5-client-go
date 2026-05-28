@@ -6,20 +6,20 @@
 //
 // Cases 1-6 map to the IEEE-047 ticket's test contract:
 //
-//	1. 200 OK happy path: no redirect, behavior unchanged from IEEE-046.
-//	2. Single 301 → 200: follow-once, body returned, newHref surfaced.
-//	3. Two 301s in a row: first followed, second *MovedError propagated
-//	   without further retry (no chain following per RFC 7231 §6.4.2 /
-//	   CSIP V1.2 §6.6).
-//	4. 301 with empty Location: *MovedError returned with empty Location;
-//	   no follow attempted, no crash.
-//	5. POST with 301: same single-follow behavior; the request body is
-//	   re-sent on the follow attempt (verified by reading the second
-//	   request body server-side and asserting equality with the first).
-//	6. Caller updates cached href: integration via Get's newHref return
-//	   value — the test holds a local href var, sees the surfaced new
-//	   href, and re-issues a second GET against the updated value with
-//	   the redirect handler no longer firing.
+//  1. 200 OK happy path: no redirect, behavior unchanged from IEEE-046.
+//  2. Single 301 → 200: follow-once, body returned, newHref surfaced.
+//  3. Two 301s in a row: first followed, second *MovedError propagated
+//     without further retry (no chain following per RFC 7231 §6.4.2 /
+//     CSIP V1.2 §6.6).
+//  4. 301 with empty Location: *MovedError returned with empty Location;
+//     no follow attempted, no crash.
+//  5. POST with 301: same single-follow behavior; the request body is
+//     re-sent on the follow attempt (verified by reading the second
+//     request body server-side and asserting equality with the first).
+//  6. Caller updates cached href: integration via Get's newHref return
+//     value — the test holds a local href var, sees the surfaced new
+//     href, and re-issues a second GET against the updated value with
+//     the redirect handler no longer firing.
 package inverter_test
 
 import (

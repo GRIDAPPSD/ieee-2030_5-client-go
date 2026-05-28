@@ -165,10 +165,10 @@ func responsePOSTHook(client responsePoster, lfdi string, now nowFunc, retryCfg 
 //
 // Edges that DO produce a wire status:
 //
-//	*                 → EVENT_RECEIVED   ⇒ ResponseStatusEventReceived  (1)
-//	EVENT_RECEIVED    → EVENT_STARTED    ⇒ ResponseStatusEventStarted   (2)
-//	EVENT_STARTED     → EVENT_COMPLETED  ⇒ ResponseStatusEventCompleted (3)
-//	*                 → EVENT_CANCELLED  ⇒ ResponseStatusEventCancelled (6)
+//   - → EVENT_RECEIVED   ⇒ ResponseStatusEventReceived  (1)
+//     EVENT_RECEIVED    → EVENT_STARTED    ⇒ ResponseStatusEventStarted   (2)
+//     EVENT_STARTED     → EVENT_COMPLETED  ⇒ ResponseStatusEventCompleted (3)
+//   - → EVENT_CANCELLED  ⇒ ResponseStatusEventCancelled (6)
 //
 // Pure function. No state, no side effects.
 func mapTransitionToStatus(prev, next inverter.EventState) uint8 {

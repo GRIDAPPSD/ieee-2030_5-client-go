@@ -40,10 +40,10 @@ func EvaluateCurve(points []CurvePoint, x float64) float64 {
 // Positive Y = over-excited (injecting vars), negative = under-excited (absorbing).
 func VoltVarDefaultCurve() []CurvePoint {
 	return []CurvePoint{
-		{X: 0.92, Y: 1.0},   // V1: full var injection (over-excited)
-		{X: 0.98, Y: 0.0},   // V2: deadband start
-		{X: 1.02, Y: 0.0},   // V3: deadband end
-		{X: 1.08, Y: -1.0},  // V4: full var absorption (under-excited)
+		{X: 0.92, Y: 1.0},  // V1: full var injection (over-excited)
+		{X: 0.98, Y: 0.0},  // V2: deadband start
+		{X: 1.02, Y: 0.0},  // V3: deadband end
+		{X: 1.08, Y: -1.0}, // V4: full var absorption (under-excited)
 	}
 }
 
@@ -51,8 +51,8 @@ func VoltVarDefaultCurve() []CurvePoint {
 // for Category B. X = voltage (p.u.), Y = active power (fraction of rated W).
 func VoltWattDefaultCurve() []CurvePoint {
 	return []CurvePoint{
-		{X: 1.06, Y: 1.0},  // V1: rated power
-		{X: 1.10, Y: 0.2},  // V2: minimum power (20%)
+		{X: 1.06, Y: 1.0}, // V1: rated power
+		{X: 1.10, Y: 0.2}, // V2: minimum power (20%)
 	}
 }
 
