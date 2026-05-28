@@ -27,30 +27,30 @@ type GridState struct {
 
 // InverterState represents the current inverter output and status.
 type InverterState struct {
-	ActivePowerW    float64     // output active power (W), positive = delivering
-	ReactivePowerVAr float64   // output reactive power (VAr), positive = over-excited
-	PowerFactor     float64     // power factor (0-1)
-	VoltsPU         float64     // measured voltage per-unit
-	FreqHz          float64     // measured frequency Hz
-	Connected       bool        // galvanic connection to grid
-	Energized       bool        // delivering/absorbing power
-	Mode            ControlMode // active control mode
-	Time            time.Time   // state timestamp
+	ActivePowerW     float64     // output active power (W), positive = delivering
+	ReactivePowerVAr float64     // output reactive power (VAr), positive = over-excited
+	PowerFactor      float64     // power factor (0-1)
+	VoltsPU          float64     // measured voltage per-unit
+	FreqHz           float64     // measured frequency Hz
+	Connected        bool        // galvanic connection to grid
+	Energized        bool        // delivering/absorbing power
+	Mode             ControlMode // active control mode
+	Time             time.Time   // state timestamp
 }
 
 // ControlMode identifies the active IEEE 1547 control mode.
 type ControlMode int
 
 const (
-	ModeConstantPF  ControlMode = iota // 5.3.2 constant power factor
-	ModeVoltVar                        // 5.3.3 voltage-reactive power
-	ModeWattVar                        // 5.3.4 active power-reactive power
-	ModeConstantQ                      // 5.3.5 constant reactive power
-	ModeVoltWatt                       // 5.4.2 voltage-active power
-	ModeFreqDroop                      // 6.5.2.7 frequency droop
-	ModeDisconnected                   // ceased to energize
-	ModeTripped                        // protective trip
-	ModeEnterService                   // waiting to enter service
+	ModeConstantPF   ControlMode = iota // 5.3.2 constant power factor
+	ModeVoltVar                         // 5.3.3 voltage-reactive power
+	ModeWattVar                         // 5.3.4 active power-reactive power
+	ModeConstantQ                       // 5.3.5 constant reactive power
+	ModeVoltWatt                        // 5.4.2 voltage-active power
+	ModeFreqDroop                       // 6.5.2.7 frequency droop
+	ModeDisconnected                    // ceased to energize
+	ModeTripped                         // protective trip
+	ModeEnterService                    // waiting to enter service
 )
 
 // String returns the mode name.

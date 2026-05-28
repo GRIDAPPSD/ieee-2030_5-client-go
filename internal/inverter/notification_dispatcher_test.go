@@ -470,8 +470,8 @@ func TestPhaseStateDispatcher_Status1_InvokesCancelHook(t *testing.T) {
 	}
 
 	var (
-		mu        sync.Mutex
-		gotHrefs  []string
+		mu       sync.Mutex
+		gotHrefs []string
 	)
 	d.RegisterCancelHook(func(h string) {
 		mu.Lock()

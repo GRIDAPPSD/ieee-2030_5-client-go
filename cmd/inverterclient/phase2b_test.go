@@ -583,4 +583,3 @@ func TestRunPhase2b_CtxCancelDuringServerPINZeroIdle(t *testing.T) {
 		t.Errorf("Registration GET hits = %d, want at least 1 (loop must enter the idle path)", n)
 	}
 }
-

@@ -241,4 +241,3 @@ func TestInverterStrictRejectsGCMOnlyServer(t *testing.T) {
 		t.Fatalf("Discover hung until context deadline: %v", err)
 	}
 }
-

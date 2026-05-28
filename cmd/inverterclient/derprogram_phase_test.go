@@ -246,9 +246,9 @@ type derProgramFixture struct {
 }
 
 type fsaFixture struct {
-	mRID                string
-	derProgramListPath  string // empty -> no DERProgramListLink on the FSA
-	programs            []derProgramFixture
+	mRID               string
+	derProgramListPath string // empty -> no DERProgramListLink on the FSA
+	programs           []derProgramFixture
 }
 
 // mountFSAFixture installs handlers for one FSA's DERProgramList and the

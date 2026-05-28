@@ -6,10 +6,10 @@ import "time"
 type RideThroughState int
 
 const (
-	RTNormal          RideThroughState = iota
-	RTRidingThrough                   // within ride-through region
-	RTTripped                         // protective trip
-	RTWaitReconnect                   // waiting for reconnect delay
+	RTNormal        RideThroughState = iota
+	RTRidingThrough                  // within ride-through region
+	RTTripped                        // protective trip
+	RTWaitReconnect                  // waiting for reconnect delay
 )
 
 // RideThroughResult is the output of the ride-through evaluator.
@@ -21,12 +21,12 @@ type RideThroughResult struct {
 
 // IEEE 1547 Table 4: Enter service criteria (Category B)
 const (
-	EnterServiceVMin float64       = 0.917  // minimum voltage p.u.
-	EnterServiceVMax float64       = 1.05   // maximum voltage p.u.
-	EnterServiceFMin float64       = 59.5   // minimum frequency Hz
-	EnterServiceFMax float64       = 60.1   // maximum frequency Hz
+	EnterServiceVMin  float64       = 0.917             // minimum voltage p.u.
+	EnterServiceVMax  float64       = 1.05              // maximum voltage p.u.
+	EnterServiceFMin  float64       = 59.5              // minimum frequency Hz
+	EnterServiceFMax  float64       = 60.1              // maximum frequency Hz
 	EnterServiceDelay time.Duration = 300 * time.Second // intentional delay
-	ReconnectDelay   time.Duration = 300 * time.Second // Category B
+	ReconnectDelay    time.Duration = 300 * time.Second // Category B
 )
 
 // CheckEnterService returns true if grid conditions allow entering service

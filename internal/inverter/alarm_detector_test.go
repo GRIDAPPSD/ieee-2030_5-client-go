@@ -33,10 +33,10 @@ import (
 // lets a single test exercise the deny path (push ErrRateLimited or
 // ErrMethodNotAllowed) without rewiring transports.
 type stubEmitter struct {
-	mu        sync.Mutex
-	calls     []sep2.LogEvent
-	hrefs     []string
-	nextErr   []error
+	mu      sync.Mutex
+	calls   []sep2.LogEvent
+	hrefs   []string
+	nextErr []error
 }
 
 func (s *stubEmitter) PostLogEvent(_ context.Context, href string, evt sep2.LogEvent) (string, error) {
@@ -258,9 +258,9 @@ func TestAlarmDetector_Evaluate_ReRiseAfterFallEmits(t *testing.T) {
 	trip.Grid.VoltsPU = 0.40
 	trip.AbnormalDuration = 200 * time.Millisecond
 
-	d.Evaluate(context.Background(), trip)     // rise — emit #1
+	d.Evaluate(context.Background(), trip)      // rise — emit #1
 	d.Evaluate(context.Background(), nominal()) // fall
-	d.Evaluate(context.Background(), trip)     // rise again — emit #2
+	d.Evaluate(context.Background(), trip)      // rise again — emit #2
 
 	if got := len(em.calls); got != 2 {
 		t.Errorf("rise→fall→rise: %d calls, want 2", got)
@@ -312,9 +312,9 @@ func TestAlarmDetector_Evaluate_405Suppresses(t *testing.T) {
 	trip.Grid.VoltsPU = 0.40
 	trip.AbnormalDuration = 200 * time.Millisecond
 
-	d.Evaluate(context.Background(), trip)     // emit attempted, 405 → suppress
+	d.Evaluate(context.Background(), trip)      // emit attempted, 405 → suppress
 	d.Evaluate(context.Background(), nominal()) // fall
-	d.Evaluate(context.Background(), trip)     // re-rise — should NOT emit
+	d.Evaluate(context.Background(), trip)      // re-rise — should NOT emit
 
 	if got := len(em.calls); got != 1 {
 		t.Errorf("after 405 suppression, %d calls, want 1 (one suppress-marker call)", got)
@@ -330,9 +330,9 @@ func TestAlarmDetector_Evaluate_RateLimitedIsSoftDrop(t *testing.T) {
 	trip.Grid.VoltsPU = 0.40
 	trip.AbnormalDuration = 200 * time.Millisecond
 
-	d.Evaluate(context.Background(), trip)     // attempted, rate-limited → soft-drop, NOT suppressed
+	d.Evaluate(context.Background(), trip)      // attempted, rate-limited → soft-drop, NOT suppressed
 	d.Evaluate(context.Background(), nominal()) // fall
-	d.Evaluate(context.Background(), trip)     // re-rise, should attempt again
+	d.Evaluate(context.Background(), trip)      // re-rise, should attempt again
 
 	if got := len(em.calls); got != 2 {
 		t.Errorf("rate-limited: %d calls, want 2 (both attempts made)", got)

@@ -431,6 +431,7 @@ func (c *SEP2Client) Discover(ctx context.Context) (sep2.DeviceCapability, error
 //     assertion on req.URL.Path), returns the parsed EndDevice from the
 //     Location response.
 //  2. Empty href argument → error, no HTTP call.
+//
 // On 301 against edevListHref the underlying Post follows once and surfaces
 // the new edev-list URL as newEdevListHref so the caller (typically
 // cmd/inverterclient/main.go) can update its cached href before subsequent
@@ -489,6 +490,7 @@ func (c *SEP2Client) Register(ctx context.Context, edevListHref string) (registe
 //  3. --csip on, server list contains other LFDIs but not ours → ErrEndDeviceNotFound.
 //  4. --csip off → existing Register POST still fires /edev (no regression).
 //  5. Cursor paging: list > 255 entries (follow-up ticket; not filed yet).
+//
 // IEEE-047: on 301 the underlying Get follows once and the new edev-list
 // href (with the ?l=255 page query stripped) is surfaced as
 // newEdevListHref so the caller can update its cached copy before the next
@@ -551,6 +553,7 @@ func stripPagingQuery(followed, sep string) string {
 //   - empty href: returns error matching "registration href required".
 //   - server returns 404: error wrapped via c.Get, no panic.
 //   - malformed XML: error wrapped via c.Get, no panic.
+//
 // On 301 the underlying Get follows once internally; the new Registration
 // href is not surfaced — Phase 2b reads Registration exactly once per
 // startup and the caller does not loop on this resource.
@@ -585,6 +588,7 @@ func (c *SEP2Client) GetRegistration(ctx context.Context, registrationHref strin
 //  4. Malformed XML: error wrapped via c.Get, no panic.
 //  5. Pagination cap: list with > 255 entries — first 255 returned, rest
 //     deferred to cursor follow-up (no silent drop documented).
+//
 // IEEE-047: on 301 the underlying Get follows once and the new FSAList href
 // (with the ?l=255 page query stripped) is surfaced as newFSAListHref so
 // the caller can update its cached copy. newFSAListHref is "" when no
@@ -677,6 +681,7 @@ func (c *SEP2Client) PutDERStatus(ctx context.Context, derstatusHref string, sta
 //     deferred to cursor follow-up.
 //  7. Multi-FSA topology: each of 3 FSAs returns 2 DERPrograms; walker caches
 //     6 unique programs keyed by mRID.
+//
 // IEEE-047: on 301 the underlying Get follows once and the new
 // DERProgramList href (with the ?l=255 page query stripped) is surfaced as
 // newDERProgramListHref so callers walking per-FSA hrefs can refresh their

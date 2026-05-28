@@ -437,13 +437,17 @@ func TestRunTimeSync_EmptyHrefReturnsImmediately(t *testing.T) {
 // Tolerance: sep2.Time.CurrentTime is int64 epoch *seconds* (truncated).
 // When the server records `(localNow+42s).Unix()` it discards localNow's
 // sub-second fraction. The client then computes
-//     offset = time.Unix(serverSeconds, 0) - time.Now()
+//
+//	offset = time.Unix(serverSeconds, 0) - time.Now()
+//
 // where time.Now() carries the full nanosecond precision. The offset
 // therefore lands somewhere in the interval [41s, 42s] depending on the
 // sub-second fraction at sync time, NOT exactly 42s.
 //
 // So the valid window for client.Now() - time.Now() is roughly
-//     [42s - 1s - tinyDrift, 42s + tinyDrift]
+//
+//	[42s - 1s - tinyDrift, 42s + tinyDrift]
+//
 // where tinyDrift is real time elapsed between SyncServerTime returning
 // and the assertion's two clock reads (sub-ms in practice; we give it
 // 200ms of headroom). A regression like a sign-flipped offset would

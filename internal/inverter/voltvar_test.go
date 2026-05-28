@@ -12,10 +12,10 @@ func TestEvaluateCurveAtVertices(t *testing.T) {
 		x    float64
 		want float64
 	}{
-		{0.92, 1.0},   // V1
-		{0.98, 0.0},   // V2
-		{1.02, 0.0},   // V3
-		{1.08, -1.0},  // V4
+		{0.92, 1.0},  // V1
+		{0.98, 0.0},  // V2
+		{1.02, 0.0},  // V3
+		{1.08, -1.0}, // V4
 	}
 
 	for _, tt := range tests {
