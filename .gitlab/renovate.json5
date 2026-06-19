@@ -1,0 +1,13 @@
+// Renovate config for ieee-2030_5-client.
+//
+// NOTE: Renovate availability on gitlab.pnnl.gov is an open prereq question
+// (see .claude/rules/gitlab-instances.md "Open prereq questions for new
+// instances" item 6). If Renovate is not enabled on this instance, this
+// config is dormant; remove or ignore until the prereq is resolved.
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "assignees": ["@D3M614"],
+  "schedule": ["before 9am on monday"],
+  "enabledManagers": ["gomod", "gitlabci", "dockerfile"],
+}

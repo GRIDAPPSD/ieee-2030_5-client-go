@@ -1,0 +1,59 @@
+# AI assistant files
+CLAUDE.md
+.claude/
+*.claude
+
+# Local TLS material (dev/test PKI - never commit private keys)
+certs/
+
+# CSIP conformance fixtures. The SunSpec V1.2 test PKI is gitignored
+# per workspace policy and provisioned out of band (see
+# test/csip/README.md). Topology YAMLs (IEEE-057) ARE checked in.
+test/csip/fixtures/*
+!test/csip/fixtures/.gitkeep
+!test/csip/fixtures/*.yaml
+
+# Go build artifacts
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Go coverage
+*.out
+coverage.html
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Temporary files
+tmp/
+*.tmp
+
+# rapid (property-based testing) failure-repro files.
+# IEEE-116: failures reproduce from the seed logged in test output, not
+# from committed files. See plan-4-property-based-testing/plan.md.
+testdata/rapid/
