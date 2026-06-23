@@ -12,12 +12,14 @@ verify:
   image: golang:1.26
   tags: [forge]
   # B-F window: clone core to the path the go.mod replace directive expects.
-  # GITLAB_PNNL_KEY must be registered as a masked CI/CD variable in the project.
+  # Uses CI_JOB_TOKEN (auto-provisioned, ephemeral, masked) so no personal PAT
+  # is stored in the runner .git/config or leaked via git error output.
+  # Core's project must allowlist this project's job token (handled by Leon).
   # Both this before_script and the replace directive are removed in Phase F
   # when core v1.0.0 publishes and the replace flips to a real version reference.
   before_script:
     - mkdir -p /home/debian/repos
-    - git clone --depth=1 https://oauth2:${GITLAB_PNNL_KEY}@gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core.git /home/debian/repos/ieee-2030_5-core
+    - git clone --depth=1 https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core.git /home/debian/repos/ieee-2030_5-core
   script:
     - go vet ./...
     - go build ./...
