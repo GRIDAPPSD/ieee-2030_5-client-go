@@ -182,7 +182,7 @@ func TestProductionDispatcher_RegisterDERControlList_Validation(t *testing.T) {
 
 	cases := []struct {
 		name   string
-		client derControlListFetcher
+		client DERControlListFetcher
 		cache  *inverter.DERControlCache
 		href   string
 	}{
@@ -201,16 +201,28 @@ func TestProductionDispatcher_RegisterDERControlList_Validation(t *testing.T) {
 }
 
 // TestProductionDispatcher_NotYetRegistered_Drops asserts the dispatcher
-// logs and drops (does not crash) when Dispatch is called before Register.
+// logs and drops before RegisterDERControlList is called. The fetcher is
+// never called and the cache remains empty (data-invariants Rule 1).
 func TestProductionDispatcher_NotYetRegistered_Drops(t *testing.T) {
 	t.Parallel()
+
+	fake := &fakeFetcher{}
+	cache := inverter.NewDERControlCache()
+
+	// Construct dispatcher WITHOUT calling Register.
 	d := NewProductionDispatcher()
 	d.Dispatch(context.Background(), sep2.Notification{
 		Resource:           sep2.Resource{Href: "/edev/1/derp/1/derc"},
 		SubscribedResource: "/edev/1/derp/1/derc",
 		Status:             sep2.NotificationStatusChanged,
 	})
-	// No assertion beyond "did not panic": the log line is the audit trail.
+
+	if got := fake.calls(); got != 0 {
+		t.Errorf("unregistered dispatcher: fetcher called %d times; want 0", got)
+	}
+	if got := cache.Len(); got != 0 {
+		t.Errorf("sentinel cache Len = %d after unregistered dispatch; want 0", got)
+	}
 }
 
 // TestProductionDispatcher_GetError_LoggedNotFatal asserts a GET error does
@@ -276,5 +288,95 @@ func TestProductionDispatcher_ChildHref_Routed(t *testing.T) {
 	fake.mu.Unlock()
 	if gotHref != listHref {
 		t.Errorf("fetcher called with href=%q; want list href %q", gotHref, listHref)
+	}
+}
+
+// TestProductionDispatcher_Status1_NoHook asserts that a status=1
+// (subscription cancelled by server) notification with no registered cancel
+// hook logs and drops without calling the fetcher or mutating the cache.
+func TestProductionDispatcher_Status1_NoHook(t *testing.T) {
+	t.Parallel()
+
+	const listHref = "/edev/1/derp/1/derc"
+	fake := &fakeFetcher{}
+	cache := inverter.NewDERControlCache()
+	d := NewProductionDispatcher()
+	if err := d.RegisterDERControlList(fake, cache, listHref); err != nil {
+		t.Fatalf("RegisterDERControlList: %v", err)
+	}
+	// Intentionally do NOT register a cancel hook.
+
+	d.Dispatch(context.Background(), sep2.Notification{
+		Resource:           sep2.Resource{Href: listHref},
+		SubscribedResource: listHref,
+		Status:             sep2.NotificationStatusSubscripted,
+	})
+
+	// status=1 must NOT trigger a GET.
+	if got := fake.calls(); got != 0 {
+		t.Errorf("status=1 no-hook: fetcher called %d times; want 0", got)
+	}
+	// Cache must be untouched.
+	if got := cache.Len(); got != 0 {
+		t.Errorf("cache must remain empty on status=1 no-hook; got len %d", got)
+	}
+}
+
+// TestProductionDispatcher_EmptyHrefs_Drops asserts a notification with all
+// href fields empty drops cleanly without calling the fetcher.
+func TestProductionDispatcher_EmptyHrefs_Drops(t *testing.T) {
+	t.Parallel()
+
+	const listHref = "/edev/1/derp/1/derc"
+	fake := &fakeFetcher{}
+	cache := inverter.NewDERControlCache()
+	d := NewProductionDispatcher()
+	if err := d.RegisterDERControlList(fake, cache, listHref); err != nil {
+		t.Fatalf("RegisterDERControlList: %v", err)
+	}
+
+	// All href fields empty: changedResourceHref returns ""; dispatcher drops.
+	d.Dispatch(context.Background(), sep2.Notification{
+		SubscribedResource: "",
+		NewResourceURI:     "",
+		Status:             sep2.NotificationStatusChanged,
+	})
+
+	if got := fake.calls(); got != 0 {
+		t.Errorf("empty-href notification: fetcher called %d times; want 0", got)
+	}
+	if got := cache.Len(); got != 0 {
+		t.Errorf("cache must be untouched on empty-href notification; got len %d", got)
+	}
+}
+
+// TestProductionDispatcher_ContextCancelWrappedError exercises the
+// errors.Is(err, context.Canceled) branch inside refreshDERControlList when
+// the fetcher returns a WRAPPED context.Canceled error. The cache must
+// remain untouched (data-invariants Rule 1).
+func TestProductionDispatcher_ContextCancelWrappedError(t *testing.T) {
+	t.Parallel()
+
+	const listHref = "/edev/1/derp/1/derc"
+	fake := &fakeFetcher{
+		returnErr: fmt.Errorf("transport: %w", context.Canceled),
+	}
+	cache := inverter.NewDERControlCache()
+	d := NewProductionDispatcher()
+	if err := d.RegisterDERControlList(fake, cache, listHref); err != nil {
+		t.Fatalf("RegisterDERControlList: %v", err)
+	}
+
+	d.Dispatch(context.Background(), sep2.Notification{
+		Resource:           sep2.Resource{Href: listHref},
+		SubscribedResource: listHref,
+		Status:             sep2.NotificationStatusChanged,
+	})
+
+	if got := fake.calls(); got != 1 {
+		t.Errorf("expected 1 fetcher call; got %d", got)
+	}
+	if got := cache.Len(); got != 0 {
+		t.Errorf("cache must be untouched on wrapped Canceled error; got len %d", got)
 	}
 }

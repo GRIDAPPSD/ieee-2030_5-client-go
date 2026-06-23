@@ -156,16 +156,31 @@ func TestSimulatorDispatcher_UnknownHref_ZeroFetches(t *testing.T) {
 }
 
 // TestSimulatorDispatcher_NotYetRegistered_Drops asserts clean log+drop
-// before RegisterDERControlList is called.
+// before RegisterDERControlList is called. The fetcher is never called and
+// the cache remains empty (data-invariants Rule 1: no silent mutation).
 func TestSimulatorDispatcher_NotYetRegistered_Drops(t *testing.T) {
 	t.Parallel()
+
+	fake := &fakeFetcher{}
+	cache := inverter.NewDERControlCache()
+
+	// Construct dispatcher WITHOUT calling Register: client/cache/href stay nil/empty.
 	d := NewSimulatorDispatcher()
 	d.Dispatch(context.Background(), sep2.Notification{
 		Resource:           sep2.Resource{Href: "/edev/1/derp/1/derc"},
 		SubscribedResource: "/edev/1/derp/1/derc",
 		Status:             sep2.NotificationStatusChanged,
 	})
-	// No assertion beyond "did not panic."
+
+	// The unregistered dispatcher must not call the external fetcher.
+	if got := fake.calls(); got != 0 {
+		t.Errorf("unregistered dispatcher: fetcher called %d times; want 0", got)
+	}
+	// The cache we created independently must remain empty: the dispatcher
+	// dropped before it had any cache to write to.
+	if got := cache.Len(); got != 0 {
+		t.Errorf("sentinel cache Len = %d after unregistered dispatch; want 0", got)
+	}
 }
 
 // TestSimulatorDispatcher_EmptyHrefs_Drops asserts a notification with all
@@ -252,6 +267,40 @@ func TestSimulatorDispatcher_ContextCancellation(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("dispatch did not return after ctx cancel within 2s")
+	}
+}
+
+// TestSimulatorDispatcher_ContextCancelWrappedError exercises the
+// errors.Is(err, context.Canceled) branch inside refreshDERControlList when
+// the fetcher returns a WRAPPED context.Canceled error. This path must be
+// handled gracefully (log+return) without touching the cache.
+func TestSimulatorDispatcher_ContextCancelWrappedError(t *testing.T) {
+	t.Parallel()
+
+	const listHref = "/edev/1/derp/1/derc"
+	fake := &fakeFetcher{
+		// Wrap context.Canceled so errors.Is unwrapping is exercised.
+		returnErr: fmt.Errorf("fetch: %w", context.Canceled),
+	}
+	cache := inverter.NewDERControlCache()
+	d := NewSimulatorDispatcher()
+	if err := d.RegisterDERControlList(fake, cache, listHref); err != nil {
+		t.Fatalf("RegisterDERControlList: %v", err)
+	}
+
+	d.Dispatch(context.Background(), sep2.Notification{
+		Resource:           sep2.Resource{Href: listHref},
+		SubscribedResource: listHref,
+		Status:             sep2.NotificationStatusChanged,
+	})
+
+	// The fetcher was called once; the errors.Is(Canceled) branch must not
+	// mutate the cache.
+	if got := fake.calls(); got != 1 {
+		t.Errorf("expected 1 fetcher call; got %d", got)
+	}
+	if got := cache.Len(); got != 0 {
+		t.Errorf("cache must be untouched on wrapped Canceled error; got len %d", got)
 	}
 }
 

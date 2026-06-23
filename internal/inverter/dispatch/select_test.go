@@ -153,3 +153,19 @@ func TestCoherenceCheck_SimulatorWithSynthetic(t *testing.T) {
 		t.Error("simulator+synthetic must not warn; got warned=true")
 	}
 }
+
+// TestCoherenceCheck_ProductionWithGridLabD asserts that production+gridlabd
+// triggers a warning (same as any non-realdevice backend) and returns no
+// error. GridLAB-D is a co-simulation backend used for hardware-in-the-loop
+// commissioning: the combination is intentional but unusual enough to warrant
+// a log warning so the operator knows the mode.
+func TestCoherenceCheck_ProductionWithGridLabD(t *testing.T) {
+	t.Parallel()
+	warned, err := CheckRoleBackendCoherence("production", "gridlabd")
+	if err != nil {
+		t.Errorf("production+gridlabd should be permitted with warning; got error: %v", err)
+	}
+	if !warned {
+		t.Error("production+gridlabd should emit a warning; got warned=false")
+	}
+}
