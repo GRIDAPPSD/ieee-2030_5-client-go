@@ -51,7 +51,3 @@ type RegisterableDispatcher interface {
 type DERControlListFetcher interface {
 	GetDERControlList(ctx context.Context, href string) (sep2.DERControlList, string, error)
 }
-
-// derControlListFetcher is the package-internal alias used by the concrete
-// dispatcher types. It is the same shape as DERControlListFetcher.
-type derControlListFetcher = DERControlListFetcher

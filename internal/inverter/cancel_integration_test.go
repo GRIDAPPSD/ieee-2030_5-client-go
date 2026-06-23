@@ -1,8 +1,11 @@
 // IEEE-052 Phase 8 ticket 4 of 4 (final) — integration test for the
-// /notify listener → PhaseStateDispatcher → CancelHook chain.
+// /notify listener to SimulatorDispatcher to CancelHook chain.
+//
+// IEEESIM-004: updated to use dispatch.SimulatorDispatcher in place of the
+// removed inverter.PhaseStateDispatcher. Behavior and assertions are unchanged.
 //
 // Exercises the full stack: a real ccmTestEnv-backed NotifyReceiver
-// listening on TLS, an inverter.PhaseStateDispatcher wired with a
+// listening on TLS, a dispatch.SimulatorDispatcher wired with a
 // CancelHook that mutates a tiny inline registry, and a Notification
 // POSTed with status=1 (CSIP V1.2 CORE-019 step 13: "subscription
 // cancelled by server"). The assertion is that the registry entry for
@@ -18,7 +21,7 @@ import (
 	"sync"
 	"testing"
 
-	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter/dispatch"
 )
 
 // inlineRegistry is a minimal mutex-guarded subscription tracker used
@@ -78,7 +81,7 @@ func TestNotifyHandler_Status1_CancelHookMutatesRegistry(t *testing.T) {
 		t.Fatalf("seed registry len = %d, want 2", got)
 	}
 
-	dispatcher := inverter.NewPhaseStateDispatcher()
+	dispatcher := dispatch.NewSimulatorDispatcher()
 	dispatcher.RegisterCancelHook(func(subscribedHref string) {
 		registry.cancel(subscribedHref)
 	})

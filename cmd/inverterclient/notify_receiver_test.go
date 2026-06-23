@@ -6,8 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	certs "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2cert"
 	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter/dispatch"
+	certs "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2cert"
 )
 
 // writeCertEnv writes a fresh CA + device cert under t.TempDir() and
@@ -120,16 +121,16 @@ func TestStartNotifyReceiver_HappyPath(t *testing.T) {
 	}
 }
 
-// TestStartNotifyReceiver_AcceptsCustomDispatcher asserts the IEEE-051
+// TestStartNotifyReceiver_AcceptsCustomDispatcher asserts the IEEESIM-004
 // dispatcher seam: startNotifyReceiver forwards its dispatcher arg to
 // NewNotifyReceiver instead of forcing the NoopNotificationDispatcher.
 // This is the wiring point main() uses to install the real
-// *PhaseStateDispatcher (which is no-op until Register* is called).
+// dispatch.SimulatorDispatcher (which is no-op until Register* is called).
 func TestStartNotifyReceiver_AcceptsCustomDispatcher(t *testing.T) {
 	t.Parallel()
 
 	certFile, keyFile, caFile := writeCertEnv(t)
-	d := inverter.NewPhaseStateDispatcher()
+	d := dispatch.NewSimulatorDispatcher()
 
 	rcv := startNotifyReceiver(inverter.SimConfig{
 		CertFile: certFile,
@@ -140,8 +141,8 @@ func TestStartNotifyReceiver_AcceptsCustomDispatcher(t *testing.T) {
 		t.Fatal("expected non-nil receiver")
 	}
 	defer func() { _ = rcv.Stop(context.Background()) }()
-	// The receiver came up; that's the contract. Behavioral coverage of
-	// dispatcher routing lives in internal/inverter/notification_dispatcher_test.go.
+	// The receiver came up; that is the contract. Behavioral coverage of
+	// dispatcher routing lives in internal/inverter/dispatch/.
 }
 
 // TestStartNotifyReceiver_BindFailureBypass asserts that a bind failure

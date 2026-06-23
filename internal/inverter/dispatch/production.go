@@ -46,7 +46,7 @@ import (
 //     as simulator. TBD: revert-to-safe-default on cancel.
 type ProductionDispatcher struct {
 	mu                 sync.RWMutex
-	client             derControlListFetcher
+	client             DERControlListFetcher
 	cache              *inverter.DERControlCache
 	derControlListHref string
 	cancelHook         inverter.CancelHook
@@ -63,7 +63,7 @@ func NewProductionDispatcher() *ProductionDispatcher {
 // the dispatcher. Idempotent: subsequent calls replace the previous
 // configuration. Returns an error on nil/empty inputs.
 func (d *ProductionDispatcher) RegisterDERControlList(
-	client derControlListFetcher,
+	client DERControlListFetcher,
 	cache *inverter.DERControlCache,
 	href string,
 ) error {

@@ -62,9 +62,9 @@ func (r *subscriptionRegistry) Add(subscribedHref, serverSubHref string) {
 // subscription href that was removed (or "" if nothing was tracked) so
 // callers can log it.
 //
-// Bound as the IEEE-052 cancel hook on PhaseStateDispatcher via the
-// CancelMethod adapter (registry.Cancel has signature
-// `func(string) string`; CancelHook expects `func(string)`).
+// Bound as the IEEE-052 cancel hook on the dispatcher (SimulatorDispatcher
+// or ProductionDispatcher) via the CancelHookFunc adapter: registry.Cancel
+// has signature `func(string) string`; CancelHook expects `func(string)`.
 func (r *subscriptionRegistry) Cancel(subscribedHref string) string {
 	if subscribedHref == "" {
 		return ""

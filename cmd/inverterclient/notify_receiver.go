@@ -28,7 +28,7 @@ import (
 // the dashboard via SetNotifyAddr.
 //
 // dispatcher is the per-Notification callback IEEE-049 hands every
-// well-formed POST. main() passes a *inverter.PhaseStateDispatcher (IEEE-051)
+// well-formed POST. main() passes a dispatch.RegisterableDispatcher (IEEESIM-004)
 // constructed before Phase 5 wiring is done; the dispatcher self-handles
 // the unregistered case (log + drop) so the listener can come up before
 // the DERControlList href is known.

@@ -50,7 +50,7 @@ import (
 // read. The actual GET and cache update do not block other dispatches.
 type SimulatorDispatcher struct {
 	mu                 sync.RWMutex
-	client             derControlListFetcher
+	client             DERControlListFetcher
 	cache              *inverter.DERControlCache
 	derControlListHref string
 	// cancelHook is the optional seam invoked on status=1 notifications
@@ -73,7 +73,7 @@ func NewSimulatorDispatcher() *SimulatorDispatcher {
 // configuration. Passing href=="", cache==nil, or client==nil returns an
 // error so callers can degrade gracefully on misconfiguration.
 func (d *SimulatorDispatcher) RegisterDERControlList(
-	client derControlListFetcher,
+	client DERControlListFetcher,
 	cache *inverter.DERControlCache,
 	href string,
 ) error {
@@ -192,7 +192,7 @@ func resourceKindFor(changed, derControlListHref string) resourceKind {
 // cache. Mirrors the original notification_dispatcher.go implementation.
 func refreshDERControlList(
 	ctx context.Context,
-	client derControlListFetcher,
+	client DERControlListFetcher,
 	cache *inverter.DERControlCache,
 	href string,
 ) error {
@@ -214,10 +214,10 @@ func refreshDERControlList(
 // Pointer indirection lets both structs share this logic without embedding.
 func registerDERControlList(
 	mu *sync.RWMutex,
-	clientPtr *derControlListFetcher,
+	clientPtr *DERControlListFetcher,
 	cachePtr **inverter.DERControlCache,
 	hrefPtr *string,
-	client derControlListFetcher,
+	client DERControlListFetcher,
 	cache *inverter.DERControlCache,
 	href string,
 ) error {
