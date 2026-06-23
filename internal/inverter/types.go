@@ -123,10 +123,17 @@ type SimConfig struct {
 	// into every LogEvent the inverter POSTs (IEEE 2030.5 §9.5 logEventPEN).
 	// Production deployments must register their own PEN with IANA and
 	// configure it here (--pen flag / SEP2_PEN env). Zero (default) means
-	// "no manufacturer namespace" — acceptable for test / interop, but
+	// "no manufacturer namespace" -- acceptable for test / interop, but
 	// downstream operators reading log archives cannot disambiguate codes
 	// across vendors without a real PEN. See IEEE-053.
 	LogEventPEN uint32
+
+	// Backend selects the source of physical state for the simulation loop:
+	//   "synthetic" (default): the scenario harness, no external I/O.
+	//   "gridlabd": GridLAB-D co-simulation via HELICS (stub, IEEESIM-004).
+	//   "realdevice": SunSpec/Modbus hardware (stub, IEEESIM-005).
+	// Selection happens once at construction; the tick loop never branches on it.
+	Backend string
 }
 
 // CurvePoint is a single point on a piecewise linear control curve.

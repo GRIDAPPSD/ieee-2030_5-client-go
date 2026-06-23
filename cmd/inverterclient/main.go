@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter/device"
 	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 )
 
@@ -210,6 +211,10 @@ func main() {
 	}
 	notifyListen := flag.String("notify-listen", defaultNotifyListen, "inbound HTTPS Notification listener address (env: SEP2_NOTIFY_LISTEN; empty disables)")
 
+	// IEEESIM-003: backend selects the physical-state source for the tick loop.
+	// Default "synthetic" preserves the existing scenario-harness behavior.
+	flag.StringVar(&cfg.Backend, "backend", "synthetic", "device backend: synthetic|gridlabd|realdevice")
+
 	flag.Parse()
 
 	// IEEE-053: clamp PEN to uint32 range. flag.Uint64Var lets us catch
@@ -239,6 +244,14 @@ func main() {
 	scenario, ok := scenarios[cfg.Scenario]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown scenario: %s (use --list-scenarios)\n", cfg.Scenario)
+		os.Exit(1)
+	}
+
+	// IEEESIM-003: construct the DERDevice once. The tick loop talks only to
+	// dev; it never branches on backend identity.
+	dev, err := device.New(cfg, scenario)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "device.New: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -888,12 +901,18 @@ func main() {
 	}
 
 	// Phase 5: Simulation Loop
-	log.Printf("=== Phase 5: Simulation — %s ===", scenario.Name)
+	log.Printf("=== Phase 5: Simulation -- %s ===", scenario.Name)
 
-	simStart := time.Date(2024, 6, 21, 6, 0, 0, 0, time.UTC) // start at sunrise
-	simTime := simStart
-	stepIdx := 0
-	currentGrid := inverter.GridState{VoltsPU: 1.0, FreqHz: 60.0, Time: simTime}
+	// IEEESIM-003: the tick loop now talks only to dev (device.DERDevice).
+	// It never branches on backend identity; physical-state production and
+	// setpoint application are fully behind the interface. The scenario
+	// duration check uses an optional interface so the Synthetic backend can
+	// signal completion without the loop knowing its internals.
+	type scenarioEnder interface {
+		ScenarioDone() bool
+		SimTime() time.Time
+	}
+
 	lastReport := time.Time{}
 	// IEEE-054: track contiguous abnormal-condition duration so the trip
 	// curves in ridethrough.go have a duration argument. Reset on every
@@ -914,37 +933,38 @@ func main() {
 			log.Println("Shutting down...")
 			return
 		case <-ticker.C:
-			// Advance simulation time
-			simDelta := time.Duration(float64(cfg.TickInterval) * cfg.TimeScale)
-			simTime = simTime.Add(simDelta)
-			currentGrid.Time = simTime
+			// ReadState: advance the device's internal clock, walk scenario
+			// steps, and return the current grid conditions + power ceiling.
+			// On error (hardware comms loss), apply the fail-safe and skip
+			// the control cycle.
+			reading, readErr := dev.ReadState(ctx)
+			if readErr != nil {
+				log.Printf("ReadState failed (fail-safe): %v", readErr)
+				// Skip this tick; the next tick will retry.
+				continue
+			}
 
-			// Check if simulation duration exceeded
-			elapsed := simTime.Sub(simStart)
-			if elapsed >= scenario.Duration {
+			// Check scenario completion (Synthetic backend only via optional
+			// interface; hardware backends run until context cancellation).
+			if se, ok := dev.(scenarioEnder); ok && se.ScenarioDone() {
 				log.Printf("Scenario %s complete (duration %v)", scenario.Name, scenario.Duration)
 				return
 			}
 
-			// Apply scenario steps
-			for stepIdx < len(scenario.Steps) && elapsed >= scenario.Steps[stepIdx].AtTime {
-				step := scenario.Steps[stepIdx]
-				if step.Grid != nil {
-					currentGrid.VoltsPU = step.Grid.VoltsPU
-					currentGrid.FreqHz = step.Grid.FreqHz
-				}
-				log.Printf("[%v] %s", step.AtTime, step.Description)
-				stepIdx++
+			// Derive simTime for alarm-detection and logging. Hardware backends
+			// do not implement scenarioEnder; use wall time as a fallback so
+			// the alarm detector always gets a non-zero timestamp.
+			var simTime time.Time
+			if se, ok := dev.(scenarioEnder); ok {
+				simTime = se.SimTime()
+			} else {
+				simTime = reading.Grid.Time
 			}
 
-			// Compute power
-			irr := inverter.Irradiance(simTime)
-			maxP := inverter.MaxPowerW(irr)
-
 			// IEEE-041: source the active control base from the Phase 5 state
-			// machine. EVENT_STARTED → the active event's DERControlBase;
+			// machine. EVENT_STARTED -> the active event's DERControlBase;
 			// otherwise the program's DefaultDERControl base; otherwise nil
-			// (no CSIP server / no default provisioned → preserves the
+			// (no CSIP server / no default provisioned -> preserves the
 			// pre-IEEE-041 no-op semantics). See
 			// internal/inverter/applycontrols_base.go for the decision tree.
 			//
@@ -952,18 +972,24 @@ func main() {
 			// server-supplied Volt/Var and Volt/Watt curves; misses fall
 			// back to IEEE 1547 defaults inside the controller.
 			base := inverter.ActiveControlBase(stateMachine.Current(), defaultCtl)
-			controls := inverter.ApplyControlsWithCurves(base, currentGrid, maxP, curveCache)
+			controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, curveCache)
 
-			// Compute output
-			state := inverter.ComputeOutput(controls, currentGrid)
+			// ApplySetpoint: push the commanded control output to the device
+			// and get back the achieved InverterState.
+			state, applyErr := dev.ApplySetpoint(ctx, controls)
+			if applyErr != nil {
+				log.Printf("ApplySetpoint failed (fail-safe): %v", applyErr)
+				// Skip reporting for this tick; next tick retries.
+				continue
+			}
 
 			// IEEE-054: edge-triggered alarm-class detection. Track
 			// abnormal-condition duration so the IEEE 1547 trip curves
 			// see the right `dur` argument. Track the pre-disturbance
 			// active-power setpoint so LE_ACTIVE_LIMIT classification
 			// sees the unclipped value.
-			isNormalGrid := currentGrid.VoltsPU >= 0.88 && currentGrid.VoltsPU <= 1.10 &&
-				currentGrid.FreqHz >= 59.0 && currentGrid.FreqHz <= 60.5
+			isNormalGrid := reading.Grid.VoltsPU >= 0.88 && reading.Grid.VoltsPU <= 1.10 &&
+				reading.Grid.FreqHz >= 59.0 && reading.Grid.FreqHz <= 60.5
 			if isNormalGrid {
 				abnormalSince = time.Time{}
 				preDisturbancePW = state.ActivePowerW
@@ -975,18 +1001,19 @@ func main() {
 				abnormalDur = simTime.Sub(abnormalSince)
 			}
 			alarmDetector.Evaluate(ctx, inverter.AlarmInputs{
-				Grid:             currentGrid,
+				Grid:             reading.Grid,
 				Connected:        state.Connected,
 				Energized:        state.Energized,
 				ActivePowerW:     state.ActivePowerW,
 				ReactivePowerVAr: state.ReactivePowerVAr,
 				PreDisturbancePW: preDisturbancePW,
-				RatedVAr:         inverter.Rating.RatedVA, // RatedVAr ≈ RatedVA for unity-PF inverter
+				RatedVAr:         inverter.Rating.RatedVA, // RatedVAr ~= RatedVA for unity-PF inverter
 				AbnormalDuration: abnormalDur,
 				Time:             simTime,
 			})
 
-			// Broadcast to HMI
+			// Broadcast to HMI. reading.Irradiance carries the W/m^2 value
+			// from the Synthetic backend; other backends emit 0.
 			if hmi != nil {
 				hmi.Broadcast(inverter.HMIDataPoint{
 					Time:       time.Now().Format("15:04:05"),
@@ -998,7 +1025,7 @@ func main() {
 					F:          state.FreqHz,
 					Mode:       state.Mode.String(),
 					Connected:  state.Connected,
-					Irradiance: irr,
+					Irradiance: reading.Irradiance,
 				})
 			}
 
@@ -1014,7 +1041,7 @@ func main() {
 
 				log.Printf("  sim=%s P=%.0fW Q=%.0fVAr PF=%.3f V=%.3fpu F=%.1fHz mode=%s irr=%.0f",
 					simTime.Format("15:04"), state.ActivePowerW, state.ReactivePowerVAr,
-					state.PowerFactor, state.VoltsPU, state.FreqHz, state.Mode, irr)
+					state.PowerFactor, state.VoltsPU, state.FreqHz, state.Mode, reading.Irradiance)
 			}
 		}
 	}
