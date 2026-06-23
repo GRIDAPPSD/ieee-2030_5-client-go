@@ -134,6 +134,15 @@ type SimConfig struct {
 	//   "realdevice": SunSpec/Modbus hardware (stub, IEEESIM-005).
 	// Selection happens once at construction; the tick loop never branches on it.
 	Backend string
+
+	// Role selects the consumer-policy role for notification dispatch:
+	//   "simulator" (default): the SimulatorDispatcher cache-refresh policy.
+	//   "production": the ProductionDispatcher policy (scaffold with TBD
+	//     extension points; behaviorally equivalent to simulator at landing).
+	// Resolved once at construction into a concrete Dispatcher type per
+	// ADR-003. NOT a runtime branch in the dispatch path: the concrete TYPE
+	// is the role. See internal/inverter/dispatch for the factory.
+	Role string
 }
 
 // CurvePoint is a single point on a piecewise linear control curve.

@@ -17,6 +17,7 @@ import (
 
 	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
 	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter/device"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter/dispatch"
 	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 )
 
@@ -215,6 +216,12 @@ func main() {
 	// Default "synthetic" preserves the existing scenario-harness behavior.
 	flag.StringVar(&cfg.Backend, "backend", "synthetic", "device backend: synthetic|gridlabd|realdevice")
 
+	// IEEESIM-004: role selects the consumer-policy role for notification
+	// dispatch. Default "simulator" preserves the existing behavior. The role
+	// is resolved once at construction into a concrete Dispatcher type per
+	// ADR-003: NOT a runtime branch in the dispatch path.
+	flag.StringVar(&cfg.Role, "role", "simulator", "consumer-policy role: simulator|production")
+
 	flag.Parse()
 
 	// IEEE-053: clamp PEN to uint32 range. flag.Uint64Var lets us catch
@@ -255,6 +262,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// IEEESIM-004: construct the notification Dispatcher once at the same call
+	// site as device.New. The two axes (role, backend) are independent; any
+	// combination is constructible. Coherence check: production role with a
+	// synthetic or gridlabd backend is a permitted dry-run (Fork C decision)
+	// but unusual enough to warn loudly at startup.
+	notifyDispatcher, err := dispatch.New(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dispatch.New: %v\n", err)
+		os.Exit(1)
+	}
+	if warned, _ := dispatch.CheckRoleBackendCoherence(cfg.Role, cfg.Backend); warned {
+		log.Printf("WARNING: role=%q paired with backend=%q (production role with a non-realdevice backend is a dry-run commissioning combination, not the normal production path)", cfg.Role, cfg.Backend)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -276,19 +297,18 @@ func main() {
 	// listener uses the same gotls (CCM-8) stack as the outbound client
 	// and presents the device cert as its server cert.
 	//
-	// IEEE-051: the receiver is wired with a *PhaseStateDispatcher whose
-	// Phase 5 dependencies (client, cache, DERControlListHref) are bound
-	// later via RegisterDERControlList once those values are known. Until
-	// then the dispatcher logs + drops (IEEE-049 no-op semantics) — the
-	// listener can come up before the DERControlList href is discovered
-	// during Phase 4.
+	// IEEESIM-004: notifyDispatcher is now a dispatch.Dispatcher constructed
+	// above by dispatch.New(cfg). Phase 5 dependencies (client, cache,
+	// DERControlListHref) are bound later via RegisterDERControlList once those
+	// values are known. Until then the dispatcher logs and drops (IEEE-049
+	// no-op semantics): the listener can come up before the DERControlList href
+	// is discovered during Phase 4.
 	//
 	// Failure policy: graceful bypass (per IEEE-048 philosophy). The
-	// receiver is optional — CSIP V1.2 CORE-018 recommends but does not
+	// receiver is optional: CSIP V1.2 CORE-018 recommends but does not
 	// require it; the inverter has working polling for every function set
 	// in scope. If cert load, TCP bind, or address resolution fails, log
 	// the error and continue with polling-only rather than crash.
-	notifyDispatcher := inverter.NewPhaseStateDispatcher()
 	notifyReceiver := startNotifyReceiver(cfg, *notifyListen, hmi, notifyDispatcher.Dispatch)
 	if notifyReceiver != nil {
 		defer func() {
