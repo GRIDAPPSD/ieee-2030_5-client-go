@@ -37,8 +37,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/inverter"
-	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 )
 
 // writeTime encodes the supplied Time as SEP+XML to w.

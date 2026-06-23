@@ -25,7 +25,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 )
 
 func TestPhaseStateDispatcher_Integration_EndToEnd(t *testing.T) {

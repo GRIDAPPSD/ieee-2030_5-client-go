@@ -3,7 +3,7 @@ package inverter
 import (
 	"math"
 
-	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 )
 
 // ApplyControls processes a DERControlBase and grid state to determine

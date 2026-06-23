@@ -1,6 +1,6 @@
 package inverter
 
-import "github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
+import "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 
 // ActiveControlBase resolves which DERControlBase the simulation tick loop
 // should pass to ApplyControls. Closes the IEEE-041 defect at

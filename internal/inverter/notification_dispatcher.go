@@ -39,7 +39,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 )
 
 // derControlListFetcher is the narrow consumer-side interface the

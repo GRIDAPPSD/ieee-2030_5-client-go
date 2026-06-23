@@ -17,9 +17,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	sepTLS "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls"
-	gotls "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls/gotls"
-	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
+	sepTLS "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2tls"
+	gotls "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2tls/gotls"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 )
 
 // ErrEndDeviceNotFound is returned by LookupOwnEndDevice when the server's

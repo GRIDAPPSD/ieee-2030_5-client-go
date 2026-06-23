@@ -18,7 +18,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/inverter"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
 )
 
 // inlineRegistry is a minimal mutex-guarded subscription tracker used

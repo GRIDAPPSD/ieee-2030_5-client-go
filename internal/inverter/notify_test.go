@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/certs"
-	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/inverter"
-	gotls "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls/gotls"
-	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
+	certs "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2cert"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
+	gotls "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2tls/gotls"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 )
 
 // httpServerForHMI wraps the HMI handler in an httptest.Server so the

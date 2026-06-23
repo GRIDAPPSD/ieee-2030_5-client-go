@@ -1,6 +1,6 @@
 package inverter
 
-import "github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
+import "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 
 // SelectHighestPriority picks the highest-priority DERProgram from the cache
 // IEEE-036 populates during the Phase 2c FSA-walk in cmd/inverterclient/main.go.

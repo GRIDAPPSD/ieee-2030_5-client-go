@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/inverter"
-	sepTLS "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls"
-	gotls "github.com/GRIDAPPSD/ieee-2030_5-go/internal/tls/gotls"
-	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
+	sepTLS "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2tls"
+	gotls "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2tls/gotls"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 )
 
 // startIdleListener boots a gotls-backed HTTPS server backed by the supplied

@@ -11,7 +11,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/GRIDAPPSD/ieee-2030_5-go/pkg/sep2"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 )
 
 // TestRetryClock is the test-only adapter that satisfies the unexported

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/certs"
-	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/inverter"
+	certs "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2cert"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
 )
 
 // writeCertEnv writes a fresh CA + device cert under t.TempDir() and
