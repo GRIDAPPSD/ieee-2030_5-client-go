@@ -901,7 +901,7 @@ func main() {
 	}
 
 	// Phase 5: Simulation Loop
-	log.Printf("=== Phase 5: Simulation -- %s ===", scenario.Name)
+	log.Printf("=== Phase 5: Simulation: %s ===", scenario.Name)
 
 	// IEEESIM-003: the tick loop now talks only to dev (device.DERDevice).
 	// It never branches on backend identity; physical-state production and
@@ -978,7 +978,14 @@ func main() {
 			// and get back the achieved InverterState.
 			state, applyErr := dev.ApplySetpoint(ctx, controls)
 			if applyErr != nil {
-				log.Printf("ApplySetpoint failed (fail-safe): %v", applyErr)
+				switch {
+				case errors.Is(applyErr, device.ErrMalformedControl):
+					log.Printf("WARN ApplySetpoint guard-reject (malformed control): %v", applyErr)
+				case errors.Is(applyErr, device.ErrRateLimitExceeded):
+					log.Printf("WARN ApplySetpoint guard-reject (rate limit): %v", applyErr)
+				default:
+					log.Printf("ApplySetpoint failed (fail-safe active): %v", applyErr)
+				}
 				// Skip reporting for this tick; next tick retries.
 				continue
 			}

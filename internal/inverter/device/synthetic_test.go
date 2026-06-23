@@ -95,91 +95,85 @@ func TestSyntheticApplySetpoint_Disconnect(t *testing.T) {
 	}
 }
 
-// TestSyntheticGolden_Normal is the no-behavior-change gate for the normal
-// scenario. It runs a fixed number of ticks through the Synthetic backend and
-// asserts the resulting InverterState sequence equals the pre-refactor output
-// computed directly from ComputeOutput (identical math, different call site).
-func TestSyntheticGolden_Normal(t *testing.T) {
-	sc := inverter.NormalScenario()
-	// timeScale=3600: 1 real second = 1 sim hour, so 4 ticks cover 4 sim
-	// hours of the sunny-day curve.
-	const timeScale = 3600.0
-	const tick = time.Second
-	s := NewSynthetic(sc, tick, timeScale)
+// TestSyntheticScenarioDone asserts ScenarioDone is false before the scenario
+// duration is exceeded and true after (item 12).
+func TestSyntheticScenarioDone(t *testing.T) {
+	// Very short scenario: duration=10 minutes, timeScale=600 per second.
+	sc := inverter.Scenario{
+		Name:     "done-test",
+		Duration: 10 * time.Minute,
+		Steps:    []inverter.ScenarioStep{{AtTime: 0, Grid: &inverter.GridState{VoltsPU: 1.0, FreqHz: 60.0}}},
+	}
+	s := NewSynthetic(sc, 1*time.Second, 600) // 1 tick = 10 sim minutes
+
 	ctx := context.Background()
 
-	// Build the pre-refactor reference sequence by driving the same math
-	// directly (the old inline loop, extracted). Base is nil -> ConstantPF.
-	simStart := time.Date(2024, 6, 21, 6, 0, 0, 0, time.UTC)
-	refGrid := inverter.GridState{VoltsPU: 1.0, FreqHz: 60.0, Time: simStart}
-	refSimTime := simStart
-	const nTicks = 4
-
-	type tickResult struct {
-		state     inverter.InverterState
-		maxPowerW float64
-		irr       float64
-	}
-	refs := make([]tickResult, nTicks)
-	for i := range nTicks {
-		simDelta := time.Duration(float64(tick) * timeScale)
-		refSimTime = refSimTime.Add(simDelta)
-		refGrid.Time = refSimTime
-		irr := inverter.Irradiance(refSimTime)
-		maxP := inverter.MaxPowerW(irr)
-		controls := inverter.ApplyControlsWithCurves(nil, refGrid, maxP, nil)
-		refs[i] = tickResult{
-			state:     inverter.ComputeOutput(controls, refGrid),
-			maxPowerW: maxP,
-			irr:       irr,
-		}
+	// Before ticking: not done.
+	if s.ScenarioDone() {
+		t.Error("ScenarioDone should be false before any tick")
 	}
 
-	// Now drive the same ticks through the Synthetic backend and compare.
-	for i := range nTicks {
-		reading, err := s.ReadState(ctx)
-		if err != nil {
-			t.Fatalf("tick %d ReadState: %v", i, err)
-		}
-		controls := inverter.ApplyControlsWithCurves(nil, reading.Grid, reading.MaxPowerW, nil)
-		state, err := s.ApplySetpoint(ctx, controls)
-		if err != nil {
-			t.Fatalf("tick %d ApplySetpoint: %v", i, err)
-		}
-
-		ref := refs[i]
-		if state.ActivePowerW != ref.state.ActivePowerW {
-			t.Errorf("tick %d: ActivePowerW: want %.4f, got %.4f", i, ref.state.ActivePowerW, state.ActivePowerW)
-		}
-		if state.ReactivePowerVAr != ref.state.ReactivePowerVAr {
-			t.Errorf("tick %d: ReactivePowerVAr: want %.4f, got %.4f", i, ref.state.ReactivePowerVAr, state.ReactivePowerVAr)
-		}
-		if state.Connected != ref.state.Connected {
-			t.Errorf("tick %d: Connected: want %v, got %v", i, ref.state.Connected, state.Connected)
-		}
-		if state.Energized != ref.state.Energized {
-			t.Errorf("tick %d: Energized: want %v, got %v", i, ref.state.Energized, state.Energized)
-		}
-		if state.Mode != ref.state.Mode {
-			t.Errorf("tick %d: Mode: want %v, got %v", i, ref.state.Mode, state.Mode)
-		}
-		if reading.MaxPowerW != ref.maxPowerW {
-			t.Errorf("tick %d: MaxPowerW: want %.4f, got %.4f", i, ref.maxPowerW, reading.MaxPowerW)
-		}
-		if reading.Irradiance != ref.irr {
-			t.Errorf("tick %d: Irradiance: want %.4f, got %.4f", i, ref.irr, reading.Irradiance)
-		}
+	// After one tick: simTime = start + 10 min = exactly duration -> done.
+	if _, err := s.ReadState(ctx); err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	if !s.ScenarioDone() {
+		t.Error("ScenarioDone should be true after duration is reached")
 	}
 }
 
-// TestSyntheticGolden_VoltVar is the no-behavior-change gate for the voltvar
-// scenario. Runs through all scenario steps and compares field-by-field.
-func TestSyntheticGolden_VoltVar(t *testing.T) {
-	sc := inverter.VoltVarScenario()
-	// timeScale=600: 1 real second = 10 sim minutes; 6 ticks cover 1 sim
-	// hour (the full voltvar scenario duration).
-	const timeScale = 600.0
+// TestSyntheticSimTime asserts SimTime advances correctly each tick (item 12).
+func TestSyntheticSimTime(t *testing.T) {
+	sc := inverter.NormalScenario()
 	const tick = time.Second
+	const timeScale = 3600.0
+	s := NewSynthetic(sc, tick, timeScale)
+	ctx := context.Background()
+
+	simStart := time.Date(2024, 6, 21, 6, 0, 0, 0, time.UTC)
+	expectedAfterTick1 := simStart.Add(time.Duration(float64(tick) * timeScale))
+
+	if _, err := s.ReadState(ctx); err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	got := s.SimTime()
+	if !got.Equal(expectedAfterTick1) {
+		t.Errorf("SimTime after tick 1: want %v, got %v", expectedAfterTick1, got)
+	}
+}
+
+// goldenInverterStateFields is a helper that compares two InverterState values
+// field by field and reports failures via t.Errorf. Used by all golden tests.
+func goldenInverterStateFields(t *testing.T, label string, want, got inverter.InverterState) {
+	t.Helper()
+	if got.ActivePowerW != want.ActivePowerW {
+		t.Errorf("%s ActivePowerW: want %.4f, got %.4f", label, want.ActivePowerW, got.ActivePowerW)
+	}
+	if got.ReactivePowerVAr != want.ReactivePowerVAr {
+		t.Errorf("%s ReactivePowerVAr: want %.4f, got %.4f", label, want.ReactivePowerVAr, got.ReactivePowerVAr)
+	}
+	if got.PowerFactor != want.PowerFactor {
+		t.Errorf("%s PowerFactor: want %.6f, got %.6f", label, want.PowerFactor, got.PowerFactor)
+	}
+	if got.VoltsPU != want.VoltsPU {
+		t.Errorf("%s VoltsPU: want %.4f, got %.4f", label, want.VoltsPU, got.VoltsPU)
+	}
+	if got.Connected != want.Connected {
+		t.Errorf("%s Connected: want %v, got %v", label, want.Connected, got.Connected)
+	}
+	if got.Energized != want.Energized {
+		t.Errorf("%s Energized: want %v, got %v", label, want.Energized, got.Energized)
+	}
+	if got.Mode != want.Mode {
+		t.Errorf("%s Mode: want %v, got %v", label, want.Mode, got.Mode)
+	}
+}
+
+// runGoldenScenario is the shared harness for all golden scenario tests. It
+// drives both the reference (inline math) and the Synthetic backend for nTicks,
+// then compares field-by-field.
+func runGoldenScenario(t *testing.T, sc inverter.Scenario, tick time.Duration, timeScale float64) {
+	t.Helper()
 	s := NewSynthetic(sc, tick, timeScale)
 	ctx := context.Background()
 
@@ -188,6 +182,9 @@ func TestSyntheticGolden_VoltVar(t *testing.T) {
 	refStepIdx := 0
 	refGrid := inverter.GridState{VoltsPU: 1.0, FreqHz: 60.0, Time: simStart}
 	nTicks := int(sc.Duration / time.Duration(float64(tick)*timeScale))
+	if nTicks == 0 {
+		nTicks = 4 // fallback for scenarios shorter than one tick
+	}
 
 	for i := range nTicks {
 		simDelta := time.Duration(float64(tick) * timeScale)
@@ -216,14 +213,55 @@ func TestSyntheticGolden_VoltVar(t *testing.T) {
 			t.Fatalf("tick %d ApplySetpoint: %v", i, err)
 		}
 
-		if state.ActivePowerW != refState.ActivePowerW {
-			t.Errorf("tick %d: ActivePowerW: want %.4f, got %.4f", i, refState.ActivePowerW, state.ActivePowerW)
+		goldenInverterStateFields(t, "tick "+itoa(i), refState, state)
+
+		if reading.MaxPowerW != maxP {
+			t.Errorf("tick %d MaxPowerW: want %.4f, got %.4f", i, maxP, reading.MaxPowerW)
 		}
-		if state.ReactivePowerVAr != refState.ReactivePowerVAr {
-			t.Errorf("tick %d: ReactivePowerVAr: want %.4f, got %.4f", i, refState.ReactivePowerVAr, state.ReactivePowerVAr)
+		if reading.Irradiance != irr {
+			t.Errorf("tick %d Irradiance: want %.4f, got %.4f", i, irr, reading.Irradiance)
 		}
 		if reading.Grid.VoltsPU != refGrid.VoltsPU {
-			t.Errorf("tick %d: Grid.VoltsPU: want %v, got %v", i, refGrid.VoltsPU, reading.Grid.VoltsPU)
+			t.Errorf("tick %d Grid.VoltsPU: want %.4f, got %.4f", i, refGrid.VoltsPU, reading.Grid.VoltsPU)
 		}
 	}
+}
+
+// itoa is a tiny helper to avoid importing strconv just for a label.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	buf := [20]byte{}
+	pos := len(buf)
+	for n > 0 {
+		pos--
+		buf[pos] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[pos:])
+}
+
+// TestSyntheticGolden_Normal is the no-behavior-change gate for the normal
+// scenario (items 13, 14).
+func TestSyntheticGolden_Normal(t *testing.T) {
+	runGoldenScenario(t, inverter.NormalScenario(), time.Second, 3600.0)
+}
+
+// TestSyntheticGolden_VoltVar is the no-behavior-change gate for the voltvar
+// scenario (items 13, 14).
+func TestSyntheticGolden_VoltVar(t *testing.T) {
+	runGoldenScenario(t, inverter.VoltVarScenario(), time.Second, 600.0)
+}
+
+// TestSyntheticGolden_FreqDroop is the no-behavior-change gate for the
+// freqdroop scenario, exercising the frequency step path (item 13).
+func TestSyntheticGolden_FreqDroop(t *testing.T) {
+	runGoldenScenario(t, inverter.FreqDroopScenario(), time.Second, 600.0)
+}
+
+// TestSyntheticGolden_VoltageRide is the no-behavior-change gate for the
+// voltageride scenario, exercising the trip / ride-through step path (item 13).
+func TestSyntheticGolden_VoltageRide(t *testing.T) {
+	runGoldenScenario(t, inverter.VoltageRideScenario(), time.Second, 600.0)
 }

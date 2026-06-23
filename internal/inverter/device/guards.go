@@ -66,6 +66,12 @@ func (tb *tokenBucket) allow() bool {
 // guardedDevice wraps a DERDevice with the five safety guards.
 // It is created by WithSafetyGuards and is the only entity that should
 // ever wrap a RealDevice. Synthetic and GridLABD paths bypass it entirely.
+//
+// Concurrency: guardedDevice is NOT safe for concurrent callers. The mu
+// mutex protects only the lastGood cache; it does NOT protect the inner
+// blocking call in ApplySetpoint. The future hardware ticket (IEEESIM-007)
+// must enforce single-caller discipline or add a call-level lock if the
+// tick loop and a reporting goroutine need concurrent access.
 type guardedDevice struct {
 	inner     DERDevice
 	nameplate Nameplate
@@ -162,8 +168,11 @@ func clampToNameplate(c inverter.ControlOutputs, np Nameplate) inverter.ControlO
 	return c
 }
 
-// rejectMalformed is guard 5: reject NaN, infinite, or negative ActivePowerW
-// outright. The inner backend is never called for a malformed control.
+// rejectMalformed is guard 5: reject NaN or infinite ActivePowerW and
+// ReactivePowerVAr outright. The inner backend is never called for a
+// malformed control. Note: negative ActivePowerW is NOT rejected here; it
+// is clamped to 0 by guard 1 (clampToNameplate), because a negative P
+// request is on-the-rail, not malformed.
 func rejectMalformed(c inverter.ControlOutputs) error {
 	if math.IsNaN(c.ActivePowerW) || math.IsInf(c.ActivePowerW, 0) {
 		return fmt.Errorf("%w: ActivePowerW=%v", ErrMalformedControl, c.ActivePowerW)
@@ -178,6 +187,11 @@ func rejectMalformed(c inverter.ControlOutputs) error {
 // go-sunspec (out of scope for IEEESIM-003). The body returns nil today;
 // the call site and structure land now so the validation wires in with
 // go-sunspec without touching the guard chain.
+//
+// IEEESIM-007 (GitLab issue #7) wires the real implementation. The expected
+// contract: validate that controls.ActivePowerW and controls.ReactivePowerVAr
+// match the scale factor and units defined in the SunSpec register map for
+// this device model. Reject (not coerce) on mismatch.
 func validateUnitsAndScale(_ inverter.ControlOutputs) error {
 	return nil
 }

@@ -2,6 +2,7 @@ package device
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
@@ -48,7 +49,8 @@ func (s *Synthetic) ReadState(_ context.Context) (StateReading, error) {
 	s.simTime = s.simTime.Add(simDelta)
 	s.grid.Time = s.simTime
 
-	// Walk scenario steps.
+	// Walk scenario steps. Restore the diagnostic log that the original tick
+	// loop emitted when a step fired (main.go pre-refactor line 949).
 	elapsed := s.simTime.Sub(s.simStart)
 	for s.stepIdx < len(s.scenario.Steps) && elapsed >= s.scenario.Steps[s.stepIdx].AtTime {
 		step := s.scenario.Steps[s.stepIdx]
@@ -56,6 +58,7 @@ func (s *Synthetic) ReadState(_ context.Context) (StateReading, error) {
 			s.grid.VoltsPU = step.Grid.VoltsPU
 			s.grid.FreqHz = step.Grid.FreqHz
 		}
+		log.Printf("[%v] %s", step.AtTime, step.Description)
 		s.stepIdx++
 	}
 

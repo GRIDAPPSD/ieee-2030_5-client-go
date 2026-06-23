@@ -13,8 +13,8 @@ import (
 // fakeDevice is a recording DERDevice that captures ApplySetpoint arguments
 // for assertions and can be configured to return errors.
 type fakeDevice struct {
-	calls  []inverter.ControlOutputs
-	retErr error
+	calls    []inverter.ControlOutputs
+	retErr   error
 	retState inverter.InverterState
 }
 
@@ -57,6 +57,58 @@ func TestGuard1_ClampActivePower(t *testing.T) {
 	}
 	if fake.calls[0].ActivePowerW != 10000 {
 		t.Errorf("guard 1: inner received ActivePowerW=%.0f, want 10000", fake.calls[0].ActivePowerW)
+	}
+}
+
+// TestGuard1_ClampNegativeActivePower asserts guard 1 clamps negative
+// ActivePowerW to 0. Negative P is on-the-floor, not malformed (item 7).
+func TestGuard1_ClampNegativeActivePower(t *testing.T) {
+	fake := &fakeDevice{retState: inverter.InverterState{}}
+	guarded := WithSafetyGuards(fake, testNameplate())
+
+	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
+		ActivePowerW:     -500, // below zero
+		ReactivePowerVAr: 0,
+		Connected:        true,
+		Energized:        true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fake.calls) != 1 {
+		t.Fatalf("want 1 inner call, got %d", len(fake.calls))
+	}
+	if fake.calls[0].ActivePowerW != 0 {
+		t.Errorf("guard 1: inner received ActivePowerW=%.0f, want 0", fake.calls[0].ActivePowerW)
+	}
+}
+
+// TestGuard1_ExactNameplateBoundary asserts that values exactly at the
+// nameplate boundary are NOT clamped and reach inner unchanged (item 8).
+// Guard 1 uses strict > and strict <, so on-the-dot must pass through.
+func TestGuard1_ExactNameplateBoundary(t *testing.T) {
+	fake := &fakeDevice{retState: inverter.InverterState{}}
+	guarded := WithSafetyGuards(fake, testNameplate())
+
+	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
+		ActivePowerW:     inverter.Rating.RatedW,   // exactly 10000.0
+		ReactivePowerVAr: inverter.Rating.RatedVAr, // exactly 4400.0
+		Connected:        true,
+		Energized:        true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fake.calls) != 1 {
+		t.Fatalf("want 1 inner call, got %d", len(fake.calls))
+	}
+	if fake.calls[0].ActivePowerW != inverter.Rating.RatedW {
+		t.Errorf("boundary: inner received ActivePowerW=%.4f, want %.4f",
+			fake.calls[0].ActivePowerW, inverter.Rating.RatedW)
+	}
+	if fake.calls[0].ReactivePowerVAr != inverter.Rating.RatedVAr {
+		t.Errorf("boundary: inner received ReactivePowerVAr=%.4f, want %.4f",
+			fake.calls[0].ReactivePowerVAr, inverter.Rating.RatedVAr)
 	}
 }
 
@@ -148,7 +200,7 @@ func TestGuard5_RejectNaN_ReactivePower(t *testing.T) {
 	}
 }
 
-// TestGuard5_RejectInf asserts guard 5 rejects +Inf ActivePowerW.
+// TestGuard5_RejectInf asserts guard 5 rejects +Inf ActivePowerW (item 9).
 func TestGuard5_RejectInf(t *testing.T) {
 	fake := &fakeDevice{}
 	guarded := WithSafetyGuards(fake, testNameplate())
@@ -157,7 +209,69 @@ func TestGuard5_RejectInf(t *testing.T) {
 		ActivePowerW: math.Inf(1),
 	})
 	if err == nil {
-		t.Fatal("want error for Inf ActivePowerW, got nil")
+		t.Fatal("want error for +Inf ActivePowerW, got nil")
+	}
+	if !errors.Is(err, ErrMalformedControl) {
+		t.Errorf("want ErrMalformedControl, got %v", err)
+	}
+	if len(fake.calls) != 0 {
+		t.Errorf("guard 5: inner was called %d time(s), want 0", len(fake.calls))
+	}
+}
+
+// TestGuard5_RejectNegInf_ActivePower asserts guard 5 rejects -Inf
+// ActivePowerW (item 9).
+func TestGuard5_RejectNegInf_ActivePower(t *testing.T) {
+	fake := &fakeDevice{}
+	guarded := WithSafetyGuards(fake, testNameplate())
+
+	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
+		ActivePowerW: math.Inf(-1),
+	})
+	if err == nil {
+		t.Fatal("want error for -Inf ActivePowerW, got nil")
+	}
+	if !errors.Is(err, ErrMalformedControl) {
+		t.Errorf("want ErrMalformedControl, got %v", err)
+	}
+	if len(fake.calls) != 0 {
+		t.Errorf("guard 5: inner was called %d time(s), want 0", len(fake.calls))
+	}
+}
+
+// TestGuard5_RejectPosInf_ReactivePower asserts guard 5 rejects +Inf VAr
+// (item 9).
+func TestGuard5_RejectPosInf_ReactivePower(t *testing.T) {
+	fake := &fakeDevice{}
+	guarded := WithSafetyGuards(fake, testNameplate())
+
+	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
+		ActivePowerW:     5000,
+		ReactivePowerVAr: math.Inf(1),
+	})
+	if err == nil {
+		t.Fatal("want error for +Inf ReactivePowerVAr, got nil")
+	}
+	if !errors.Is(err, ErrMalformedControl) {
+		t.Errorf("want ErrMalformedControl, got %v", err)
+	}
+	if len(fake.calls) != 0 {
+		t.Errorf("guard 5: inner was called %d time(s), want 0", len(fake.calls))
+	}
+}
+
+// TestGuard5_RejectNegInf_ReactivePower asserts guard 5 rejects -Inf VAr
+// (item 9).
+func TestGuard5_RejectNegInf_ReactivePower(t *testing.T) {
+	fake := &fakeDevice{}
+	guarded := WithSafetyGuards(fake, testNameplate())
+
+	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
+		ActivePowerW:     5000,
+		ReactivePowerVAr: math.Inf(-1),
+	})
+	if err == nil {
+		t.Fatal("want error for -Inf ReactivePowerVAr, got nil")
 	}
 	if !errors.Is(err, ErrMalformedControl) {
 		t.Errorf("want ErrMalformedControl, got %v", err)
@@ -208,9 +322,46 @@ func TestGuard3_RateLimit(t *testing.T) {
 	}
 }
 
+// TestGuard3_RateLimitRefill asserts that the token bucket refills after the
+// configured window, allowing calls to succeed again (item 10).
+func TestGuard3_RateLimitRefill(t *testing.T) {
+	fake := &fakeDevice{retState: inverter.InverterState{}}
+	// Very short window so the test can advance without sleeping.
+	window := 5 * time.Millisecond
+	guarded := &guardedDevice{
+		inner:     fake,
+		nameplate: testNameplate(),
+		limiter:   newTokenBucket(2, window),
+	}
+
+	goodCtrl := inverter.ControlOutputs{
+		ActivePowerW: 3000,
+		Connected:    true,
+		Energized:    true,
+	}
+
+	// Exhaust the burst.
+	for i := range 2 {
+		if _, err := guarded.ApplySetpoint(context.Background(), goodCtrl); err != nil {
+			t.Fatalf("pre-exhaust call %d: %v", i, err)
+		}
+	}
+	if _, err := guarded.ApplySetpoint(context.Background(), goodCtrl); !errors.Is(err, ErrRateLimitExceeded) {
+		t.Fatalf("post-exhaust: want ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Advance past the window by sleeping slightly longer.
+	time.Sleep(window + 2*time.Millisecond)
+
+	// Bucket should be refilled; one more call must succeed.
+	if _, err := guarded.ApplySetpoint(context.Background(), goodCtrl); err != nil {
+		t.Errorf("after refill: want success, got %v", err)
+	}
+}
+
 // TestGuard4_FailSafe_LastGood asserts guard 4: when the inner backend returns
 // an error AFTER a successful call, the guarded device returns the cached
-// lastGood state field-by-field.
+// lastGood state field-by-field (items 4, 14, 15).
 func TestGuard4_FailSafe_LastGood(t *testing.T) {
 	good := inverter.InverterState{
 		ActivePowerW:     7500,
@@ -242,12 +393,18 @@ func TestGuard4_FailSafe_LastGood(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error on comms loss, got nil")
 	}
-	// The returned state must be lastGood, field by field.
+	// The returned state must be lastGood, field by field (items 4, 14, 15).
 	if state.ActivePowerW != good.ActivePowerW {
 		t.Errorf("fail-safe: ActivePowerW: want %.0f, got %.0f", good.ActivePowerW, state.ActivePowerW)
 	}
 	if state.ReactivePowerVAr != good.ReactivePowerVAr {
 		t.Errorf("fail-safe: ReactivePowerVAr: want %.0f, got %.0f", good.ReactivePowerVAr, state.ReactivePowerVAr)
+	}
+	if state.PowerFactor != good.PowerFactor {
+		t.Errorf("fail-safe: PowerFactor: want %.4f, got %.4f", good.PowerFactor, state.PowerFactor)
+	}
+	if state.VoltsPU != good.VoltsPU {
+		t.Errorf("fail-safe: VoltsPU: want %.4f, got %.4f", good.VoltsPU, state.VoltsPU)
 	}
 	if state.Connected != good.Connected {
 		t.Errorf("fail-safe: Connected: want %v, got %v", good.Connected, state.Connected)
@@ -261,7 +418,8 @@ func TestGuard4_FailSafe_LastGood(t *testing.T) {
 }
 
 // TestGuard4_FailSafe_SafeDefault asserts guard 4: when no good state has ever
-// been cached, the fail-safe returns the safe default (disconnected, zero P/Q).
+// been cached, the fail-safe returns the safe default (disconnected, zero P/Q,
+// ModeDisconnected) (items 4, 15).
 func TestGuard4_FailSafe_SafeDefault(t *testing.T) {
 	fake := &fakeDevice{retErr: errors.New("device unreachable")}
 	guarded := WithSafetyGuards(fake, testNameplate())
@@ -283,27 +441,15 @@ func TestGuard4_FailSafe_SafeDefault(t *testing.T) {
 	if state.ActivePowerW != 0 {
 		t.Errorf("safe default: want ActivePowerW=0, got %.0f", state.ActivePowerW)
 	}
+	if state.Mode != inverter.ModeDisconnected {
+		t.Errorf("safe default: want Mode=ModeDisconnected, got %v", state.Mode)
+	}
 }
 
 // TestGuard_ReadStatePassthrough asserts that ReadState bypasses all guards
 // and delegates directly to inner.
 func TestGuard_ReadStatePassthrough(t *testing.T) {
-	wantReading := StateReading{
-		Grid:      inverter.GridState{VoltsPU: 1.03, FreqHz: 59.8},
-		MaxPowerW: 8000,
-		Irradiance: 800,
-	}
 	fake := &fakeDevice{}
-	// Override ReadState via an embedded wrapper so we can inject a custom reading.
-	type readOverrider struct {
-		DERDevice
-		reading StateReading
-	}
-	wrapped := &readOverrider{DERDevice: fake, reading: wantReading}
-
-	// Since we can not easily override the method on fakeDevice here, test
-	// that the guard calls inner.ReadState at all (i.e. fake.ReadState returns
-	// the default nominal values and we just check the pass-through happens).
 	guarded := WithSafetyGuards(fake, testNameplate())
 	reading, err := guarded.ReadState(context.Background())
 	if err != nil {
@@ -313,5 +459,30 @@ func TestGuard_ReadStatePassthrough(t *testing.T) {
 	if reading.Grid.VoltsPU != 1.0 {
 		t.Errorf("ReadState passthrough: want VoltsPU=1.0, got %v", reading.Grid.VoltsPU)
 	}
-	_ = wrapped // suppress unused warning
+}
+
+// TestGridLABD_ApplySetpoint_NotImplemented asserts that GridLABD.ApplySetpoint
+// returns ErrBackendNotImplemented (item 11).
+func TestGridLABD_ApplySetpoint_NotImplemented(t *testing.T) {
+	g, err := NewGridLABD(GridLABDConfig{})
+	if err != nil {
+		t.Fatalf("NewGridLABD: %v", err)
+	}
+	_, applyErr := g.ApplySetpoint(context.Background(), inverter.ControlOutputs{})
+	if !errors.Is(applyErr, ErrBackendNotImplemented) {
+		t.Errorf("want ErrBackendNotImplemented, got %v", applyErr)
+	}
+}
+
+// TestRealDevice_ApplySetpoint_NotImplemented asserts that
+// RealDevice.ApplySetpoint returns ErrBackendNotImplemented (item 11).
+func TestRealDevice_ApplySetpoint_NotImplemented(t *testing.T) {
+	r, err := NewRealDevice(RealDeviceConfig{})
+	if err != nil {
+		t.Fatalf("NewRealDevice: %v", err)
+	}
+	_, applyErr := r.ApplySetpoint(context.Background(), inverter.ControlOutputs{})
+	if !errors.Is(applyErr, ErrBackendNotImplemented) {
+		t.Errorf("want ErrBackendNotImplemented, got %v", applyErr)
+	}
 }
