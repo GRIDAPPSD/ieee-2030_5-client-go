@@ -1,0 +1,14 @@
+NOTICE — DERIVATIVE WORK, NOT FOR REDISTRIBUTION
+
+This repository is a private archive of inverter simulator code that was
+translated from a local copy of the EPRI IEEE 2030.5 C client to Go.
+The original C client is not open-source software and the team does
+not have redistribution rights for either the original or this derivative.
+
+This repository is retained solely as a personal reference for migration
+planning purposes. Do not redistribute, publish, or relicense any portion
+of this repository.
+
+The replacement inverter simulator (clean-room implementation, based on
+the IEEE 1547-2018 public specification with an OSS reference codebase)
+lives in the public GRIDAPPSD/ieee-2030_5-go repository.

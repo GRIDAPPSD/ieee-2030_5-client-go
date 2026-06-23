@@ -17,8 +17,8 @@ over TLS and exercises the full DER function set.
 
 ## Status
 
-Scaffold only (Phase E0). Real Go code arrives in Phase E1 (archive import) and
-Phase E2 (import rewrite to consume `ieee-2030_5-core`). See
+Phase E1 (archive imported). Imports are stale (`github.com/GRIDAPPSD/ieee-2030_5-go/...`);
+rewriting them to consume `ieee-2030_5-core` happens in Phase E2. See
 `noor-extraction-plan-2026-06-18.md` in the workspace at
 `projects/ieee-2030_5/ieee-2030_5-go/artifacts/outputs/` for the full phase
 sequencing. Once Phase E2 lands, this module depends on
