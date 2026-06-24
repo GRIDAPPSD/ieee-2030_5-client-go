@@ -1,4 +1,4 @@
-// Tests for IEEE-038 — periodic DERControlList polling honoring pollRate.
+// Tests for IEEE-038 : periodic DERControlList polling honoring pollRate.
 //
 // Two layers:
 //
@@ -28,7 +28,7 @@ import (
 )
 
 // =============================================================================
-// Cache contract — pure tests, no HTTP, no goroutines.
+// Cache contract : pure tests, no HTTP, no goroutines.
 // =============================================================================
 
 // makeEventStatus returns a pointer to an EventStatus with the supplied
@@ -39,7 +39,7 @@ func makeEventStatus(currentStatus uint8) *sep2.EventStatus {
 
 // makeDERControl returns a DERControl with the supplied mRID and
 // currentStatus. status==255 sentinel means "no EventStatus pointer at all"
-// — exercises the omit-equals-scheduled branch.
+// : exercises the omit-equals-scheduled branch.
 func makeDERControl(mrid string, status uint8) sep2.DERControl {
 	dc := sep2.DERControl{}
 	dc.MRID = mrid
@@ -61,7 +61,7 @@ func TestDERControlCache_SnapshotIsIndependent(t *testing.T) {
 	if got, want := len(snap), 2; got != want {
 		t.Fatalf("Snapshot len = %d, want %d", got, want)
 	}
-	// Mutate the snapshot — cache must not be affected.
+	// Mutate the snapshot : cache must not be affected.
 	delete(snap, "A")
 	snap["C"] = makeDERControl("C", sep2.EventStatusActive)
 
@@ -123,7 +123,7 @@ func TestDERControlCache_Diff(t *testing.T) {
 			details: map[string]string{"A": "added", "B": "added"},
 		},
 		{
-			name: "added — third event appears",
+			name: "added : third event appears",
 			seeded: []sep2.DERControl{
 				makeDERControl("A", sep2.EventStatusScheduled),
 				makeDERControl("B", sep2.EventStatusScheduled),
@@ -137,7 +137,7 @@ func TestDERControlCache_Diff(t *testing.T) {
 			details: map[string]string{"C": "added"},
 		},
 		{
-			name: "cancelled — B flips to status=2",
+			name: "cancelled : B flips to status=2",
 			seeded: []sep2.DERControl{
 				makeDERControl("A", sep2.EventStatusScheduled),
 				makeDERControl("B", sep2.EventStatusScheduled),
@@ -150,7 +150,7 @@ func TestDERControlCache_Diff(t *testing.T) {
 			details: map[string]string{"B": "cancelled"},
 		},
 		{
-			name: "updated — A goes scheduled→active",
+			name: "updated : A goes scheduled→active",
 			seeded: []sep2.DERControl{
 				makeDERControl("A", sep2.EventStatusScheduled),
 			},
@@ -161,7 +161,7 @@ func TestDERControlCache_Diff(t *testing.T) {
 			details: map[string]string{"A": "updated"},
 		},
 		{
-			name: "no change — identical status omitted",
+			name: "no change : identical status omitted",
 			seeded: []sep2.DERControl{
 				makeDERControl("A", sep2.EventStatusActive),
 				makeDERControl("B", sep2.EventStatusScheduled),
@@ -230,7 +230,7 @@ func TestDERControlCache_Diff(t *testing.T) {
 					t.Errorf("mRID %s: bucket = %q, want %q", mrid, gotBucket, wantBucket)
 				}
 			}
-			// Diff must be pure — cache state unchanged after Diff.
+			// Diff must be pure : cache state unchanged after Diff.
 			if got := cache.Len(); got != len(tc.seeded) {
 				t.Errorf("cache.Len after Diff = %d, want %d (Diff is read-only)", got, len(tc.seeded))
 			}
@@ -258,7 +258,7 @@ func findBucket(mrid string, added, updated, cancelled []sep2.DERControl) string
 }
 
 // =============================================================================
-// End-to-end PollDERControlList — gotls listener + tight cadence test seam.
+// End-to-end PollDERControlList : gotls listener + tight cadence test seam.
 // =============================================================================
 
 // derControlListXML encodes a DERControlList payload exactly the way the
@@ -378,7 +378,7 @@ func TestPollDERControlList_PollRateHonored(t *testing.T) {
 // TestPollDERControlList_ContextCancel case 3: cancelling ctx mid-loop
 // returns the goroutine within a tight bound and propagates ctx.Err.
 // "No goroutine leak" is asserted by waiting on the done channel within a
-// bounded deadline — if the closure leaked, the receive would time out.
+// bounded deadline : if the closure leaked, the receive would time out.
 func TestPollDERControlList_ContextCancel(t *testing.T) {
 	env := newCCMTestEnv(t)
 	const href = "/derp/0/derc"
@@ -390,7 +390,7 @@ func TestPollDERControlList_ContextCancel(t *testing.T) {
 	serverURL, stop := startIdleListener(t, env, mux)
 	defer stop()
 
-	// 1s interval is fine — we cancel before the first ticker tick fires.
+	// 1s interval is fine : we cancel before the first ticker tick fires.
 	restore := inverter.SetDERControlPollDurationForTesting(func(_ uint32) time.Duration {
 		return 1 * time.Second
 	})
@@ -413,7 +413,7 @@ func TestPollDERControlList_ContextCancel(t *testing.T) {
 			t.Errorf("err = %v, want context.Canceled", err)
 		}
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("PollDERControlList did not return within 500ms of ctx cancel — goroutine leak")
+		t.Fatal("PollDERControlList did not return within 500ms of ctx cancel : goroutine leak")
 	}
 }
 
@@ -574,7 +574,7 @@ func TestPollDERControlList_EmptyList(t *testing.T) {
 	<-done
 }
 
-// TestPollDERControlList_RejectsEmptyHref guards the programmer-error path —
+// TestPollDERControlList_RejectsEmptyHref guards the programmer-error path :
 // the goroutine must refuse to start without an href so callers don't end
 // up with a silent no-op log loop.
 func TestPollDERControlList_RejectsEmptyHref(t *testing.T) {

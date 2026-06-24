@@ -6,7 +6,7 @@ import (
 )
 
 // TestHMIServerTimeoutsSet asserts that the HMI http.Server has all four
-// timeout fields set to non-zero values. Zero means "no limit" — a
+// timeout fields set to non-zero values. Zero means "no limit" : a
 // Slowloris / slow-body attack surface even on a local dashboard port.
 func TestHMIServerTimeoutsSet(t *testing.T) {
 	srv := newHMIServer(8888)

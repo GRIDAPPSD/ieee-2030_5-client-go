@@ -10,7 +10,7 @@ import (
 //
 // In-package _test.go so unexported classifyResponse is reachable without an
 // _export_test.go shim. Exercises the pure status-code → typed-error mapping
-// independent of the TLS / network surface — the integration test cases live
+// independent of the TLS / network surface : the integration test cases live
 // in the matching client_router_test.go (package inverter_test) which drives
 // real Get / Post / Put through a gotls listener.
 
@@ -137,7 +137,7 @@ func TestClassifyResponse_UnmappedClientError(t *testing.T) {
 
 func TestClassifyResponse_UnmappedServerError(t *testing.T) {
 	t.Parallel()
-	// 599 is a non-standard server error band entry — must still map to
+	// 599 is a non-standard server error band entry : must still map to
 	// ErrResponseTransient so callers do not have to enumerate each code.
 	resp := &http.Response{StatusCode: 599, Header: http.Header{}}
 	err := classifyResponse(resp)

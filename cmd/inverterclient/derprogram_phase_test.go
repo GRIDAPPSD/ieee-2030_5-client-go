@@ -14,33 +14,33 @@ package main
 // pointed at it, drive the walker, assert on the cache shape and per-FSA
 // behavior.
 //
-// Cases shipped (IEEE-073 mandatory cases 1, 2, 3, 5, 7 — see backlog.md
+// Cases shipped (IEEE-073 mandatory cases 1, 2, 3, 5, 7 : see backlog.md
 // IEEE-073 and plans/plan-3-csip-test-debt-sweep/phase-5-derprogram-walk-and-cache.md):
 //
 //  1. TestWalkDERProgramTree_ThreeFSAEnumeration
-//      — IEEE-073 case 1: httptest server returns a 3-FSA list, each with
+//      : IEEE-073 case 1: httptest server returns a 3-FSA list, each with
 //        a distinct DERProgramListLink; walker traverses all three.
 //
 //  2. TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs
-//      — IEEE-073 case 2: each FSA returns 2 DERPrograms; walker walks
+//      : IEEE-073 case 2: each FSA returns 2 DERPrograms; walker walks
 //        all 6, fetches DefaultDERControl + DERControlList + DERCurveList
 //        per program.
-//      — IEEE-073 case 3: cache-shape assertion — `len(out) ==
+//      : IEEE-073 case 3: cache-shape assertion : `len(out) ==
 //        sum(DERPrograms per FSA)`. The walker preserves all enumerated
 //        programs unfiltered (IEEE-037 selection happens downstream).
 //
 //  3. TestWalkDERProgramTree_AbsentDERProgramListLinkSkipsFSA
-//      — IEEE-073 case 5: one FSA has a nil DERProgramListLink; walker
+//      : IEEE-073 case 5: one FSA has a nil DERProgramListLink; walker
 //        skips that FSA and walks the other two.
 //
 //  4. TestWalkDERProgramTree_DeepFSATopologyFlattens
-//      — IEEE-073 case 7: CSIP V1.2 CORE-010 7-level topology. The walker
-//        does NOT model topology depth — it walks the FSAs the server
+//      : IEEE-073 case 7: CSIP V1.2 CORE-010 7-level topology. The walker
+//        does NOT model topology depth : it walks the FSAs the server
 //        presents. Verify a deep-level FSA flattened into a single
 //        FSAList is walked correctly with all DERPrograms cached.
 //
 //  5. TestWalkDERProgramTree_MissingSubtreeLinksTolerated
-//      — Phase 5 phase-doc invariant: DERProgram with absent
+//      : Phase 5 phase-doc invariant: DERProgram with absent
 //        DefaultDERControlLink / DERControlListLink / DERCurveListLink:
 //        walker skips that GET, still records the program in the cache.
 //        (Mentioned in IEEE-036 source-comment lines 460-461 and Phase 5
@@ -49,10 +49,10 @@ package main
 //        at a different level.)
 //
 //  6. TestWalkDERProgramTree_GetProgramListErrorWraps
-//      — Per-FSA transport-error wrapping: when GetDERProgramList fails
+//      : Per-FSA transport-error wrapping: when GetDERProgramList fails
 //        (404 from the server), walkDERProgramTree returns a non-nil
 //        error wrapped with `FSA mRID=%s DERProgramList: %w`. The
-//        outer-loop in main() converts this to log.Fatalf — exercising
+//        outer-loop in main() converts this to log.Fatalf : exercising
 //        the walker directly lets us assert on the wrap shape without
 //        terminating the test process. Sibling DefaultDERControl /
 //        DERControlList / DERCurveList wraps are not exercised
@@ -65,7 +65,7 @@ package main
 // the same structural problem as Phase 2b / Phase 2c-FSAList-discovery
 // (log.Fatalf on walk error, no function seam to drive cfg.CSIP /
 // cfg.AllowUnregistered / dcap.PollRate state space). Both are deferred
-// to IEEE-076 — see PR body.
+// to IEEE-076 : see PR body.
 
 import (
 	"context"
@@ -92,7 +92,7 @@ import (
 // CA + server cert + device cert written to t.TempDir so a production
 // SEP2Client can load them and a production gotls listener can serve them.
 // We replicate the env here because the inverter_test package's helper is
-// not exported (small duplication accepted per Pike rule 2 — duplication
+// not exported (small duplication accepted per Pike rule 2 : duplication
 // across modules is reported; duplication across test files in different
 // packages of the same module is allowed when the cost of exporting test
 // scaffolding outweighs the dedup benefit).
@@ -222,7 +222,7 @@ func newDERWalkClient(t *testing.T, env *derWalkTestEnv, serverURL string) *inve
 
 // writeSepXML encodes any sep2 value to the response writer with the
 // production sep+xml MIME type. Single small helper that all fixture
-// writers share — keeps the fixture surface focused on the test body,
+// writers share : keeps the fixture surface focused on the test body,
 // not the boilerplate.
 func writeSepXML(t *testing.T, w http.ResponseWriter, v any) {
 	t.Helper()
@@ -258,7 +258,7 @@ type fsaFixture struct {
 func mountFSAFixture(t *testing.T, mux *http.ServeMux, fsa fsaFixture, hitsByPath map[string]*atomic.Int32) {
 	t.Helper()
 
-	// FSAs without a DERProgramListLink contribute no handlers — the
+	// FSAs without a DERProgramListLink contribute no handlers : the
 	// walker skips them via the `fsa.DERProgramListLink == nil` branch
 	// without ever calling the network.
 	if fsa.derProgramListPath == "" {
@@ -325,7 +325,7 @@ func registerHandler(t *testing.T, mux *http.ServeMux, hitsByPath map[string]*at
 
 // buildFSAList constructs a sep2.FunctionSetAssignmentsList from the
 // fixture descriptors. Used by tests to feed walkDERProgramTree directly
-// (bypassing the FSAList GET — that path is covered by IEEE-072's
+// (bypassing the FSAList GET : that path is covered by IEEE-072's
 // fsalist_test.go).
 func buildFSAList(fsas []fsaFixture) sep2.FunctionSetAssignmentsList {
 	out := sep2.FunctionSetAssignmentsList{
@@ -345,7 +345,7 @@ func buildFSAList(fsas []fsaFixture) sep2.FunctionSetAssignmentsList {
 }
 
 // drive runs walkDERProgramTree against the constructed fixture, returning
-// the cache and any walk error. ctx has a 5s timeout — sufficient for any
+// the cache and any walk error. ctx has a 5s timeout : sufficient for any
 // integration test in this file (each handler is sub-millisecond).
 func drive(t *testing.T, fsaList sep2.FunctionSetAssignmentsList, mux *http.ServeMux) (map[string]sep2.DERProgram, error) {
 	t.Helper()
@@ -361,7 +361,7 @@ func drive(t *testing.T, fsaList sep2.FunctionSetAssignmentsList, mux *http.Serv
 
 // ----- IEEE-073 case 1: 3-FSA enumeration -----------------------------------
 
-// TestWalkDERProgramTree_ThreeFSAEnumeration — IEEE-073 case 1.
+// TestWalkDERProgramTree_ThreeFSAEnumeration : IEEE-073 case 1.
 //
 // httptest server returns a 3-FSA list, each with a DERProgramListLink to
 // a distinct path. Each FSA's DERProgramList contains a single DERProgram
@@ -421,7 +421,7 @@ func TestWalkDERProgramTree_ThreeFSAEnumeration(t *testing.T) {
 
 // ----- IEEE-073 cases 2 + 3: six DERPrograms + cache-shape invariant -------
 
-// TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs — IEEE-073 cases 2
+// TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs : IEEE-073 cases 2
 // and 3.
 //
 // Each of three FSAs returns 2 DERPrograms (6 total). Every DERProgram
@@ -431,7 +431,7 @@ func TestWalkDERProgramTree_ThreeFSAEnumeration(t *testing.T) {
 //   - case 2 (enumeration): 6 DERPrograms walked total.
 //   - case 2 (subtree fetch): 6 DefaultDERControl GETs, 6 DERControlList
 //     GETs, 6 DERCurveList GETs.
-//   - case 3 (cache shape): len(out) == 6 — unfiltered, preserves all
+//   - case 3 (cache shape): len(out) == 6 : unfiltered, preserves all
 //     enumerated programs so IEEE-037 Primacy + mRID selection can run on
 //     a complete set. mRID uniqueness across all 6 programs is the
 //     fixture invariant; if a future edit accidentally reuses an mRID
@@ -440,7 +440,7 @@ func TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs(t *testing.T) {
 	t.Parallel()
 
 	makeProg := func(name string) derProgramFixture {
-		// Unique paths per program — mRID uniqueness is the test invariant
+		// Unique paths per program : mRID uniqueness is the test invariant
 		// the Phase 5 phase-doc calls out as a fixture-author footgun.
 		return derProgramFixture{
 			mRID:                  name,
@@ -481,10 +481,10 @@ func TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs(t *testing.T) {
 
 	// Case 2 enumeration + Case 3 cache shape:
 	if got, want := len(out), 6; got != want {
-		t.Fatalf("cache size = %d, want %d (sum DERPrograms per FSA — unfiltered)", got, want)
+		t.Fatalf("cache size = %d, want %d (sum DERPrograms per FSA : unfiltered)", got, want)
 	}
 
-	// Case 3 (per-mRID assertion — preserves all enumerated programs):
+	// Case 3 (per-mRID assertion : preserves all enumerated programs):
 	wantMRIDs := []string{"PROG-A1", "PROG-A2", "PROG-B1", "PROG-B2", "PROG-C1", "PROG-C2"}
 	for _, mrid := range wantMRIDs {
 		if _, ok := out[mrid]; !ok {
@@ -492,14 +492,14 @@ func TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs(t *testing.T) {
 		}
 	}
 
-	// Case 2 (FSA-list-level GETs — exactly one per FSA):
+	// Case 2 (FSA-list-level GETs : exactly one per FSA):
 	for _, fsa := range fsas {
 		if n := hitsByPath[fsa.derProgramListPath].Load(); n != 1 {
 			t.Errorf("DERProgramList GET hits[%s] = %d, want 1", fsa.derProgramListPath, n)
 		}
 	}
 
-	// Case 2 (per-program subtree GETs — one per program per subtree link):
+	// Case 2 (per-program subtree GETs : one per program per subtree link):
 	for _, fsa := range fsas {
 		for _, p := range fsa.programs {
 			if n := hitsByPath[p.defaultDERControlPath].Load(); n != 1 {
@@ -517,7 +517,7 @@ func TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs(t *testing.T) {
 
 // ----- IEEE-073 case 5: absent DERProgramListLink branches -----------------
 
-// TestWalkDERProgramTree_AbsentDERProgramListLinkSkipsFSA — IEEE-073 case 5.
+// TestWalkDERProgramTree_AbsentDERProgramListLinkSkipsFSA : IEEE-073 case 5.
 //
 // Three FSAs, but the middle FSA's DERProgramListLink is nil (the FSA-
 // list-builder leaves the field nil when derProgramListPath == ""). The
@@ -525,11 +525,11 @@ func TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs(t *testing.T) {
 // other two. Assertions:
 //
 //   - The middle FSA's nominal path is never hit (registerHandler was
-//     never called for it; using the inverse — assert on the count of
+//     never called for it; using the inverse : assert on the count of
 //     keys in hitsByPath).
 //   - 2 DERPrograms cached, NOT 3.
 //   - Neither program in the cache is the missing-FSA's "phantom"
-//     program (the fixture has no phantom — the FSA has no programs to
+//     program (the fixture has no phantom : the FSA has no programs to
 //     skip; this is the per-FSA branch only).
 func TestWalkDERProgramTree_AbsentDERProgramListLinkSkipsFSA(t *testing.T) {
 	t.Parallel()
@@ -570,7 +570,7 @@ func TestWalkDERProgramTree_AbsentDERProgramListLinkSkipsFSA(t *testing.T) {
 	if _, ok := out["PROG-C1"]; !ok {
 		t.Errorf("cache missing PROG-C1 (third FSA still walked)")
 	}
-	// The middle FSA never registered a handler — the only way it could
+	// The middle FSA never registered a handler : the only way it could
 	// have generated traffic is if walkDERProgramTree tried to GET a
 	// blank href, which c.Get would have routed to the server's root.
 	// Assert hitsByPath has exactly 2 entries (the two non-nil FSAs).
@@ -581,9 +581,9 @@ func TestWalkDERProgramTree_AbsentDERProgramListLinkSkipsFSA(t *testing.T) {
 
 // ----- IEEE-073 case 7: deep-topology FSA flattens -------------------------
 
-// TestWalkDERProgramTree_DeepFSATopologyFlattens — IEEE-073 case 7.
+// TestWalkDERProgramTree_DeepFSATopologyFlattens : IEEE-073 case 7.
 //
-// CSIP V1.2 CORE-010 7-level FSA topology is a server-side concept — the
+// CSIP V1.2 CORE-010 7-level FSA topology is a server-side concept : the
 // walker does not model topology depth (per Phase 5 phase-doc risk note,
 // "the walk does NOT model the topology levels in code; it just walks the
 // FSAs that the server presents"). The 7-level reference flattens to a
@@ -591,7 +591,7 @@ func TestWalkDERProgramTree_AbsentDERProgramListLinkSkipsFSA(t *testing.T) {
 //
 // To exercise "deepest-level FSA walked correctly," construct a fixture
 // with 7 FSAs (representing the deepest-level enumeration the server
-// could present) and walk it. Each FSA contributes one DERProgram —
+// could present) and walk it. Each FSA contributes one DERProgram :
 // 7 cached programs total.
 func TestWalkDERProgramTree_DeepFSATopologyFlattens(t *testing.T) {
 	t.Parallel()
@@ -630,7 +630,7 @@ func TestWalkDERProgramTree_DeepFSATopologyFlattens(t *testing.T) {
 
 // ----- Phase 5 phase-doc invariant: missing subtree links tolerated --------
 
-// TestWalkDERProgramTree_MissingSubtreeLinksTolerated — Phase 5 phase-doc
+// TestWalkDERProgramTree_MissingSubtreeLinksTolerated : Phase 5 phase-doc
 // invariant.
 //
 // A DERProgram with all three subtree links nil (no DefaultDERControlLink,
@@ -663,7 +663,7 @@ func TestWalkDERProgramTree_MissingSubtreeLinksTolerated(t *testing.T) {
 	if _, ok := out["PROG-NO-LINKS"]; !ok {
 		t.Fatalf("cache missing PROG-NO-LINKS (linkless program must still be recorded)")
 	}
-	// Only the DERProgramList path itself should have been hit — no
+	// Only the DERProgramList path itself should have been hit : no
 	// subtree handler was registered.
 	if got, want := len(hitsByPath), 1; got != want {
 		t.Errorf("hit-counter map size = %d, want %d (only DERProgramList GET expected)", got, want)
@@ -688,7 +688,7 @@ func TestWalkDERProgramTree_GetProgramListErrorWraps(t *testing.T) {
 		{
 			mRID:               "FSA-WILL-404",
 			derProgramListPath: "/edev/1/fsa/0/derp",
-			// programs intentionally empty — the server will 404 the GET
+			// programs intentionally empty : the server will 404 the GET
 		},
 	}
 
@@ -708,7 +708,7 @@ func TestWalkDERProgramTree_GetProgramListErrorWraps(t *testing.T) {
 	if !strings.Contains(err.Error(), "404") {
 		t.Errorf("error %q does not surface status 404", err.Error())
 	}
-	// Confirm the wrap chain unwraps cleanly via errors.Unwrap — not
+	// Confirm the wrap chain unwraps cleanly via errors.Unwrap : not
 	// asserting on a specific sentinel type (none exists in the production
 	// code), just that the chain is non-nil so callers can errors.As / Is.
 	if errors.Unwrap(err) == nil {

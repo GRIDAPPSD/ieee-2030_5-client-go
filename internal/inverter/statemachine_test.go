@@ -1,26 +1,26 @@
-// Tests for IEEE-040 — DERControl event state machine (Phase 5 ticket 3 of 5).
+// Tests for IEEE-040 : DERControl event state machine (Phase 5 ticket 3 of 5).
 //
 // The state machine is a pure data structure: no goroutine, no I/O, no real
 // time.Now(). Every test injects a fixed-time clock via the helpers and
 // drives Tick directly. Coverage hits the 10 mandatory cases plus the
 // hook-and-edge-case ladder documented in the ticket.
 //
-//   1. Initial state is DEFAULT                    — TestStateMachine_InitialStateDefault
-//   2. Add → EVENT_RECEIVED                        — TestStateMachine_AddTransitionsToReceived
-//   3. Fire → EVENT_STARTED                        — TestStateMachine_FireTransitionsToStarted
-//   4. Natural completion → COMPLETED → DEFAULT    — TestStateMachine_NaturalCompletionRevertsToDefault
-//   5. Server cancel mid-event                     — TestStateMachine_ServerCancelMidEvent
-//   6. Server cancel before fire                   — TestStateMachine_ServerCancelBeforeFire
-//   7. Hook fired on each transition               — TestStateMachine_HookFiredOnEachTransition
-//   8. Hook is optional (nil → no panic)           — TestStateMachine_NilHookDoesNotPanic
-//   9. Idempotent re-adds                          — TestStateMachine_IdempotentReAdds
-//  10. Multi-event overlap minimum                 — TestStateMachine_MultiEventOverlapFirstWins
+//   1. Initial state is DEFAULT                    : TestStateMachine_InitialStateDefault
+//   2. Add → EVENT_RECEIVED                        : TestStateMachine_AddTransitionsToReceived
+//   3. Fire → EVENT_STARTED                        : TestStateMachine_FireTransitionsToStarted
+//   4. Natural completion → COMPLETED → DEFAULT    : TestStateMachine_NaturalCompletionRevertsToDefault
+//   5. Server cancel mid-event                     : TestStateMachine_ServerCancelMidEvent
+//   6. Server cancel before fire                   : TestStateMachine_ServerCancelBeforeFire
+//   7. Hook fired on each transition               : TestStateMachine_HookFiredOnEachTransition
+//   8. Hook is optional (nil → no panic)           : TestStateMachine_NilHookDoesNotPanic
+//   9. Idempotent re-adds                          : TestStateMachine_IdempotentReAdds
+//  10. Multi-event overlap minimum                 : TestStateMachine_MultiEventOverlapFirstWins
 //
 // Supporting coverage:
-//   - EventState.String() returns canonical names  — TestEventState_String
-//   - Past-due event collapses Tick path           — TestStateMachine_PastDueEventCollapsesInOneTick
-//   - Tick on nil scheduler panics                 — TestStateMachine_TickPanicsOnNilScheduler
-//   - Hook can be replaced mid-life                — TestStateMachine_HookCanBeReplaced
+//   - EventState.String() returns canonical names  : TestEventState_String
+//   - Past-due event collapses Tick path           : TestStateMachine_PastDueEventCollapsesInOneTick
+//   - Tick on nil scheduler panics                 : TestStateMachine_TickPanicsOnNilScheduler
+//   - Hook can be replaced mid-life                : TestStateMachine_HookCanBeReplaced
 
 package inverter_test
 
@@ -61,11 +61,11 @@ type transitionRecord struct {
 	Prev EventState
 	Next EventState
 	MRID string
-	// Nil OK — synthetic terminal-revert transitions pass nil evt.
+	// Nil OK : synthetic terminal-revert transitions pass nil evt.
 	EvtPresent bool
 }
 
-// EventState alias for the test package — keeps subtest assertions
+// EventState alias for the test package : keeps subtest assertions
 // readable without an inverter. prefix on every constant.
 type EventState = inverter.EventState
 
@@ -78,7 +78,7 @@ const (
 )
 
 // recordingHook returns a hook plus a func that returns the captured slice
-// (under its own mutex — hooks can fire from different Tick goroutines in
+// (under its own mutex : hooks can fire from different Tick goroutines in
 // theory, though our tests are single-threaded).
 func recordingHook() (hook inverter.TransitionHook, drain func() []transitionRecord) {
 	var (
@@ -115,7 +115,7 @@ func cancelledControl(src sep2.DERControl) sep2.DERControl {
 }
 
 // =============================================================================
-// EventState.String — supporting.
+// EventState.String : supporting.
 // =============================================================================
 
 func TestEventState_String(t *testing.T) {
@@ -368,14 +368,14 @@ func TestStateMachine_HookFiredOnEachTransition(t *testing.T) {
 }
 
 // =============================================================================
-// Case 8: hook is optional — nil hook must not panic.
+// Case 8: hook is optional : nil hook must not panic.
 // =============================================================================
 
 func TestStateMachine_NilHookDoesNotPanic(t *testing.T) {
 	t.Parallel()
 	now, advance := newClock(fixedNow)
 	sched := inverter.NewSchedulerWithClockForTesting(now)
-	sm := inverter.NewStateMachine() // no OnTransition call — hook stays nil.
+	sm := inverter.NewStateMachine() // no OnTransition call : hook stays nil.
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -431,7 +431,7 @@ func TestStateMachine_IdempotentReAdds(t *testing.T) {
 }
 
 // =============================================================================
-// Case 10: multi-event overlap — first popped (FireAt-ascending) wins.
+// Case 10: multi-event overlap : first popped (FireAt-ascending) wins.
 // =============================================================================
 
 func TestStateMachine_MultiEventOverlapFirstWins(t *testing.T) {
@@ -454,7 +454,7 @@ func TestStateMachine_MultiEventOverlapFirstWins(t *testing.T) {
 		t.Errorf("pre-fire ActiveMRID = %q, want first", got)
 	}
 
-	// Advance past BOTH fire times in a single tick — both events pop.
+	// Advance past BOTH fire times in a single tick : both events pop.
 	advance(fixedNow.Add(5 * time.Minute))
 	sm.Tick(now(), nil, nil, sched)
 
@@ -467,7 +467,7 @@ func TestStateMachine_MultiEventOverlapFirstWins(t *testing.T) {
 	}
 
 	// Sanity: hook saw RECEIVED→STARTED for `first`. The second event was
-	// dropped at the multi-event TODO line — no hook fires for it.
+	// dropped at the multi-event TODO line : no hook fires for it.
 	recs := drain()
 	startTransitions := 0
 	for _, r := range recs {
@@ -495,7 +495,7 @@ func TestStateMachine_PastDueEventCollapsesInOneTick(t *testing.T) {
 	hook, drain := recordingHook()
 	sm.OnTransition(hook)
 
-	// start = now-2min, duration = 1min — server-side already completed.
+	// start = now-2min, duration = 1min : server-side already completed.
 	pastDue := makeControl("past", -2*time.Minute, 60, nil, nil)
 	sm.Tick(now(), []sep2.DERControl{pastDue}, nil, sched)
 

@@ -90,7 +90,7 @@ func TestStartNotifyReceiver_GracefulBypassOnBadCerts(t *testing.T) {
 	}, "127.0.0.1:0", nil, nil)
 	if got != nil {
 		// Defensive cleanup in case a future regression returns a real
-		// receiver — don't leak a listener.
+		// receiver : don't leak a listener.
 		_ = got.Stop(context.Background())
 		t.Fatalf("expected nil receiver for bad cert paths, got %+v", got)
 	}
@@ -148,7 +148,7 @@ func TestStartNotifyReceiver_AcceptsCustomDispatcher(t *testing.T) {
 // TestStartNotifyReceiver_BindFailureBypass asserts that a bind failure
 // (port already in use, malformed address) returns nil rather than
 // crashing. The receiver-start helper is the only place in main()'s boot
-// path that intentionally swallows TCP-bind errors — verify it.
+// path that intentionally swallows TCP-bind errors : verify it.
 func TestStartNotifyReceiver_BindFailureBypass(t *testing.T) {
 	t.Parallel()
 

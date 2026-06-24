@@ -1,4 +1,4 @@
-// Package inverter_test integration tests for IEEE-047 — single-hop 301
+// Package inverter_test integration tests for IEEE-047 : single-hop 301
 // Moved Permanently follow + cached-href surfacing. These exercise the
 // follow-once behavior layered on top of IEEE-046's *MovedError surfacing,
 // run end-to-end through the gotls listener fixture shared with the IEEE-029
@@ -17,7 +17,7 @@
 //     re-sent on the follow attempt (verified by reading the second
 //     request body server-side and asserting equality with the first).
 //  6. Caller updates cached href: integration via Get's newHref return
-//     value — the test holds a local href var, sees the surfaced new
+//     value : the test holds a local href var, sees the surfaced new
 //     href, and re-issues a second GET against the updated value with
 //     the redirect handler no longer firing.
 package inverter_test
@@ -43,7 +43,7 @@ func redirectTestCtx(t *testing.T) context.Context {
 	return ctx
 }
 
-// IEEE-047 case 1: 200 OK happy path — no redirect, no follow, newHref is
+// IEEE-047 case 1: 200 OK happy path : no redirect, no follow, newHref is
 // empty. Pins that the IEEE-047 wrapper does not perturb the 200 path that
 // IEEE-046's classifier already handled.
 func TestRedirect_200OKNoFollow(t *testing.T) {
@@ -117,7 +117,7 @@ func TestRedirect_Get301FollowsOnceAndReturnsBody(t *testing.T) {
 	}
 }
 
-// IEEE-047 case 3: two 301s in a row — only the first is followed. The
+// IEEE-047 case 3: two 301s in a row : only the first is followed. The
 // second *MovedError propagates back to the caller without further retry
 // (no chain following).
 func TestRedirect_ChainedRedirectsNotFollowed(t *testing.T) {
@@ -209,7 +209,7 @@ func TestRedirect_301EmptyLocationDoesNotFollow(t *testing.T) {
 	}
 }
 
-// IEEE-047 case 5: POST with 301 — the wrapper follows once and re-sends
+// IEEE-047 case 5: POST with 301 : the wrapper follows once and re-sends
 // the request body to the new URL. The test asserts that (a) the second
 // request body equals the first byte-for-byte (proving bytes.NewReader is
 // re-wrapped per attempt, not consumed on the first) and (b) the Location
@@ -275,7 +275,7 @@ func TestRedirect_Post301FollowsOnceAndResendsBody(t *testing.T) {
 // IEEE-047 case 6: caller updates cached href on 301. Holds a local href
 // variable, calls Get to fetch the resource, sees the newHref surfaced,
 // updates the cached value, then re-issues GET against the new value. The
-// original redirect handler must NOT fire on the second call — proving the
+// original redirect handler must NOT fire on the second call : proving the
 // caller-side update reaches the next traversal.
 func TestRedirect_CallerUpdatesCachedHrefOnFollow(t *testing.T) {
 	t.Parallel()
@@ -316,7 +316,7 @@ func TestRedirect_CallerUpdatesCachedHrefOnFollow(t *testing.T) {
 		t.Fatalf("second Get: %v", err)
 	}
 	if newHref2 != "" {
-		t.Errorf("second call newHref = %q, want \"\" (no follow expected — caller already updated href)", newHref2)
+		t.Errorf("second call newHref = %q, want \"\" (no follow expected : caller already updated href)", newHref2)
 	}
 	if got := redirectHits.Load(); got != 1 {
 		t.Errorf("redirectHits = %d, want 1 (second call should bypass /edev)", got)
@@ -326,7 +326,7 @@ func TestRedirect_CallerUpdatesCachedHrefOnFollow(t *testing.T) {
 	}
 }
 
-// IEEE-047 Put coverage: PUT with 301 — the wrapper follows once and
+// IEEE-047 Put coverage: PUT with 301 : the wrapper follows once and
 // re-sends the body to the new URL. PutDERCapability is the test surface
 // (PUT wrapper that doesn't surface newHref to the caller; we assert by
 // counting handler hits and reading both request bodies).
@@ -384,7 +384,7 @@ func TestRedirect_Put301FollowsOnceAndResendsBody(t *testing.T) {
 
 // IEEE-047 wrapper coverage: GetFSAList surfaces the new FSAList base href
 // (with the ?l=255 paging query stripped) on a 301. Confirms the
-// stripPagingQuery seam — callers store the BASE href, not the paginated
+// stripPagingQuery seam : callers store the BASE href, not the paginated
 // URL, so subsequent fresh GETs append paging from a clean base.
 func TestRedirect_GetFSAList301StripsPagingQuery(t *testing.T) {
 	t.Parallel()
@@ -413,7 +413,7 @@ func TestRedirect_GetFSAList301StripsPagingQuery(t *testing.T) {
 		t.Fatalf("GetFSAList: %v", err)
 	}
 	// The server's Location is /v2/fsa (no paging). The wrapper should
-	// surface that verbatim — there's no paging suffix to strip.
+	// surface that verbatim : there's no paging suffix to strip.
 	if newHref != "/v2/fsa" {
 		t.Errorf("newHref = %q, want %q (server-supplied Location; no paging suffix to strip)", newHref, "/v2/fsa")
 	}

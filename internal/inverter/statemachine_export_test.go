@@ -6,7 +6,7 @@ package inverter
 // scheduler_export_test.go.
 //
 // The public Current() snapshot intentionally does NOT expose activeExpireAt
-// — it's an internal scheduling concern not relevant to IEEE-041's
+// : it's an internal scheduling concern not relevant to IEEE-041's
 // ApplyControls consumer. Tests need to verify expiry handling without
 // driving real wall-clock, so we expose a read-only helper here.
 

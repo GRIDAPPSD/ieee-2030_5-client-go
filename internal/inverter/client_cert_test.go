@@ -15,7 +15,7 @@ import (
 // file caused a nil-pointer panic because pem.Decode's nil return was
 // dereferenced without a guard, and os.ReadFile's error was discarded.
 //
-// Each subtest mutates only the client cert file (CertFile) — the CA file
+// Each subtest mutates only the client cert file (CertFile) : the CA file
 // and key file are always valid so we isolate failures to the cert read
 // + PEM decode path under test.
 func TestNewSEP2Client_CertLoadErrors(t *testing.T) {

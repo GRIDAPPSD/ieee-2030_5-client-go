@@ -33,12 +33,12 @@ import (
 //	   (terminal, same-tick auto-revert)        (terminal, same-tick auto-revert)
 //
 // Out of scope for IEEE-040:
-//   - Replacing ApplyControls(nil, ...) at cmd/inverterclient/main.go:699 —
+//   - Replacing ApplyControls(nil, ...) at cmd/inverterclient/main.go:699 :
 //     IEEE-041. This ticket exposes Current() so IEEE-041 can read
 //     ActiveDERControl when State == EVENT_STARTED; the actual swap lives in
 //     main.go.
-//   - DERCurve retrieval — IEEE-042.
-//   - Response Function Set / replyTo POSTs — Phase 6. The OnTransition hook
+//   - DERCurve retrieval : IEEE-042.
+//   - Response Function Set / replyTo POSTs : Phase 6. The OnTransition hook
 //     is the wiring point; Phase 6 registers it.
 //   - Multi-event Primacy arbitration (Phase 5 doc test case 10). Single-
 //     event scope by design: if two events pop at the same Tick the first
@@ -48,7 +48,7 @@ import (
 // EventState enumerates the state-machine vertices. Values are stable for
 // log-correlation; do not reorder. DEFAULT is the zero value so the
 // zero-value StateMachine starts in the right state (NewStateMachine still
-// preferred — guards against future field additions).
+// preferred : guards against future field additions).
 type EventState int
 
 // EventState values. DEFAULT is intentionally zero so a zero-value
@@ -108,21 +108,21 @@ type TransitionHook func(prev, next EventState, evt *sep2.DERControl)
 
 // StateMachine owns the inverter's DEFAULT ↔ active DERControl lifecycle.
 // The zero value is functional (state == DEFAULT) but NewStateMachine is the
-// preferred entry point — it sets the mutex up explicitly and guards against
+// preferred entry point : it sets the mutex up explicitly and guards against
 // future field additions.
 //
 // Concurrency: a single sync.Mutex serializes Tick / OnTransition /
 // AddTransitionHook / Current. The expected workload is one Tick per
-// pollRate (30s–5min); the extra read-parallelism an RWMutex would buy is
+// pollRate (30s-5min); the extra read-parallelism an RWMutex would buy is
 // not worth its complexity for a single-event-scope state machine. Hooks
-// are invoked OUTSIDE the lock (locked-callback antipattern avoided —
+// are invoked OUTSIDE the lock (locked-callback antipattern avoided :
 // Pike rule 3 is satisfied even though no goroutine lives inside the
 // state machine).
 //
 // Hook surface (IEEE-044, Phase 6 ticket 2 of 3):
-//   - OnTransition(hook) — replace-only. The single-hook slot; passing nil
+//   - OnTransition(hook) : replace-only. The single-hook slot; passing nil
 //     clears it. Test code swaps implementations in/out via this method.
-//   - AddTransitionHook(hook) — append. Each call adds a hook to a slice;
+//   - AddTransitionHook(hook) : append. Each call adds a hook to a slice;
 //     every transition fires every appended hook in registration order
 //     PLUS the OnTransition slot (if set). Production code that wants to
 //     compose multiple concerns (e.g. IEEE-042 curve refresh + IEEE-044
@@ -138,7 +138,7 @@ type StateMachine struct {
 }
 
 // NewStateMachine constructs a state machine in DEFAULT. No required
-// dependencies — the scheduler and now-source are passed to Tick so the
+// dependencies : the scheduler and now-source are passed to Tick so the
 // state machine never holds a clock reference (parity with the scheduler's
 // pure-function design from IEEE-039).
 func NewStateMachine() *StateMachine {
@@ -166,7 +166,7 @@ func (sm *StateMachine) OnTransition(hook TransitionHook) {
 // holds up the caller's Tick loop and a hook that calls back into the
 // state machine cannot deadlock.
 //
-// There is no public removal API — hooks are expected to outlive the
+// There is no public removal API : hooks are expected to outlive the
 // state machine they're attached to (Phase 6 wires them once at startup
 // and never deregisters). A nil hook is a no-op append-attempt and is
 // silently ignored to keep callers' guarded "register if non-nil"
@@ -202,21 +202,21 @@ func (sm *StateMachine) Current() EventStateSnapshot {
 //  1. Holding the previous DERControlCache snapshot (closure-local).
 //  2. Taking a fresh snapshot, calling cache.Diff to compute the added /
 //     updated / cancelled buckets.
-//  3. Calling Tick(now, added, cancelled, sched) — Tick forwards added/
+//  3. Calling Tick(now, added, cancelled, sched) : Tick forwards added/
 //     cancelled to the scheduler, calls sched.PopExpired(now), and walks
 //     state transitions in a single atomic pass.
 //
 // Tick is safe under the state-machine mutex; the mutex is held across
-// scheduler calls (sched has its own mutex — no risk of deadlock because the
+// scheduler calls (sched has its own mutex : no risk of deadlock because the
 // state machine never calls back into itself, and the scheduler never calls
 // into the state machine). Hook invocations happen AFTER the mutex is
 // released for each transition.
 //
 // `now` is the caller's clock reading (production: client.Now() from
 // IEEE-031; tests: a fixed-time closure). The state machine never reads
-// real time.Now() — consistent with the scheduler's discipline.
+// real time.Now() : consistent with the scheduler's discipline.
 //
-// `sched` is required (panics on nil — programmer error, not a runtime
+// `sched` is required (panics on nil : programmer error, not a runtime
 // failure mode, same as NewScheduler's nil-arg panics).
 func (sm *StateMachine) Tick(
 	now time.Time,
@@ -247,7 +247,7 @@ func (sm *StateMachine) Tick(
 
 // transition records a single state change for post-lock hook firing.
 // hook and hooks are captured at transition time so a mid-Tick
-// OnTransition / AddTransitionHook call is harmless — already-recorded
+// OnTransition / AddTransitionHook call is harmless : already-recorded
 // transitions fire against the pre-call snapshot.
 type transition struct {
 	prev  EventState
@@ -280,7 +280,7 @@ type transition struct {
 //
 // Multi-event arbitration TODO: when PopExpired returns >1 event in one
 // call (FireAt-ascending), only the first becomes active. The remainder are
-// dropped on the floor — IEEE-040 single-event scope. Multi-event ranking
+// dropped on the floor : IEEE-040 single-event scope. Multi-event ranking
 // by Primacy is IEEE-041 or a follow-up ticket per Phase 5 doc case 10.
 func (sm *StateMachine) computeTransitionsLocked(
 	now time.Time,
@@ -331,17 +331,17 @@ func (sm *StateMachine) computeTransitionsLocked(
 	}
 
 	// 4. Drain expired (fire-time-reached) events. First-popped wins under
-	// single-event scope. Subsequent popped events are dropped — multi-event
+	// single-event scope. Subsequent popped events are dropped : multi-event
 	// arbitration is out of scope (flagged TODO above).
 	expired := sched.PopExpired(now)
 	if len(expired) > 1 {
-		log.Printf("statemachine: TODO multi-event Primacy arbitration — %d events popped this tick; first wins, %d dropped",
+		log.Printf("statemachine: TODO multi-event Primacy arbitration : %d events popped this tick; first wins, %d dropped",
 			len(expired), len(expired)-1)
 	}
 	if len(expired) > 0 {
 		head := expired[0]
 		// If the state is DEFAULT, first observe EVENT_RECEIVED then advance
-		// to EVENT_STARTED — even though both happen in the same Tick. This
+		// to EVENT_STARTED : even though both happen in the same Tick. This
 		// keeps the transition trail honest for hook consumers.
 		if sm.state == StateDefault {
 			// Materialize a copy so the snapshot pointer outlives any future
@@ -350,7 +350,7 @@ func (sm *StateMachine) computeTransitionsLocked(
 			sm.activeMRID = head.MRID
 			sm.activeDERCtrl = &evtCopy
 			sm.activeExpireAt = head.ExpireAt
-			// Synthesize the RECEIVED step the caller never observed — Tick
+			// Synthesize the RECEIVED step the caller never observed : Tick
 			// "saw" the event for the first time at PopExpired, but the
 			// lifecycle requires RECEIVED before STARTED.
 			out = append(out, sm.recordTransitionLocked(StateDefault, StateEventReceived, head.MRID, &evtCopy))
@@ -413,7 +413,7 @@ func (sm *StateMachine) transitionLocked(next EventState, mRID string, evt *sep2
 }
 
 // recordTransitionLocked records a transition slip WITHOUT mutating the
-// state — used when state mutation already happened (e.g. activeMRID set
+// state : used when state mutation already happened (e.g. activeMRID set
 // at PopExpired time) and we just need the hook event entry. Caller MUST
 // hold sm.mu.
 func (sm *StateMachine) recordTransitionLocked(prev, next EventState, mRID string, evt *sep2.DERControl) transition {

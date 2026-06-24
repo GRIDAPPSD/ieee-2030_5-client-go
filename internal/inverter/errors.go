@@ -13,7 +13,7 @@ import (
 // callers can pattern-match with errors.Is / errors.As instead of re-parsing
 // status codes. CSIP V1.2 GEN.037..GEN.049 require a DER Client to *process*
 // each of these codes per spec semantics; this is the typed-error half of
-// that work — caller behavior changes (graceful bypass replacing log.Fatalf,
+// that work : caller behavior changes (graceful bypass replacing log.Fatalf,
 // 301 follow with cached-href update) ship in IEEE-048 and IEEE-047.
 //
 // 5xx maps to the pre-existing ErrResponseTransient (IEEE-043), so callers
@@ -21,7 +21,7 @@ import (
 //
 // Semantic vs HTTP not-found: the pre-existing ErrEndDeviceNotFound
 // (IEEE-029) signals that a server's EndDeviceList does not contain the
-// client's LFDI — an application-level absence on a 200-OK response, not a
+// client's LFDI : an application-level absence on a 200-OK response, not a
 // 404. It is deliberately *not* unified with ErrNotFound below; callers that
 // idle-poll for provisioning must continue to distinguish "list returned but
 // I am not in it" from "endpoint returned 404."
@@ -51,7 +51,7 @@ var (
 
 	// ErrLogEventLinkAbsent is returned by PostLogEvent when the caller
 	// passes an empty logEventListHref. CSIP V1.2 BASIC-027 declares the
-	// LogEvent function set OPTIONAL — when an EndDevice does not advertise
+	// LogEvent function set OPTIONAL : when an EndDevice does not advertise
 	// a LogEventListLink the alarm-class emitter must bypass with a warning,
 	// not abort. Callers branch on errors.Is(err, ErrLogEventLinkAbsent) to
 	// distinguish the "server gap" case from real POST failures. See
@@ -75,7 +75,7 @@ var (
 //
 // Only 301 handling is in IEEE-047's scope. The struct covers the broader
 // redirect family because the stdlib http.Client otherwise treats them
-// alike — disabling auto-follow on the client surfaces every redirect class
+// alike : disabling auto-follow on the client surfaces every redirect class
 // through this type, and callers can pattern-match via the Status field
 // when 302/307/308 needs distinct behavior.
 type MovedError struct {
@@ -101,7 +101,7 @@ func (e *MovedError) Error() string {
 // typed error, or returns nil for the success codes (200, 201, 204) that
 // (*SEP2Client).Get / Post / Put treat as happy paths.
 //
-// The function does NOT close resp.Body or read from it — callers retain
+// The function does NOT close resp.Body or read from it : callers retain
 // full ownership of the response. The returned error is always wrapped with
 // the method-and-URL context at the call site (so callers reading the error
 // message see "GET /edev: not found (404)" rather than just "not found").

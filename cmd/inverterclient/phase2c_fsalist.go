@@ -1,6 +1,6 @@
 package main
 
-// Phase 2c: FunctionSetAssignmentsList discovery (IEEE-035 — plan-1 phase 4
+// Phase 2c: FunctionSetAssignmentsList discovery (IEEE-035 : plan-1 phase 4
 // entry).
 //
 // Extracted from main() by IEEE-075 to give the 5 deferred IEEE-072 Phase 2c
@@ -11,7 +11,7 @@ package main
 // as IEEE-074's Phase 2b extraction (see cmd/inverterclient/phase2b.go).
 //
 // runPhase2cFSAList owns ONLY the FSAList discovery control flow that lived
-// in the inline switch — the missing-link branch (bypass vs fatal), the
+// in the inline switch : the missing-link branch (bypass vs fatal), the
 // resolved-link branch (GET + empty-list idle vs accept), and the idle loop
 // that re-polls dcap.PollRate when the server has not yet bound any FSAs.
 // It does not touch the downstream IEEE-036 DERProgram-walk loop or the
@@ -24,7 +24,7 @@ package main
 //   - edev.FunctionSetAssignmentsListLink == nil && (!cfg.CSIP ||
 //     cfg.AllowUnregistered): log "skipping Phase 2c" once, return zero-value
 //     FunctionSetAssignmentsList + nil error. Caller proceeds with an empty
-//     fsaList — the IEEE-036 DERProgram-walk loop guard handles that case.
+//     fsaList : the IEEE-036 DERProgram-walk loop guard handles that case.
 //   - edev.FunctionSetAssignmentsListLink == nil && CSIP-strict: return
 //     *fsaListFatal citing "CSIP V1.2 CORE-012 step 1". Caller in main()
 //     unwraps via errors.As and calls log.Fatalf so the exit-code-1 contract
@@ -50,7 +50,7 @@ package main
 // Test seam: phase2cFSAListPollMin and phase2cFSAListPollDefault are vars
 // (not consts) so phase2c_fsalist_test.go can shrink the floor below 60s
 // without faking time. The production pinPollInterval() helper is unchanged
-// — these vars shadow its policy only inside runPhase2cFSAList. Mirrors
+// : these vars shadow its policy only inside runPhase2cFSAList. Mirrors
 // IEEE-074's phase2bPollMin/phase2bPollDefault pattern (and IEEE-070's
 // minTimeSyncPollRate before it). The production binary never writes to
 // these.
@@ -161,7 +161,7 @@ func runPhase2cFSAList(
 				}
 			}
 			if newHref != "" {
-				log.Printf("FSAList: 301 follow — cached href %s → %s",
+				log.Printf("FSAList: 301 follow : cached href %s → %s",
 					edev.FunctionSetAssignmentsListLink.Href, newHref)
 				edev.FunctionSetAssignmentsListLink.Href = newHref
 			}

@@ -1,4 +1,4 @@
-// Package inverter_test integration tests for IEEE-046 — Centralized HTTP
+// Package inverter_test integration tests for IEEE-046 : Centralized HTTP
 // response code router. These exercise (*SEP2Client).Get / Post / Put end-
 // to-end through the gotls listener fixture (shared with the IEEE-029 / -030
 // suite) and assert that each HTTP status code surfaces as the appropriate
@@ -8,7 +8,7 @@
 //
 // Cases 1-9 cover the new router behavior. Case 10 pins the IEEE-029
 // semantic sentinel (ErrEndDeviceNotFound) to be sure it has NOT been
-// unified with the new HTTP ErrNotFound — they are different concepts.
+// unified with the new HTTP ErrNotFound : they are different concepts.
 package inverter_test
 
 import (
@@ -179,13 +179,13 @@ func TestRouter_PostMaps501ToErrNotImplemented(t *testing.T) {
 }
 
 // IEEE-046 case 8 (revised by IEEE-047): stdlib auto-follow remains
-// disabled — CheckRedirect must still return ErrUseLastResponse so 301s
+// disabled : CheckRedirect must still return ErrUseLastResponse so 301s
 // reach classifyResponse rather than being silently swallowed by the
 // stdlib client. Surfacing as *MovedError is now visible at the
 // classifyResponse layer (errors_test.go cases) and via the *one-hop
 // follow* path exercised in TestGet301FollowsOnceAndReturnsBody below.
 // This case continues to assert stdlib does NOT auto-follow by routing
-// the followed request through our own handler and counting hits — a
+// the followed request through our own handler and counting hits : a
 // stdlib auto-follow would issue a second request without our 301-aware
 // wrapper running, so the followHits counter would be 1 even if our
 // IEEE-047 wrapper never fired. We assert that the wrapper *did* fire
@@ -225,7 +225,7 @@ func TestRouter_Get301FollowedOnceAndStdlibAutoFollowDisabled(t *testing.T) {
 	}
 }
 
-// IEEE-046 case 9: 5xx still maps to ErrResponseTransient — IEEE-043's
+// IEEE-046 case 9: 5xx still maps to ErrResponseTransient : IEEE-043's
 // pre-existing sentinel must survive the refactor so PostResponseWithRetry
 // and other callers keep working.
 func TestRouter_GetMaps5xxToErrResponseTransient(t *testing.T) {
@@ -246,7 +246,7 @@ func TestRouter_GetMaps5xxToErrResponseTransient(t *testing.T) {
 
 // IEEE-046 case 10: ErrEndDeviceNotFound (IEEE-029, semantic) MUST stay
 // distinct from ErrNotFound (HTTP). LookupOwnEndDevice against a /edev list
-// that returns 200 OK with our LFDI absent returns ErrEndDeviceNotFound —
+// that returns 200 OK with our LFDI absent returns ErrEndDeviceNotFound :
 // NOT ErrNotFound. Pinning behavior so the IEEE-046 refactor cannot
 // accidentally collapse the two.
 func TestRouter_LookupOwnEndDeviceSemanticSentinel(t *testing.T) {
@@ -254,7 +254,7 @@ func TestRouter_LookupOwnEndDeviceSemanticSentinel(t *testing.T) {
 	env := newCCMTestEnv(t)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/edev", func(w http.ResponseWriter, _ *http.Request) {
-		// Empty list, not 404 — semantic "not in list" vs HTTP "no such resource".
+		// Empty list, not 404 : semantic "not in list" vs HTTP "no such resource".
 		writeEdevList(t, w, sep2.EndDeviceList{})
 	})
 	serverURL, _ := startIdleListener(t, env, mux)

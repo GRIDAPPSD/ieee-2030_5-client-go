@@ -16,7 +16,7 @@ import (
 func TestActiveControlBase(t *testing.T) {
 	t.Parallel()
 
-	// Common fixtures — distinct pointer identities let the assertions
+	// Common fixtures : distinct pointer identities let the assertions
 	// distinguish "returned the event base" from "returned the default base."
 	eventW := sep2.ActivePower{Value: 750}
 	eventBase := &sep2.DERControlBase{OpModFixedW: &eventW}
@@ -101,7 +101,7 @@ func TestActiveControlBase(t *testing.T) {
 			description: "rule 1 guard: EVENT_STARTED but ActiveDERControl pointer nil → falls to rule 2",
 		},
 
-		// Transient states: never treated as "active event" — return default.
+		// Transient states: never treated as "active event" : return default.
 		{
 			name: "event_received_uses_default",
 			snap: inverter.EventStateSnapshot{
@@ -171,7 +171,7 @@ func TestActiveControlBase(t *testing.T) {
 // and the controller honors it. Proves the helper's output is usable by
 // ApplyControls without any further adaptation.
 //
-// We do NOT re-test ApplyControls's full priority ladder here — that's
+// We do NOT re-test ApplyControls's full priority ladder here : that's
 // controller_test.go's job. This is the one-line check that says "the
 // helper return value plugs into ApplyControls."
 func TestActiveControlBase_DrivesApplyControls(t *testing.T) {
@@ -187,7 +187,7 @@ func TestActiveControlBase_DrivesApplyControls(t *testing.T) {
 		t.Fatalf("helper returned %p, want %p (default base)", base, defaultBase)
 	}
 
-	// Now plumb through ApplyControls — same call shape the simulation tick
+	// Now plumb through ApplyControls : same call shape the simulation tick
 	// loop uses post-IEEE-041.
 	grid := inverter.GridState{VoltsPU: 1.0, FreqHz: 60.0}
 	const maxP = 8000.0

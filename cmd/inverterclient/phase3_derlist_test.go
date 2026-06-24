@@ -23,7 +23,7 @@ import (
 
 // fakeDERListClient is a minimal stand-in for *inverter.SEP2Client over the
 // derListClient seam. The atomic counter detects unintended fan-out (Phase 3
-// fetch should be one-shot — never re-tried on bypass).
+// fetch should be one-shot : never re-tried on bypass).
 type fakeDERListClient struct {
 	getErr     error
 	getList    sep2.DERList

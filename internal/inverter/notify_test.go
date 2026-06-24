@@ -56,7 +56,7 @@ func getBody(t *testing.T, url string) string {
 // call the teardown via t.Cleanup or defer.
 //
 // listenAddr defaults to 127.0.0.1:0 (random port). Callers that want a
-// disabled receiver should call NewNotifyReceiver directly with "" — the
+// disabled receiver should call NewNotifyReceiver directly with "" : the
 // disabled path doesn't reach this helper.
 func newReceiverFromEnv(t *testing.T, env *ccmTestEnv, dispatcher inverter.NotificationDispatcher) (*inverter.NotifyReceiver, func()) {
 	t.Helper()
@@ -124,7 +124,7 @@ func notifyClientForEnv(t *testing.T, env *ccmTestEnv) *http.Client {
 		// Receiver's server cert is the inverter's device cert, which
 		// carries an otherName-only SAN (no DNS / IP entry) so stdlib
 		// hostname verification cannot succeed. Bypass and rely on
-		// chain validity — the CA pool is locked down.
+		// chain validity : the CA pool is locked down.
 		InsecureSkipVerify: true, //nolint:gosec // see comment
 		CurvePreferences:   []gotls.CurveID{gotls.CurveP256},
 	}
@@ -152,7 +152,7 @@ func notifyURL(t *testing.T, rcv *inverter.NotifyReceiver, path string) string {
 
 // sampleNotificationXML returns a minimal well-formed Notification body. The
 // CORE-018 step-4 payload carries subscribedResource (the resource the
-// inverter subscribed to), newResourceURI (the actual changed item — usually
+// inverter subscribed to), newResourceURI (the actual changed item : usually
 // the same), and status. mRID is required on Resource per IEEE 2030.5 §10.
 func sampleNotificationXML(t *testing.T, status uint8, newURI string) []byte {
 	t.Helper()
@@ -433,7 +433,7 @@ func TestNotifyHandler_DispatcherInvoked(t *testing.T) {
 }
 
 // TestNotifyHandler_DispatcherNotInvokedOnError asserts the dispatcher is
-// NOT called for malformed bodies — important so a buggy server can't
+// NOT called for malformed bodies : important so a buggy server can't
 // trigger Phase 5 state machine churn by spamming garbage.
 func TestNotifyHandler_DispatcherNotInvokedOnError(t *testing.T) {
 	t.Parallel()
@@ -498,7 +498,7 @@ func TestNotifyReceiver_AddrBound(t *testing.T) {
 
 // TestNotifyReceiver_RejectsUnsignedClient asserts mTLS posture: a client
 // presenting a cert signed by a foreign CA fails the handshake against
-// the receiver. This is the security invariant — without it any host
+// the receiver. This is the security invariant : without it any host
 // could pose as the SEP2 server and inject Notifications.
 func TestNotifyReceiver_RejectsUnsignedClient(t *testing.T) {
 	t.Parallel()
@@ -507,7 +507,7 @@ func TestNotifyReceiver_RejectsUnsignedClient(t *testing.T) {
 	rcv, _ := newReceiverFromEnv(t, env, nil)
 
 	// Build a second, foreign CA and issue a device cert under it. The
-	// receiver's CA pool only trusts env's CA — this cert's chain will
+	// receiver's CA pool only trusts env's CA : this cert's chain will
 	// not validate.
 	foreignCAPEM, foreignCAKeyPEM, err := certs.GenerateCA(certs.CAOptions{
 		CommonName: "Foreign CA",
@@ -537,7 +537,7 @@ func TestNotifyReceiver_RejectsUnsignedClient(t *testing.T) {
 	}
 
 	// Trust the receiver's CA on the dial side so the server's leaf
-	// chain validates from this client's perspective — we want the
+	// chain validates from this client's perspective : we want the
 	// handshake to fail because of OUR cert, not the server's.
 	rootPool := x509.NewCertPool()
 	caPEM, err := os.ReadFile(env.caCertPath)

@@ -160,13 +160,13 @@ const dashboardHTML = `<!DOCTYPE html>
 </head>
 <body>
 <div class="header">
-  <h1>IEEE 1547 Inverter Simulator — Real-Time Dashboard</h1>
+  <h1>IEEE 1547 Inverter Simulator : Real-Time Dashboard</h1>
   <div class="status">
-    <div class="status-item"><div class="label">Mode</div><div class="value" id="mode">—</div></div>
-    <div class="status-item"><div class="label">P (W)</div><div class="value" id="power">—</div></div>
-    <div class="status-item"><div class="label">Q (VAr)</div><div class="value" id="reactive">—</div></div>
-    <div class="status-item"><div class="label">PF</div><div class="value" id="pf">—</div></div>
-    <div class="status-item"><div class="label">Status</div><div class="value" id="connStatus">—</div></div>
+    <div class="status-item"><div class="label">Mode</div><div class="value" id="mode">:</div></div>
+    <div class="status-item"><div class="label">P (W)</div><div class="value" id="power">:</div></div>
+    <div class="status-item"><div class="label">Q (VAr)</div><div class="value" id="reactive">:</div></div>
+    <div class="status-item"><div class="label">PF</div><div class="value" id="pf">:</div></div>
+    <div class="status-item"><div class="label">Status</div><div class="value" id="connStatus">:</div></div>
   </div>
 </div>
 <div class="charts">

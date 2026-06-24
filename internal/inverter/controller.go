@@ -27,7 +27,7 @@ func ApplyControls(base *sep2.DERControlBase, grid GridState, maxPW float64) Con
 // requested CurveType (sep2.CurveTypeOpModVoltVar etc.), that curve is
 // used; otherwise the IEEE 1547 compiled-in default applies.
 //
-// `curves == nil` is equivalent to calling ApplyControls — no behavior
+// `curves == nil` is equivalent to calling ApplyControls : no behavior
 // change for callers that haven't adopted the curve cache yet.
 //
 // IEEE-042 (Phase 5 closer): plumbs server-fetched DERCurves into the
@@ -48,7 +48,7 @@ func ApplyControlsWithCurves(
 	}
 
 	if base == nil {
-		// No controls — default to PF=1.0
+		// No controls : default to PF=1.0
 		return out
 	}
 

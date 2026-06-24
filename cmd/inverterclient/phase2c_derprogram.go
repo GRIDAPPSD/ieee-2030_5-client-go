@@ -1,6 +1,6 @@
 package main
 
-// Phase 2c (continued): DERProgram-walk outer for-loop (IEEE-036 — plan-1
+// Phase 2c (continued): DERProgram-walk outer for-loop (IEEE-036 : plan-1
 // phase 4 continued).
 //
 // Extracted from main() by IEEE-076 to give the 2 deferred IEEE-073 Phase 2c
@@ -12,7 +12,7 @@ package main
 // (cmd/inverterclient/phase2c_fsalist.go).
 //
 // runPhase2cDERProgramWalk owns ONLY the outer for-loop body that lived in
-// the inline block — repeated calls to walkDERProgramTree, the
+// the inline block : repeated calls to walkDERProgramTree, the
 // non-empty-aggregate cache-and-break branch, the CSIP-strict empty-aggregate
 // idle-on-PollRate branch, and the non-CSIP empty-aggregate proceed branch.
 // It does not touch the inner walkDERProgramTree (already package-level,
@@ -51,7 +51,7 @@ package main
 // Test seam: phase2cDERProgramPollMin and phase2cDERProgramPollDefault are
 // vars (not consts) so phase2c_derprogram_test.go can shrink the floor below
 // 60s without faking time. The production pinPollInterval() helper is
-// unchanged — these vars shadow its policy only inside
+// unchanged : these vars shadow its policy only inside
 // runPhase2cDERProgramWalk. Mirrors IEEE-074's phase2bPollMin/phase2bPollDefault
 // and IEEE-075's phase2cFSAListPollMin/phase2cFSAListPollDefault patterns
 // (and IEEE-070's minTimeSyncPollRate before them). The production binary

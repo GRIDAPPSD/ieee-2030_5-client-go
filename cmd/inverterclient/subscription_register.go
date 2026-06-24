@@ -21,7 +21,7 @@ import (
 
 // notifyURLForReceiver returns the full https://<addr>/notify URL the SEP2
 // server should POST Notifications to. Returns "" when the receiver is nil
-// or its bound address is unavailable — the caller treats an empty URL as
+// or its bound address is unavailable : the caller treats an empty URL as
 // "subscription flow disabled, fall back to polling."
 //
 // Production callers pass *inverter.NotifyReceiver directly; the function
@@ -78,7 +78,7 @@ type subscriptionPoster interface {
 //   - PostSubscription returns any other error → log warning, continue with
 //     the next resource. Future resources may still succeed.
 //
-// Returns a *subscriptionRegistry (IEEE-052) — a mutex-guarded wrapper
+// Returns a *subscriptionRegistry (IEEE-052) : a mutex-guarded wrapper
 // around the subscribed-resource-href → server-assigned-subscription-href
 // map. IEEE-052 wires registry.CancelHookFunc() as the dispatcher's
 // CancelHook so status=1 notifications free the inverter-side entry.

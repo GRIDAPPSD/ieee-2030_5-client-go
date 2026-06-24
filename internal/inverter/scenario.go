@@ -52,8 +52,8 @@ func VoltVarScenario() Scenario {
 		Steps: []ScenarioStep{
 			{AtTime: 0, Grid: &GridState{VoltsPU: 1.0, FreqHz: 60.0}, Description: "normal voltage"},
 			{AtTime: 10 * time.Minute, Grid: &GridState{VoltsPU: 1.03, FreqHz: 60.0}, Description: "voltage rising"},
-			{AtTime: 20 * time.Minute, Grid: &GridState{VoltsPU: 1.05, FreqHz: 60.0}, Description: "voltage at 1.05 p.u. — absorbing vars"},
-			{AtTime: 30 * time.Minute, Grid: &GridState{VoltsPU: 1.08, FreqHz: 60.0}, Description: "voltage at 1.08 p.u. — full var absorption"},
+			{AtTime: 20 * time.Minute, Grid: &GridState{VoltsPU: 1.05, FreqHz: 60.0}, Description: "voltage at 1.05 p.u. : absorbing vars"},
+			{AtTime: 30 * time.Minute, Grid: &GridState{VoltsPU: 1.08, FreqHz: 60.0}, Description: "voltage at 1.08 p.u. : full var absorption"},
 			{AtTime: 40 * time.Minute, Grid: &GridState{VoltsPU: 1.03, FreqHz: 60.0}, Description: "voltage decreasing"},
 			{AtTime: 50 * time.Minute, Grid: &GridState{VoltsPU: 1.0, FreqHz: 60.0}, Description: "voltage normal"},
 		},
@@ -82,8 +82,8 @@ func DisconnectScenario() Scenario {
 		Duration:    30 * time.Minute,
 		Steps: []ScenarioStep{
 			{AtTime: 0, Grid: &GridState{VoltsPU: 1.0, FreqHz: 60.0}, Description: "normal operation"},
-			{AtTime: 5 * time.Minute, Description: "server sends connect=false — cease to energize"},
-			{AtTime: 15 * time.Minute, Description: "server sends connect=true — reconnect"},
+			{AtTime: 5 * time.Minute, Description: "server sends connect=false : cease to energize"},
+			{AtTime: 15 * time.Minute, Description: "server sends connect=true : reconnect"},
 		},
 	}
 }
@@ -97,7 +97,7 @@ func FreqDroopScenario() Scenario {
 		Steps: []ScenarioStep{
 			{AtTime: 0, Grid: &GridState{VoltsPU: 1.0, FreqHz: 60.0}, Description: "normal frequency"},
 			{AtTime: 5 * time.Minute, Grid: &GridState{VoltsPU: 1.0, FreqHz: 59.5}, Description: "frequency dropping"},
-			{AtTime: 10 * time.Minute, Grid: &GridState{VoltsPU: 1.0, FreqHz: 58.5}, Description: "frequency at 58.5 Hz — droop active"},
+			{AtTime: 10 * time.Minute, Grid: &GridState{VoltsPU: 1.0, FreqHz: 58.5}, Description: "frequency at 58.5 Hz : droop active"},
 			{AtTime: 20 * time.Minute, Grid: &GridState{VoltsPU: 1.0, FreqHz: 60.0}, Description: "frequency recovered"},
 		},
 	}
@@ -111,9 +111,9 @@ func VoltageRideScenario() Scenario {
 		Duration:    15 * time.Minute,
 		Steps: []ScenarioStep{
 			{AtTime: 0, Grid: &GridState{VoltsPU: 1.0, FreqHz: 60.0}, Description: "normal"},
-			{AtTime: 2 * time.Minute, Grid: &GridState{VoltsPU: 0.70, FreqHz: 60.0}, Description: "voltage sag — ride through"},
+			{AtTime: 2 * time.Minute, Grid: &GridState{VoltsPU: 0.70, FreqHz: 60.0}, Description: "voltage sag : ride through"},
 			{AtTime: 2*time.Minute + 5*time.Second, Grid: &GridState{VoltsPU: 1.0, FreqHz: 60.0}, Description: "voltage recovered"},
-			{AtTime: 5 * time.Minute, Grid: &GridState{VoltsPU: 0.45, FreqHz: 60.0}, Description: "deep sag — must trip"},
+			{AtTime: 5 * time.Minute, Grid: &GridState{VoltsPU: 0.45, FreqHz: 60.0}, Description: "deep sag : must trip"},
 			{AtTime: 5*time.Minute + 200*time.Millisecond, Grid: &GridState{VoltsPU: 1.0, FreqHz: 60.0}, Description: "voltage restored (wait 300s to reconnect)"},
 		},
 	}
@@ -126,9 +126,9 @@ func EnterServiceScenario() Scenario {
 		Description: "Inverter starts with low voltage, waits for Table 4 criteria",
 		Duration:    15 * time.Minute,
 		Steps: []ScenarioStep{
-			{AtTime: 0, Grid: &GridState{VoltsPU: 0.85, FreqHz: 60.0}, Description: "low voltage — cannot enter service"},
-			{AtTime: 3 * time.Minute, Grid: &GridState{VoltsPU: 0.95, FreqHz: 60.0}, Description: "voltage normal — start 300s timer"},
-			{AtTime: 8*time.Minute + 1*time.Second, Description: "300s elapsed — enter service"},
+			{AtTime: 0, Grid: &GridState{VoltsPU: 0.85, FreqHz: 60.0}, Description: "low voltage : cannot enter service"},
+			{AtTime: 3 * time.Minute, Grid: &GridState{VoltsPU: 0.95, FreqHz: 60.0}, Description: "voltage normal : start 300s timer"},
+			{AtTime: 8*time.Minute + 1*time.Second, Description: "300s elapsed : enter service"},
 		},
 	}
 }
@@ -142,7 +142,7 @@ func LifecycleScenario() Scenario {
 		Steps: []ScenarioStep{
 			{AtTime: 0, Grid: &GridState{VoltsPU: 1.0, FreqHz: 60.0}, Description: "startup and registration"},
 			{AtTime: 5 * time.Minute, Description: "DER setup (PUT capability/settings)"},
-			{AtTime: 10 * time.Minute, Grid: &GridState{VoltsPU: 1.05, FreqHz: 60.0}, Description: "voltage rise — volt-var active"},
+			{AtTime: 10 * time.Minute, Grid: &GridState{VoltsPU: 1.05, FreqHz: 60.0}, Description: "voltage rise : volt-var active"},
 			{AtTime: 20 * time.Minute, Grid: &GridState{VoltsPU: 1.0, FreqHz: 60.0}, Description: "voltage normal"},
 			{AtTime: 25 * time.Minute, Description: "power limit to 5kW"},
 			{AtTime: 35 * time.Minute, Description: "remove power limit"},

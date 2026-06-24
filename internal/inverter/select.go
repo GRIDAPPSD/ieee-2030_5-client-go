@@ -21,7 +21,7 @@ import "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
 //     back to its own default when the link is absent.
 //
 // The function is pure: no I/O, no error path. Callers iterate the map in
-// arbitrary order, so a stable selection requires both selection criteria —
+// arbitrary order, so a stable selection requires both selection criteria :
 // Primacy alone is insufficient when ties exist.
 func SelectHighestPriority(progs map[string]sep2.DERProgram) (sep2.DERProgram, bool) {
 	if len(progs) == 0 {

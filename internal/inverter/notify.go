@@ -1,8 +1,8 @@
-// Package inverter — IEEE-049 inbound HTTPS Notification receiver.
+// Package inverter : IEEE-049 inbound HTTPS Notification receiver.
 //
 // Until Phase 8, the inverter was outbound-only: it polled the SEP2 server
 // for DERControlList changes (IEEE-038). CSIP V1.2 CORE-018 recommends a
-// subscription/notification flow to optimize network traffic — the inverter
+// subscription/notification flow to optimize network traffic : the inverter
 // subscribes to a resource (typically FSAList) and the server POSTs a
 // Notification to the inverter every time the resource changes.
 //
@@ -51,7 +51,7 @@ const notifyMaxBodyBytes = 64 * 1024
 // other internal servers (see internal/server).
 const notifyReadHeaderTimeout = 5 * time.Second
 
-// notifyShutdownTimeout bounds graceful shutdown — connections still being
+// notifyShutdownTimeout bounds graceful shutdown : connections still being
 // served get this long to finish before the server is force-closed.
 const notifyShutdownTimeout = 5 * time.Second
 
@@ -60,7 +60,7 @@ const notifyShutdownTimeout = 5 * time.Second
 // listener path is exercised end-to-end without forcing IEEE-051's
 // Phase-5-state-machine integration to land first.
 //
-// The dispatcher runs synchronously inside the /notify handler — keep it
+// The dispatcher runs synchronously inside the /notify handler : keep it
 // cheap. Heavy work (HTTP GETs to re-fetch a changed resource, state-machine
 // ticks) belongs in a separate goroutine the dispatcher spawns itself, with
 // a context tied to the receiver's lifetime.
@@ -69,10 +69,10 @@ const notifyShutdownTimeout = 5 * time.Second
 // spawned by the dispatcher implementation.
 type NotificationDispatcher func(ctx context.Context, n sep2.Notification)
 
-// NoopNotificationDispatcher is the IEEE-049 default — logs and returns.
+// NoopNotificationDispatcher is the IEEE-049 default : logs and returns.
 // IEEE-051 will replace this with the real Phase-5 dispatcher.
 func NoopNotificationDispatcher(_ context.Context, n sep2.Notification) {
-	log.Printf("Notification receiver: subscribed=%q new=%q status=%d (no-op dispatch — IEEE-051 pending)",
+	log.Printf("Notification receiver: subscribed=%q new=%q status=%d (no-op dispatch : IEEE-051 pending)",
 		n.SubscribedResource, n.NewResourceURI, n.Status)
 }
 
@@ -120,7 +120,7 @@ type NotifyReceiver struct {
 // distinguish config errors (returned from NewNotifyReceiver) from runtime
 // network errors (returned from Start).
 //
-// Returns (nil, nil) when cfg.ListenAddr is empty — the caller's contract
+// Returns (nil, nil) when cfg.ListenAddr is empty : the caller's contract
 // is "no listener, no subscription flow" and a nil-without-error result
 // makes that branch easy to detect.
 func NewNotifyReceiver(cfg NotifyReceiverConfig) (*NotifyReceiver, error) {
@@ -221,7 +221,7 @@ func (r *NotifyReceiver) Start() error {
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: notifyReadHeaderTimeout,
-		// IEEE-049 doesn't need ConnContext / CCMIdentityMiddleware —
+		// IEEE-049 doesn't need ConnContext / CCMIdentityMiddleware :
 		// the handler doesn't inspect the peer cert (the SEP2 server
 		// is presumed trusted once the chain validates). Subsequent
 		// IEEE-051 dispatchers MAY need peer identity; if so they can

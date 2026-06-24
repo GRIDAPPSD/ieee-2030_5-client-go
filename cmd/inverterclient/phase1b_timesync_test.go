@@ -10,7 +10,7 @@ package main
 // Tests are driven against the timeSyncClient interface defined in
 // phase1b_timesync.go so the test surface stays narrow (no httptest server,
 // no cert plumbing). The interface seam itself is part of the Pike-rule
-// small-interface discipline and is a regression target — if a future change
+// small-interface discipline and is a regression target : if a future change
 // widens the interface, the fake will fail to compile and force a
 // re-evaluation.
 

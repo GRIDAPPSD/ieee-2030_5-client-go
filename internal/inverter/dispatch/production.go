@@ -1,4 +1,4 @@
-// Package dispatch — production dispatcher (IEEESIM-004 scaffold).
+// Package dispatch : production dispatcher (IEEESIM-004 scaffold).
 //
 // ProductionDispatcher is the production consumer-policy implementation of
 // Dispatcher. At landing it is behaviorally equivalent to SimulatorDispatcher

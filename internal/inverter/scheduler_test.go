@@ -1,4 +1,4 @@
-// Tests for IEEE-039 — event scheduler with randomization (Phase 5 ticket 2 of 5).
+// Tests for IEEE-039 : event scheduler with randomization (Phase 5 ticket 2 of 5).
 //
 // The scheduler is a pure data structure: no goroutine, no I/O, no real
 // time.Now(). Every test injects a fixed-time nowFunc and a seeded *rand.Rand
@@ -7,23 +7,23 @@
 //
 // Coverage of the 9 mandatory cases from the Phase 5 doc:
 //
-//   1. Parse happy path                        — TestScheduler_ParseHappyPath
-//   2. Sort order                              — TestScheduler_SortOrderByFireAt
-//   3. randomizeStart deterministic            — TestScheduler_RandomizeStartDeterministic
-//   4. randomizeStart distribution             — TestScheduler_RandomizeStartDistribution
-//   5. randomizeDuration                       — TestScheduler_RandomizeDuration
-//   6. Cancellation removes from queue         — TestScheduler_CancellationRemovesFromQueue
-//   7. Past-due event                          — TestScheduler_PastDueEvent
-//   8. Empty queue                             — TestScheduler_EmptyQueue
-//   9. nowFunc injection                       — TestScheduler_NowFuncInjection
+//   1. Parse happy path                        : TestScheduler_ParseHappyPath
+//   2. Sort order                              : TestScheduler_SortOrderByFireAt
+//   3. randomizeStart deterministic            : TestScheduler_RandomizeStartDeterministic
+//   4. randomizeStart distribution             : TestScheduler_RandomizeStartDistribution
+//   5. randomizeDuration                       : TestScheduler_RandomizeDuration
+//   6. Cancellation removes from queue         : TestScheduler_CancellationRemovesFromQueue
+//   7. Past-due event                          : TestScheduler_PastDueEvent
+//   8. Empty queue                             : TestScheduler_EmptyQueue
+//   9. nowFunc injection                       : TestScheduler_NowFuncInjection
 //
 // Supporting coverage:
-//   - OnEventsAdded skips nil Interval         — TestScheduler_NilIntervalSkipped
-//   - OnEventsAdded replaces by mRID           — TestScheduler_ReAddReplacesByMRID
-//   - OnEventsUpdated is a documented no-op    — TestScheduler_UpdateIsNoOp
-//   - NewScheduler panics on nil args          — TestScheduler_NewSchedulerPanicsOnNil
-//   - applyRandomizeStart negative window      — TestApplyRandomizeStart_NegativeWindow
-//   - applyRandomizeDuration clamp             — TestScheduler_RandomizeDurationClampsToZero
+//   - OnEventsAdded skips nil Interval         : TestScheduler_NilIntervalSkipped
+//   - OnEventsAdded replaces by mRID           : TestScheduler_ReAddReplacesByMRID
+//   - OnEventsUpdated is a documented no-op    : TestScheduler_UpdateIsNoOp
+//   - NewScheduler panics on nil args          : TestScheduler_NewSchedulerPanicsOnNil
+//   - applyRandomizeStart negative window      : TestApplyRandomizeStart_NegativeWindow
+//   - applyRandomizeDuration clamp             : TestScheduler_RandomizeDurationClampsToZero
 
 package inverter_test
 
@@ -104,7 +104,7 @@ func TestScheduler_SortOrderByFireAt(t *testing.T) {
 	t.Parallel()
 	s := inverter.NewSchedulerForTesting(fixedNow)
 
-	// Insert in [3min, 1min, 2min] order — head must be the 1min event.
+	// Insert in [3min, 1min, 2min] order : head must be the 1min event.
 	s.OnEventsAdded([]sep2.DERControl{
 		makeControl("three", 3*time.Minute, 60, nil, nil),
 		makeControl("one", 1*time.Minute, 60, nil, nil),
@@ -154,7 +154,7 @@ func TestScheduler_RandomizeStartDeterministic(t *testing.T) {
 	// Determinism check: re-seed the same way and replay. We cannot easily
 	// predict the exact rand value without replicating rand/v2's PCG, but
 	// we CAN assert "two schedulers with the same seed produce the same
-	// FireAt" — which proves determinism end-to-end.
+	// FireAt" : which proves determinism end-to-end.
 	s2 := inverter.NewSchedulerForTesting(fixedNow)
 	s2.OnEventsAdded([]sep2.DERControl{
 		makeControl("A", 3*time.Minute, 60, ptrInt32(30), nil),
@@ -178,7 +178,7 @@ func TestScheduler_RandomizeStartDistribution(t *testing.T) {
 	events := make([]sep2.DERControl, n)
 	start := fixedNow.Add(3 * time.Minute)
 	for i := range events {
-		// Unique mRIDs — duplicates would replace each other (test #11
+		// Unique mRIDs : duplicates would replace each other (test #11
 		// covers that path). Use a deterministic format that won't collide.
 		mrid := mridFromIndex(i)
 		events[i] = makeControl(mrid, 3*time.Minute, 60, ptrInt32(rs), nil)
@@ -190,7 +190,7 @@ func TestScheduler_RandomizeStartDistribution(t *testing.T) {
 	}
 
 	// Bucket each FireAt into 1-second bins [0, 30].
-	const buckets = 31 // inclusive upper bound — rng.Int64N(rs+1) produces [0, rs] inclusive.
+	const buckets = 31 // inclusive upper bound : rng.Int64N(rs+1) produces [0, rs] inclusive.
 	counts := make([]int, buckets)
 	snap := inverter.QueueSnapshotForTesting(s)
 	for _, ev := range snap {
@@ -205,7 +205,7 @@ func TestScheduler_RandomizeStartDistribution(t *testing.T) {
 	// hit every bucket comfortably. A skewed RNG would leave gaps.
 	for i, c := range counts {
 		if c == 0 {
-			t.Errorf("bucket %d (offset=%ds) is empty — RNG distribution may be skewed", i, i)
+			t.Errorf("bucket %d (offset=%ds) is empty : RNG distribution may be skewed", i, i)
 		}
 	}
 }
@@ -307,7 +307,7 @@ func TestScheduler_PastDueEvent(t *testing.T) {
 	t.Parallel()
 	s := inverter.NewSchedulerForTesting(fixedNow)
 
-	// start = now - 1min, duration = 2min — server-side already running.
+	// start = now - 1min, duration = 2min : server-side already running.
 	pastStart := fixedNow.Add(-1 * time.Minute)
 	s.OnEventsAdded([]sep2.DERControl{
 		makeControl("past", -1*time.Minute, 120, nil, nil),
@@ -352,7 +352,7 @@ func TestScheduler_EmptyQueue(t *testing.T) {
 }
 
 // =============================================================================
-// Mandatory case 9: nowFunc injection — expiry uses the injected clock.
+// Mandatory case 9: nowFunc injection : expiry uses the injected clock.
 // =============================================================================
 
 func TestScheduler_NowFuncInjection(t *testing.T) {
@@ -380,7 +380,7 @@ func TestScheduler_NowFuncInjection(t *testing.T) {
 		t.Errorf("PopExpired at virtualNow=+31s = %v, want [A]", popped)
 	}
 
-	// Importantly, the scheduler MUST NOT consult real time.Now() — if it
+	// Importantly, the scheduler MUST NOT consult real time.Now() : if it
 	// did, the event at fixedNow+30s would already have fired by wall-clock
 	// (since fixedNow is in the past). The previous assertion already proves
 	// this: PopExpired at virtualNow=fixedNow returned empty, even though
@@ -449,7 +449,7 @@ func TestScheduler_UpdateIsNoOp(t *testing.T) {
 	original := inverter.EventFireAtForTesting(s)
 
 	// OnEventsUpdated with the same mRID but a different start MUST NOT
-	// re-queue (per IEEE-039 scope — IEEE-040 owns state-machine semantics).
+	// re-queue (per IEEE-039 scope : IEEE-040 owns state-machine semantics).
 	s.OnEventsUpdated([]sep2.DERControl{
 		makeControl("A", 5*time.Minute, 60, nil, nil),
 	})
@@ -509,7 +509,7 @@ func TestScheduler_RandomizeStartNegativeWindow(t *testing.T) {
 	t.Parallel()
 	s := inverter.NewSchedulerForTesting(fixedNow)
 
-	// randomizeStart = -10s — window [start-10s, start].
+	// randomizeStart = -10s : window [start-10s, start].
 	start := fixedNow.Add(3 * time.Minute)
 	s.OnEventsAdded([]sep2.DERControl{
 		makeControl("A", 3*time.Minute, 60, ptrInt32(-10), nil),
@@ -559,7 +559,7 @@ func TestScheduler_RandomizeDurationNegativeIsAbs(t *testing.T) {
 func TestScheduler_RandomizeDurationClampsToZero(t *testing.T) {
 	t.Parallel()
 
-	// Pathological: duration=2s, randomizeDuration=100s — symmetric window
+	// Pathological: duration=2s, randomizeDuration=100s : symmetric window
 	// would be [-48s, +52s] which crosses zero. Run many seeds to ensure
 	// at least one ExpireAt-FireAt would be negative without the clamp.
 	// We can't easily force a specific seed to produce a negative; instead,

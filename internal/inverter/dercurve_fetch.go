@@ -14,7 +14,7 @@ import (
 // to honor curve-based controls when the active DERControl runs a curve-typed
 // mode (Volt/Var, Volt/Watt, Freq/Watt). The curves themselves live on the
 // program (DERProgram.DERCurveListLink) and are discriminated by
-// DERCurve.CurveType — there is no per-mode link on DERControlBase in this
+// DERCurve.CurveType : there is no per-mode link on DERControlBase in this
 // codebase (verified against pkg/sep2/der.go).
 //
 // This file ships:
@@ -30,19 +30,19 @@ import (
 //     can errors.Is against context.Canceled / DeadlineExceeded.
 //
 // Out of scope for IEEE-042:
-//   - DefaultDERControl curves — only active-event curves in this ticket;
+//   - DefaultDERControl curves : only active-event curves in this ticket;
 //     a follow-up can reuse the same cache + helper if it bites.
 //   - Adding new inverter modes (dedicated Volt/Watt, Watt/PF). controller.go
 //     already routes V/V via the OpModVoltVar guard; new mode files are
 //     out of scope.
-//   - Periodic curve refresh — curves are fetched at event-START transition
+//   - Periodic curve refresh : curves are fetched at event-START transition
 //     time only (CSIP V1.2 CORE-012 step 6: curves are part of "apply,"
 //     not "discover"). If the spec adds periodic refresh later, the
 //     scheduler hook lives in cmd/inverterclient/main.go.
 
 // curveClient is the minimal interface FetchProgramCurves needs from the
 // SEP2 client. Defined at the consumer (Pike review checklist #6) so the
-// helper is unit-testable without spinning a TLS listener — the httptest
+// helper is unit-testable without spinning a TLS listener : the httptest
 // fixture in dercurve_fetch_test.go passes a tiny stub.
 //
 // The exported FetchProgramCurves takes *SEP2Client to keep the call-site
@@ -53,7 +53,7 @@ type curveClient interface {
 }
 
 // DERCurveCache stores the most recent set of DERCurves keyed by CurveType.
-// The zero value is NOT ready for use — callers MUST construct via
+// The zero value is NOT ready for use : callers MUST construct via
 // NewDERCurveCache so the underlying map is non-nil.
 //
 // Concurrency: an RWMutex guards the map. Reads (ApplyControlsWithCurves) are
@@ -72,7 +72,7 @@ func NewDERCurveCache() *DERCurveCache {
 // Set stores `points` under `curveType`, replacing any prior entry. A
 // defensive copy of the slice header is taken so the caller can mutate the
 // supplied slice without affecting the cache. Pike rule (immutability): the
-// stored slice MUST NOT be mutated by anyone — Lookup hands callers their
+// stored slice MUST NOT be mutated by anyone : Lookup hands callers their
 // own copy.
 func (c *DERCurveCache) Set(curveType uint8, points []CurvePoint) {
 	stored := make([]CurvePoint, len(points))
@@ -84,7 +84,7 @@ func (c *DERCurveCache) Set(curveType uint8, points []CurvePoint) {
 
 // Lookup returns an independent copy of the curve points stored under
 // `curveType` and ok=true if present. Mutating the returned slice does not
-// affect the cache. ok=false means no curve of that type has been fetched —
+// affect the cache. ok=false means no curve of that type has been fetched :
 // the caller should fall back to its compiled-in default curve.
 func (c *DERCurveCache) Lookup(curveType uint8) (points []CurvePoint, ok bool) {
 	c.mu.RLock()
@@ -108,11 +108,11 @@ func (c *DERCurveCache) Len() int {
 
 // MapCurveData converts a []sep2.CurveData (int32 XY tuples on the wire) to
 // []CurvePoint (float64 internal representation consumed by EvaluateCurve).
-// Pure function — no I/O, no mutation of input. Returns a non-nil empty
+// Pure function : no I/O, no mutation of input. Returns a non-nil empty
 // slice for an empty input so callers can range without nil-checks.
 //
 // IEEE 2030.5 §10.10 specifies xvalue/yvalue as Int32 unscaled. CurveData
-// carries no scale factor of its own — the curveType plus the program's
+// carries no scale factor of its own : the curveType plus the program's
 // implicit per-unit convention determines the scaling. This converter
 // preserves the unscaled values; the consumer (ApplyControlsWithCurves)
 // applies the same fraction-of-rated semantics the IEEE 1547 default
@@ -131,12 +131,12 @@ func MapCurveData(points []sep2.CurveData) []CurvePoint {
 // context.DeadlineExceeded.
 //
 // When the same CurveType appears multiple times in the list the last
-// occurrence wins — matches the IEEE 2030.5 §10.1.3 list-ordering "later
+// occurrence wins : matches the IEEE 2030.5 §10.1.3 list-ordering "later
 // resource shadows earlier" semantic the rest of the inverter follows.
 //
 // Empty href is a programmer error (the caller should have gated on
 // DERCurveListLink != nil before invocation). Returns a non-wrapped error
-// in that case — there is no upstream errors.Is target to preserve.
+// in that case : there is no upstream errors.Is target to preserve.
 //
 // FetchProgramCurves spawns NO goroutines. It runs synchronously on the
 // caller's context. The caller (cmd/inverterclient/main.go state-machine

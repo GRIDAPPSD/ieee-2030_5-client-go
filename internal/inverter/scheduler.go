@@ -21,16 +21,16 @@ import (
 //   - Expose Next() (peek) and PopExpired(now) so IEEE-040's state machine
 //     can drive EVENT_RECEIVED → EVENT_STARTED transitions without coupling
 //     to the queue internals.
-//   - All scheduling math uses an injected nowFunc — production passes
+//   - All scheduling math uses an injected nowFunc : production passes
 //     client.Now (the server-offset wall clock from IEEE-031); tests inject
 //     a fixed-time clock. The scheduler NEVER reads real time.Now() inline.
 //
 // Out of scope for IEEE-039:
-//   - Firing events / mutating inverter mode/output — IEEE-040 owns the
+//   - Firing events / mutating inverter mode/output : IEEE-040 owns the
 //     state machine; this scheduler just produces the queue.
-//   - Replacing ApplyControls(nil, ...) at cmd/inverterclient/main.go — IEEE-041.
-//   - DERCurve retrieval — IEEE-042.
-//   - Response Function Set / replyTo POSTs — Phase 6.
+//   - Replacing ApplyControls(nil, ...) at cmd/inverterclient/main.go : IEEE-041.
+//   - DERCurve retrieval : IEEE-042.
+//   - Response Function Set / replyTo POSTs : Phase 6.
 //
 // IEEE 2030.5 §10.1.4 randomization interpretation (Phase 5 doc exit criterion 3):
 //
@@ -41,13 +41,13 @@ import (
 //   - randomizeDuration is symmetric about the nominal duration:
 //     [duration-|rd|/2, duration+|rd|/2]. Negative randomizeDuration is
 //     treated by absolute value (the window is still symmetric).
-//   - Both windows clamp so ExpireAt >= FireAt — pathological inputs
+//   - Both windows clamp so ExpireAt >= FireAt : pathological inputs
 //     cannot produce a negative-duration scheduled event.
 
 // scheduledEvent is the unit the scheduler queues. Source carries the full
 // DERControl so IEEE-040's state machine can inspect EventStatus, primacy,
 // and the DERControlBase fields when it actually applies the event. The
-// scheduler itself never reads Source's body — it only routes by mRID and
+// scheduler itself never reads Source's body : it only routes by mRID and
 // fire window.
 //
 // Exported so IEEE-040 can construct test fixtures without going through
@@ -60,14 +60,14 @@ type scheduledEvent struct {
 }
 
 // Scheduler holds the sorted in-memory queue of pending DERControl events.
-// The zero value is NOT ready for use — callers MUST construct via
+// The zero value is NOT ready for use : callers MUST construct via
 // NewScheduler so nowFunc and rng are non-nil.
 //
 // Concurrency: a single sync.Mutex guards the queue. The expected workload
 // is a single DER with a handful of pending events per polling tick; the
 // extra read parallelism an RWMutex would buy is not worth its complexity
 // here. The mutex is held only across in-memory queue mutation; never
-// across I/O. Pike rule 3 (no goroutine leaks) is not relevant — Scheduler
+// across I/O. Pike rule 3 (no goroutine leaks) is not relevant : Scheduler
 // owns no goroutine; IEEE-040's state machine will own its own loop.
 type Scheduler struct {
 	mu      sync.Mutex
@@ -77,12 +77,12 @@ type Scheduler struct {
 }
 
 // NewScheduler constructs a Scheduler. nowFunc supplies the wall clock for
-// expiry checks — production callers pass (*SEP2Client).Now (IEEE-031);
+// expiry checks : production callers pass (*SEP2Client).Now (IEEE-031);
 // tests pass a fixed-time closure for determinism. rng supplies the
-// randomization source — production seeds rand.NewPCG from current nanos;
+// randomization source : production seeds rand.NewPCG from current nanos;
 // tests inject a deterministic seed.
 //
-// Both parameters are required. NewScheduler panics on nil arguments —
+// Both parameters are required. NewScheduler panics on nil arguments :
 // a nil nowFunc or rng is a programmer error caught at startup, not a
 // runtime failure mode.
 func NewScheduler(nowFunc func() time.Time, rng *rand.Rand) *Scheduler {
@@ -102,7 +102,7 @@ func NewScheduler(nowFunc func() time.Time, rng *rand.Rand) *Scheduler {
 // ascending. Caller obtains `events` from DERControlCache.Diff's `added`
 // bucket; IEEE-040 will route updated/cancelled to the matching method.
 //
-// Events with a nil Interval are skipped — IEEE 2030.5 §10.7 requires
+// Events with a nil Interval are skipped : IEEE 2030.5 §10.7 requires
 // DERControl to carry an interval, but server-side garbage shouldn't crash
 // the scheduler. Skip count is logged.
 //
@@ -127,7 +127,7 @@ func (s *Scheduler) OnEventsAdded(events []sep2.DERControl) {
 			continue
 		}
 		fireAt, expireAt := s.computeWindow(ev)
-		// Drop any existing entry for this mRID — replace-not-duplicate.
+		// Drop any existing entry for this mRID : replace-not-duplicate.
 		s.removeByMRIDLocked(ev.MRID)
 		s.queue = append(s.queue, scheduledEvent{
 			MRID:     ev.MRID,
@@ -142,7 +142,7 @@ func (s *Scheduler) OnEventsAdded(events []sep2.DERControl) {
 }
 
 // OnEventsCancelled removes entries whose mRID appears in `mRIDs`. Unknown
-// mRIDs are tolerated and logged at info — server may cancel an event the
+// mRIDs are tolerated and logged at info : server may cancel an event the
 // client never saw (poll missed it), which is a benign race, not an error.
 func (s *Scheduler) OnEventsCancelled(mRIDs []string) {
 	if len(mRIDs) == 0 {
@@ -152,13 +152,13 @@ func (s *Scheduler) OnEventsCancelled(mRIDs []string) {
 	defer s.mu.Unlock()
 	for _, m := range mRIDs {
 		if !s.removeByMRIDLocked(m) {
-			log.Printf("scheduler: cancel for unknown mRID=%q (benign — no-op)", m)
+			log.Printf("scheduler: cancel for unknown mRID=%q (benign : no-op)", m)
 		}
 	}
 }
 
 // OnEventsUpdated is a no-op for IEEE-039. EventStatus.currentStatus
-// transitions surface here in IEEE-040 — the state-machine context is what
+// transitions surface here in IEEE-040 : the state-machine context is what
 // distinguishes "transitioning to Active mid-window" (no re-queue) from
 // "server pushed Interval forward" (re-queue with new fireAt). Implementing
 // it here without that context would commit to a semantic IEEE-040 may need
@@ -167,7 +167,7 @@ func (s *Scheduler) OnEventsUpdated(events []sep2.DERControl) {
 	if len(events) == 0 {
 		return
 	}
-	log.Printf("scheduler: OnEventsUpdated called with %d events — no-op until IEEE-040 state machine ships",
+	log.Printf("scheduler: OnEventsUpdated called with %d events : no-op until IEEE-040 state machine ships",
 		len(events))
 }
 
@@ -188,7 +188,7 @@ func (s *Scheduler) Next() (scheduledEvent, bool) {
 // An empty queue returns nil. IEEE-040 calls this each loop iteration to
 // drive EVENT_RECEIVED → EVENT_STARTED.
 //
-// PopExpired does NOT consult ExpireAt — pop-by-fire-time is the
+// PopExpired does NOT consult ExpireAt : pop-by-fire-time is the
 // state-machine's entry point; expiry handling is IEEE-040's concern after
 // it transitions to EVENT_STARTED.
 func (s *Scheduler) PopExpired(now time.Time) []scheduledEvent {
@@ -206,7 +206,7 @@ func (s *Scheduler) PopExpired(now time.Time) []scheduledEvent {
 	}
 	expired := make([]scheduledEvent, cut)
 	copy(expired, s.queue[:cut])
-	// Compact the queue in-place — preserve ascending sort.
+	// Compact the queue in-place : preserve ascending sort.
 	s.queue = append(s.queue[:0], s.queue[cut:]...)
 	return expired
 }
@@ -228,7 +228,7 @@ func (s *Scheduler) Now() time.Time {
 
 // removeByMRIDLocked removes the first queue entry matching mRID. Returns
 // true if a removal happened, false if no match. Caller MUST hold s.mu.
-// Order is preserved by slicing — no swap-with-last shortcut, because the
+// Order is preserved by slicing : no swap-with-last shortcut, because the
 // queue is sorted by FireAt and a swap would break the invariant.
 func (s *Scheduler) removeByMRIDLocked(mRID string) bool {
 	for i, ev := range s.queue {
@@ -242,7 +242,7 @@ func (s *Scheduler) removeByMRIDLocked(mRID string) bool {
 
 // computeWindow turns a parsed DERControl into a (FireAt, ExpireAt) pair,
 // applying §10.1.4 randomization. Caller MUST hold s.mu (because we touch
-// s.rng — math/rand/v2 *rand.Rand is NOT safe for concurrent use without
+// s.rng : math/rand/v2 *rand.Rand is NOT safe for concurrent use without
 // external synchronization).
 //
 // ev.Interval is guaranteed non-nil by OnEventsAdded; passing a nil-Interval
@@ -283,7 +283,7 @@ func applyRandomizeStart(start time.Time, randomizeStart *int32, rng *rand.Rand)
 		offset := rng.Int64N(rs + 1)
 		return start.Add(time.Duration(offset) * time.Second)
 	}
-	// negative — backward window [start-|rs|, start].
+	// negative : backward window [start-|rs|, start].
 	abs := -rs
 	offset := rng.Int64N(abs + 1)
 	return start.Add(time.Duration(-offset) * time.Second)
@@ -295,7 +295,7 @@ func applyRandomizeStart(start time.Time, randomizeStart *int32, rng *rand.Rand)
 //   - duration                              when randomizeDuration is nil or zero
 //
 // The window is centered on `duration` per Phase 5 doc exit criterion 3.
-// Negative randomizeDuration is treated by absolute value — the spec allows
+// Negative randomizeDuration is treated by absolute value : the spec allows
 // signed values but the window shape is symmetric regardless of sign.
 //
 // rng.Int64N gives [0, |rd|+1) so we shift by |rd|/2 to center the window.

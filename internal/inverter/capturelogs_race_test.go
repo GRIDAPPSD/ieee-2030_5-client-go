@@ -3,7 +3,7 @@
 // The captureLogs helper in response_post_test.go swaps log.Default()'s
 // global writer to capture log.Printf output for assertion. Two t.Parallel()
 // tests calling captureLogs concurrently would otherwise race on the global
-// writer slot — the previous workaround was to strip t.Parallel() from
+// writer slot : the previous workaround was to strip t.Parallel() from
 // TestPostResponseWithRetry_DeadLetterLog (Pike DD).
 //
 // IEEE-081 makes captureLogs race-safe by serializing the swap behind a
@@ -29,7 +29,7 @@ import (
 // would surface here before the bigger response_post / response_retry
 // suites cross-talk.
 //
-// Deliberately NOT t.Parallel() — captureLogs callers MUST be serial in
+// Deliberately NOT t.Parallel() : captureLogs callers MUST be serial in
 // this package (see captureLogs godoc in response_post_test.go).
 func TestCaptureLogs_ConcurrentCallsAreIsolated(t *testing.T) {
 	const goroutines = 8
@@ -56,7 +56,7 @@ func TestCaptureLogs_ConcurrentCallsAreIsolated(t *testing.T) {
 					return
 				}
 			}
-			// Must NOT see any other goroutine's tag — that would mean
+			// Must NOT see any other goroutine's tag : that would mean
 			// captureLogs leaked another goroutine's writes into this buf.
 			for k := 0; k < goroutines; k++ {
 				if k == idx {

@@ -26,7 +26,7 @@ import (
 // servers. The test server uses stdlib TLS (or plaintext on httptest.Server
 // when callers want it), so this helper installs a permissive RootCAs +
 // InsecureSkipVerify combo. The HardwareModuleName-SAN verify hook is
-// bypassed here — IEEE-050 cares about HTTP status flow, not TLS posture
+// bypassed here : IEEE-050 cares about HTTP status flow, not TLS posture
 // (which IEEE-019 / IEEE-027 already exercise). For plaintext httptest
 // servers we use a stdlib http.Client wired into the SEP2Client struct
 // directly.

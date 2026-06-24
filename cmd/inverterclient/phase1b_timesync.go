@@ -7,7 +7,7 @@ package main
 // driven by a test against a stub server. Phase 7 exit criterion (1) in
 // `plans/plan-1-csip-client-conformance/phase-7-http-semantics.md` requires
 // the inverter to log a clear warning and continue when the server returns
-// 404/501 on an optional function-set link — the Time resource is optional
+// 404/501 on an optional function-set link : the Time resource is optional
 // (the inline `else` branch already degrades to the local clock when
 // DeviceCapability does not advertise TimeLink). This extraction unifies
 // the "TimeLink absent" path with the "TimeLink fetch failed" path: both
@@ -24,7 +24,7 @@ package main
 //     (`ErrBadRequest` / `ErrNotFound` / `ErrMethodNotAllowed` /
 //     `ErrNotImplemented`) or `ErrResponseTransient` (5xx): log a warning
 //     identifying the cause and the bypass policy, return nil. No goroutine
-//     started — re-polling a permanently-broken endpoint would just spam
+//     started : re-polling a permanently-broken endpoint would just spam
 //     the log.
 //   - dcap.TimeLink != nil && SyncServerTime returns ctx.Err()
 //     (context.Canceled / DeadlineExceeded): return that error unchanged.
@@ -88,11 +88,11 @@ func runPhase1bTimeSync(
 			errors.Is(err, inverter.ErrNotFound),
 			errors.Is(err, inverter.ErrMethodNotAllowed),
 			errors.Is(err, inverter.ErrNotImplemented):
-			log.Printf("Phase 1b time sync %s: %v — Time resource unavailable; degrading to local clock and skipping periodic sync", timeHref, err)
+			log.Printf("Phase 1b time sync %s: %v : Time resource unavailable; degrading to local clock and skipping periodic sync", timeHref, err)
 		case errors.Is(err, inverter.ErrResponseTransient):
-			log.Printf("Phase 1b time sync %s: %v — server transient failure; degrading to local clock and skipping periodic sync", timeHref, err)
+			log.Printf("Phase 1b time sync %s: %v : server transient failure; degrading to local clock and skipping periodic sync", timeHref, err)
 		default:
-			log.Printf("Phase 1b time sync %s: %v — unexpected failure; degrading to local clock and skipping periodic sync", timeHref, err)
+			log.Printf("Phase 1b time sync %s: %v : unexpected failure; degrading to local clock and skipping periodic sync", timeHref, err)
 		}
 		return nil
 	}

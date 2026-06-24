@@ -1,22 +1,22 @@
-// Tests for IEEE-045 — `PostResponseWithRetry` (Phase 6 closer).
+// Tests for IEEE-045 : `PostResponseWithRetry` (Phase 6 closer).
 //
 // Coverage (one assertion concept per test where the input space allows):
 //
-//  1. Happy path — first attempt succeeds, no retry, no sleep.
-//  2. Transient then OK — retry fires once, exactly one sleep at
+//  1. Happy path : first attempt succeeds, no retry, no sleep.
+//  2. Transient then OK : retry fires once, exactly one sleep at
 //     InitialDelay.
-//  3. Persistent transient — MaxAttempts attempts, two sleeps
+//  3. Persistent transient : MaxAttempts attempts, two sleeps
 //     (InitialDelay, then InitialDelay × Multiplier), wrapped err carries
 //     ErrResponseTransient.
-//  4. 4xx (non-transient) — no retry, wrapped non-sentinel err returned
+//  4. 4xx (non-transient) : no retry, wrapped non-sentinel err returned
 //     verbatim.
-//  5. Context cancelled mid-retry wait — wrapped context.Canceled,
+//  5. Context cancelled mid-retry wait : wrapped context.Canceled,
 //     no further POSTs.
-//  6. Backoff cap — MaxDelay clamps every wait so the schedule never
+//  6. Backoff cap : MaxDelay clamps every wait so the schedule never
 //     exceeds MaxDelay.
-//  7. Dead-letter log — log line contains "DEAD-LETTER", event mRID, and
+//  7. Dead-letter log : log line contains "DEAD-LETTER", event mRID, and
 //     status after all attempts fail.
-//  8. Defaults — DefaultResponseRetryConfig() yields the documented
+//  8. Defaults : DefaultResponseRetryConfig() yields the documented
 //     constants; zero-valued fields fall through to defaults.
 //
 // The retry primitive is exercised through a deterministic fake clock so
@@ -88,7 +88,7 @@ func (c *fakeRetryClock) Wait(ctx context.Context, d time.Duration) error {
 	cancel := c.cancelOn[idx]
 	c.mu.Unlock()
 	if cancel {
-		// Surface ctx.Err() — by the time the test triggers a cancel
+		// Surface ctx.Err() : by the time the test triggers a cancel
 		// the underlying context has been Canceled.
 		if err := ctx.Err(); err != nil {
 			return err
@@ -122,13 +122,13 @@ func sampleResp() sep2.DERControlResponse {
 }
 
 // transientErr returns a freshly-wrapped error that satisfies
-// `errors.Is(err, ErrResponseTransient)` — mirrors the wire-up that
+// `errors.Is(err, ErrResponseTransient)` : mirrors the wire-up that
 // PostResponse produces on a 503 or transport-level error.
 func transientErr(detail string) error {
 	return fmt.Errorf("POST Response %s: %w", detail, inverter.ErrResponseTransient)
 }
 
-// (captureLogs lives in response_post_test.go — same package, reused.)
+// (captureLogs lives in response_post_test.go : same package, reused.)
 
 // tightCfg returns a retry config with tight delays suitable for tests
 // that walk the schedule. Even though waits run on a fake clock and
@@ -144,7 +144,7 @@ func tightCfg() inverter.ResponseRetryConfig {
 }
 
 // =============================================================================
-// (1) Happy path — first attempt succeeds, no retry, no sleep.
+// (1) Happy path : first attempt succeeds, no retry, no sleep.
 // =============================================================================
 
 func TestPostResponseWithRetry_HappyPath(t *testing.T) {
@@ -167,7 +167,7 @@ func TestPostResponseWithRetry_HappyPath(t *testing.T) {
 }
 
 // =============================================================================
-// (2) Transient then OK — retry fires once.
+// (2) Transient then OK : retry fires once.
 // =============================================================================
 
 func TestPostResponseWithRetry_TransientThenOK(t *testing.T) {
@@ -195,7 +195,7 @@ func TestPostResponseWithRetry_TransientThenOK(t *testing.T) {
 }
 
 // =============================================================================
-// (3) Persistent transient — exhaust attempts.
+// (3) Persistent transient : exhaust attempts.
 // =============================================================================
 
 func TestPostResponseWithRetry_PersistentTransient(t *testing.T) {
@@ -239,7 +239,7 @@ func TestPostResponseWithRetry_PersistentTransient(t *testing.T) {
 }
 
 // =============================================================================
-// (4) 4xx (non-transient) — no retry.
+// (4) 4xx (non-transient) : no retry.
 // =============================================================================
 
 func TestPostResponseWithRetry_NonTransientNoRetry(t *testing.T) {
@@ -285,7 +285,7 @@ func TestPostResponseWithRetry_ContextCancelledDuringBackoff(t *testing.T) {
 		cancelOn: map[int]bool{1: true},
 	}
 	// Hand-wire the cancel: we need ctx.Err() to be set when Wait runs.
-	// Pre-cancel — the helper has already done one attempt, so this
+	// Pre-cancel : the helper has already done one attempt, so this
 	// targets the backoff-wait branch specifically (the first attempt
 	// runs against an as-yet-non-cancelled ctx).
 	go func() { cancel() }()
@@ -305,7 +305,7 @@ func TestPostResponseWithRetry_ContextCancelledDuringBackoff(t *testing.T) {
 }
 
 // TestPostResponseWithRetry_ContextAlreadyCancelled covers the pre-loop
-// short-circuit — a ctx cancelled before the first attempt should NOT
+// short-circuit : a ctx cancelled before the first attempt should NOT
 // burn an HTTP request.
 func TestPostResponseWithRetry_ContextAlreadyCancelled(t *testing.T) {
 	t.Parallel()
@@ -357,7 +357,7 @@ func TestPostResponseWithRetry_ContextCancelledOnAttempt(t *testing.T) {
 }
 
 // =============================================================================
-// (6) Backoff cap — MaxDelay clamps every wait.
+// (6) Backoff cap : MaxDelay clamps every wait.
 // =============================================================================
 
 func TestPostResponseWithRetry_BackoffCappedByMaxDelay(t *testing.T) {
@@ -396,14 +396,14 @@ func TestPostResponseWithRetry_BackoffCappedByMaxDelay(t *testing.T) {
 // =============================================================================
 
 func TestPostResponseWithRetry_DeadLetterLog(t *testing.T) {
-	// Deliberately serial — captureLogs swaps log.Default()'s writer,
+	// Deliberately serial : captureLogs swaps log.Default()'s writer,
 	// which is global state. Even with the IEEE-081 mutex guarding
 	// concurrent captureLogs callers, any OTHER t.Parallel() test in
 	// this package that emits log.Printf lines while this test holds
 	// the capture buffer will write into that buffer (the global
 	// writer is shared) and race with buf.String(). The only
 	// race-clean option is to run this test in the serial phase
-	// (before parallel tests resume) — Go's testing runtime
+	// (before parallel tests resume) : Go's testing runtime
 	// guarantees serial tests complete before parallel tests start.
 	// Refactoring production log.Printf to an injectable logger is
 	// out of scope for IEEE-081 (would change package API).
@@ -504,7 +504,7 @@ func TestPostResponseWithRetry_RealClockCtxCancel(t *testing.T) {
 	}
 	poster := &fakePoster{errs: []error{transientErr("attempt-1")}}
 	ctx, cancel := context.WithCancel(context.Background())
-	// Fire cancel just after the first attempt returns — schedule it on
+	// Fire cancel just after the first attempt returns : schedule it on
 	// a goroutine bounded by t.Cleanup.
 	go func() {
 		time.Sleep(5 * time.Millisecond)

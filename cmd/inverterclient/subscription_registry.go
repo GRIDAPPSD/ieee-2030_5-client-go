@@ -9,7 +9,7 @@
 //
 // Concurrency: notifications arrive on independent net/http goroutines
 // (the IEEE-049 NotifyReceiver fires Dispatch from its handler). The
-// underlying map MUST therefore be guarded — a bare Go map raced from
+// underlying map MUST therefore be guarded : a bare Go map raced from
 // the dispatcher would crash the inverter.
 
 package main
@@ -115,8 +115,8 @@ func (r *subscriptionRegistry) Snapshot() [][2]string {
 	return out
 }
 
-// CancelHookFunc adapts (*subscriptionRegistry).Cancel — which returns
-// the removed server-side href so main() can log it — to the
+// CancelHookFunc adapts (*subscriptionRegistry).Cancel : which returns
+// the removed server-side href so main() can log it : to the
 // inverter.CancelHook signature (`func(string)`). The returned closure
 // invokes Cancel and discards the return value; the registry-internal
 // Cancel still produces it for direct callers (tests).

@@ -54,7 +54,7 @@ func defaultDERControlPollDuration(pollRateSec uint32) time.Duration {
 // derControlPollDurationPtr holds the current mapper. Stored in an
 // atomic.Pointer so tests can swap in a tight cadence
 // (SetDERControlPollDurationForTesting) while
-// (*SEP2Client).PollDERControlList reads on its own goroutine — no race
+// (*SEP2Client).PollDERControlList reads on its own goroutine : no race
 // (IEEE-081). Pattern mirrors IEEE-028's pollDuration.
 var derControlPollDurationPtr atomic.Pointer[pollDurationFunc]
 
@@ -70,7 +70,7 @@ func derControlPollDuration(pollRateSec uint32) time.Duration {
 }
 
 // DERControlCache holds the most recent DERControlList snapshot keyed by
-// mRID. The zero value is NOT ready for use — callers must construct via
+// mRID. The zero value is NOT ready for use : callers must construct via
 // NewDERControlCache so the underlying map is non-nil.
 //
 // Concurrency: an RWMutex guards the map. IEEE-039+ will read frequently
@@ -117,10 +117,10 @@ func (c *DERControlCache) Len() int {
 //     differs from the next EventStatus.CurrentStatus and the next is
 //     NOT EventStatusCancelled (cancelled wins its own bucket).
 //   - cancelled: mRIDs whose `next` EventStatus.CurrentStatus == EventStatusCancelled
-//     (== 2) regardless of cached state — newly seen cancellations
+//     (== 2) regardless of cached state : newly seen cancellations
 //     surface here too, not in added.
 //
-// Diff is a pure read against the current snapshot — it does NOT mutate the
+// Diff is a pure read against the current snapshot : it does NOT mutate the
 // cache. Refresh applies a new state. The order matters: callers Diff first
 // to learn the deltas, then Refresh to commit the new state.
 //
@@ -183,7 +183,7 @@ func derControlCurrentStatus(c sep2.DERControl) uint8 {
 }
 
 // PollDERControlList runs the periodic DERControlList polling loop. It does
-// NOT spawn its own goroutine — the caller invokes it as
+// NOT spawn its own goroutine : the caller invokes it as
 //
 //	go client.PollDERControlList(ctx, href, dcap.PollRate, cache)
 //
@@ -196,7 +196,7 @@ func derControlCurrentStatus(c sep2.DERControl) uint8 {
 // their own Diff calls against a shared cache snapshot.
 //
 // pollRate is clamped to a 60s floor and a 30min default-on-zero by
-// derControlPollDuration — same convention pinPollInterval applies in
+// derControlPollDuration : same convention pinPollInterval applies in
 // cmd/inverterclient/main.go.
 //
 // Error handling:
@@ -224,14 +224,14 @@ func (c *SEP2Client) PollDERControlList(
 	log.Printf("DERControlList poll: starting href=%s interval=%s", href, interval)
 
 	// Initial tick fires immediately so the cache populates without waiting
-	// a full interval — IEEE-039+ schedulers need a snapshot at startup.
+	// a full interval : IEEE-039+ schedulers need a snapshot at startup.
 	if newHref, err := c.pollDERControlListOnce(ctx, href, cache); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
 		log.Printf("DERControlList poll: initial fetch failed (continuing): %v", err)
 	} else if newHref != "" {
-		log.Printf("DERControlList poll: 301 follow — cached href %s → %s", href, newHref)
+		log.Printf("DERControlList poll: 301 follow : cached href %s → %s", href, newHref)
 		href = newHref
 	}
 
@@ -248,12 +248,12 @@ func (c *SEP2Client) PollDERControlList(
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return err
 			}
-			// Recoverable — log and try again next tick.
+			// Recoverable : log and try again next tick.
 			log.Printf("DERControlList poll: fetch failed (continuing): %v", err)
 			continue
 		}
 		if newHref != "" {
-			log.Printf("DERControlList poll: 301 follow — cached href %s → %s", href, newHref)
+			log.Printf("DERControlList poll: 301 follow : cached href %s → %s", href, newHref)
 			href = newHref
 		}
 	}

@@ -12,19 +12,19 @@ package inverter_test
 // Cases shipped (verbatim from IEEE-032 deferred-tests block, backlog.md
 // lines 621-624):
 //
-//  1. TestGetRegistration_HappyPath           — IEEE-032 case 1: stub returns
+//  1. TestGetRegistration_HappyPath           : IEEE-032 case 1: stub returns
 //                                                Registration with PIN=111115;
 //                                                method returns the parsed
 //                                                value.
-//  2. TestGetRegistration_EmptyHref           — IEEE-032 case 2: empty href
+//  2. TestGetRegistration_EmptyHref           : IEEE-032 case 2: empty href
 //                                                returns error matching
 //                                                "registration href required",
 //                                                no GET attempted.
-//  3. TestGetRegistration_NotFound            — IEEE-032 case 3: server 404
+//  3. TestGetRegistration_NotFound            : IEEE-032 case 3: server 404
 //                                                produces a wrapped error
 //                                                (path + status surfaced),
 //                                                no panic.
-//  4. TestGetRegistration_MalformedXML        — IEEE-032 case 4: server emits
+//  4. TestGetRegistration_MalformedXML        : IEEE-032 case 4: server emits
 //                                                non-XML body, GetRegistration
 //                                                returns an unwrappable
 //                                                xml.SyntaxError (via %w from
@@ -53,7 +53,7 @@ import (
 
 // registrationHref is the canonical fixture path for the Registration
 // resource. CSIP V1.2 BASIC-001 step 5 binds Registration off
-// EndDevice.RegistrationLink; the literal path is server-chosen — `/edev/1/rg`
+// EndDevice.RegistrationLink; the literal path is server-chosen : `/edev/1/rg`
 // matches the convention used elsewhere in the inverter handler tree.
 const registrationHref = "/edev/1/rg"
 
@@ -70,7 +70,7 @@ func writeRegistration(t *testing.T, w http.ResponseWriter, rg sep2.Registration
 // newRegistrationTestClient is a small helper that boots a gotls server with
 // the supplied handler, builds a production SEP2 client against it, and
 // returns both for the caller to drive. Cleanup is wired through t.Cleanup
-// via startIdleListener (server) and the client (no explicit Close needed —
+// via startIdleListener (server) and the client (no explicit Close needed :
 // it shares the test's CA pool).
 func newRegistrationTestClient(t *testing.T, handler http.Handler) (*inverter.SEP2Client, context.Context) {
 	t.Helper()
@@ -90,7 +90,7 @@ func newRegistrationTestClient(t *testing.T, handler http.Handler) (*inverter.SE
 	return client, ctx
 }
 
-// TestGetRegistration_HappyPath — IEEE-032 case 1.
+// TestGetRegistration_HappyPath : IEEE-032 case 1.
 //
 // Stub returns Registration with PIN=111115 (the CSIP V1.2 BASIC-001 step 5
 // reference value), DateTimeRegistered, and a PollRate attribute.
@@ -132,7 +132,7 @@ func TestGetRegistration_HappyPath(t *testing.T) {
 	}
 }
 
-// TestGetRegistration_EmptyHref — IEEE-032 case 2.
+// TestGetRegistration_EmptyHref : IEEE-032 case 2.
 //
 // An empty href is rejected at the call site without an HTTP round trip.
 // The sentinel error string is contractual: the Phase 2b block in main()
@@ -162,11 +162,11 @@ func TestGetRegistration_EmptyHref(t *testing.T) {
 	}
 }
 
-// TestGetRegistration_NotFound — IEEE-032 case 3.
+// TestGetRegistration_NotFound : IEEE-032 case 3.
 //
 // Server returns 404 with a small body. GetRegistration must return a
 // non-nil error that surfaces both the path and the status code (Pike's
-// c.Get currently wraps via fmt.Errorf("GET %s: %d %s") — not a %w, so
+// c.Get currently wraps via fmt.Errorf("GET %s: %d %s") : not a %w, so
 // errors.Is on http.StatusNotFound is not the right assertion). What
 // matters for the deferred-test contract is "wrapped error, no panic":
 // the path is included AND no panic crashes the test binary.
@@ -199,7 +199,7 @@ func TestGetRegistration_NotFound(t *testing.T) {
 	}
 }
 
-// TestGetRegistration_MalformedXML — IEEE-032 case 4.
+// TestGetRegistration_MalformedXML : IEEE-032 case 4.
 //
 // Server returns 200 OK with non-XML body. GetRegistration must wrap the
 // xml.SyntaxError via the chain

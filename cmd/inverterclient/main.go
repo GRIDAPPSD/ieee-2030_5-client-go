@@ -86,7 +86,7 @@ func pinPollInterval(rate uint32) time.Duration {
 // deltas so it can drive transitions exactly once per change.
 func diffSnapshots(prev, curr map[string]sep2.DERControl) (added, cancelled []sep2.DERControl) {
 	for mrid, c := range curr {
-		// Cancelled-in-curr regardless of prev — surfaces newly observed
+		// Cancelled-in-curr regardless of prev : surfaces newly observed
 		// cancellations whether the event was previously seen or not.
 		if c.EventStatus != nil && c.EventStatus.CurrentStatus == sep2.EventStatusCancelled {
 			cancelled = append(cancelled, c.Copy())
@@ -96,7 +96,7 @@ func diffSnapshots(prev, curr map[string]sep2.DERControl) (added, cancelled []se
 			added = append(added, c.Copy())
 		}
 	}
-	// mRIDs in prev but absent from curr — server removed them from the
+	// mRIDs in prev but absent from curr : server removed them from the
 	// list. Treat as a benign cancellation so the state machine can revert
 	// the active event if it matches.
 	for mrid, p := range prev {
@@ -115,7 +115,7 @@ func diffSnapshots(prev, curr map[string]sep2.DERControl) (added, cancelled []se
 // later GET wins (DERProgram identity is its mRID per IEEE 2030.5 §10.1.3).
 //
 // Per-FSA missing-DERProgramListLink and per-DERProgram missing-subtree-link
-// are tolerated — the walker skips that level and continues. Transport / decode
+// are tolerated : the walker skips that level and continues. Transport / decode
 // failures are returned wrapped with `%w` so callers can `errors.Is`/`As` on
 // underlying causes. Context cancellation propagates through c.Get; this
 // function spawns no goroutines.
@@ -187,7 +187,7 @@ func main() {
 	// IEEE-053 Phase 9 entry: PEN (Private Enterprise Number) stamped into
 	// every outbound LogEvent. Env var SEP2_PEN seeds the default; the CLI
 	// flag still wins per stdlib flag.Parse() precedence. Default 0 means
-	// "no manufacturer namespace" — fine for test / interop, but production
+	// "no manufacturer namespace" : fine for test / interop, but production
 	// deployments MUST register their own PEN with IANA and pass it here
 	// so server-side log archives can disambiguate codes across vendors.
 	defaultPEN := uint64(0)
@@ -320,7 +320,7 @@ func main() {
 		}()
 	}
 
-	log.Printf("Inverter Simulator — scenario: %s (%s)", scenario.Name, scenario.Description)
+	log.Printf("Inverter Simulator : scenario: %s (%s)", scenario.Name, scenario.Description)
 	log.Printf("Server: %s | TimeScale: %.0fx | Tick: %v", cfg.ServerURL, cfg.TimeScale, cfg.TickInterval)
 
 	// Create 2030.5 client
@@ -328,7 +328,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("create client: %v", err)
 	}
-	log.Printf("Device identity — SFDI: %s LFDI: %s", client.SFDI(), client.LFDI())
+	log.Printf("Device identity : SFDI: %s LFDI: %s", client.SFDI(), client.LFDI())
 
 	// Phase 1: Discovery
 	log.Println("=== Phase 1: Discovery ===")
@@ -356,13 +356,13 @@ func main() {
 
 	// Phase 1b: Server-time sync (IEEE-031). Per IEEE 2030.5 §10 / CSIP,
 	// devices source time from the server's Time resource advertised by
-	// DeviceCapability.TimeLink and use it — not local wall-clock — for
+	// DeviceCapability.TimeLink and use it : not local wall-clock : for
 	// every server-consumed timestamp. We do a synchronous initial sync
 	// so the offset is populated before Phase 2 starts; the goroutine
 	// then refreshes the offset at DefaultTimeSyncPollRate. The goroutine
 	// exits cleanly when the inverter's root context cancels (Ctrl-C
 	// handler already wired). If TimeLink is absent the inverter
-	// degrades to local clock — log it and proceed.
+	// degrades to local clock : log it and proceed.
 	//
 	// IEEE-048: extracted into runPhase1bTimeSync so the previously-fatal
 	// log.Fatalf on Time-resource fetch failure is replaced with graceful
@@ -378,14 +378,14 @@ func main() {
 	// Phase 2: EndDevice acquisition.
 	//
 	// IEEE-029: CSIP mode (--csip) GETs the server's EndDeviceList and finds
-	// our own EndDevice by LFDI match — CSIP devices are pre-allowlisted
+	// our own EndDevice by LFDI match : CSIP devices are pre-allowlisted
 	// out-of-band, so the device discovers a pre-provisioned EndDevice
 	// rather than POSTing /edev. If our LFDI is not in the list yet, idle
 	// and re-poll at dcap.PollRate (default 30s). IEEE 2030.5 mode (--csip
 	// off, the default) keeps the self-registration POST /edev path.
 	// Phase 2 / 3 / 4 walk the link graph reachable from /dcap rather than
 	// hardcoding URLs. Per IEEE 2030.5 §10.3 / CSIP §6.6 the client MUST
-	// derive every endpoint from advertised links — the server is free to
+	// derive every endpoint from advertised links : the server is free to
 	// host resources at any path. Each phase skips with a log line if the
 	// upstream link is absent (server did not advertise that function set).
 	// See IEEE-030.
@@ -407,7 +407,7 @@ func main() {
 			var newEdevListHref string
 			edev, newEdevListHref, err = client.LookupOwnEndDevice(ctx, edevListHref)
 			if newEdevListHref != "" {
-				log.Printf("Phase 2 lookup: 301 follow — cached edev-list href %s → %s",
+				log.Printf("Phase 2 lookup: 301 follow : cached edev-list href %s → %s",
 					edevListHref, newEdevListHref)
 				edevListHref = newEdevListHref
 			}
@@ -443,7 +443,7 @@ func main() {
 			log.Fatalf("register: %v", err)
 		}
 		if newEdevListHref != "" {
-			log.Printf("Phase 2 register: 301 follow — cached edev-list href %s → %s",
+			log.Printf("Phase 2 register: 301 follow : cached edev-list href %s → %s",
 				edevListHref, newEdevListHref)
 			edevListHref = newEdevListHref
 		}
@@ -457,7 +457,7 @@ func main() {
 	// branches, idle-loop policy, PIN redaction) lives in
 	// cmd/inverterclient/phase2b.go.
 	//
-	// log.Fatalf stays HERE — main() is the exit-code owner. The extracted
+	// log.Fatalf stays HERE : main() is the exit-code owner. The extracted
 	// function returns *phase2bFatal in place of every previous inline
 	// log.Fatalf, which main() unwraps via errors.As. ctx-cancel inside the
 	// function returns ctx.Err() (context.Canceled / DeadlineExceeded);
@@ -479,8 +479,8 @@ func main() {
 	// server so it can POST Notifications to the IEEE-049 /notify listener.
 	// Runs after Phase 2b (we now know our EndDevice and its links) and
 	// before Phase 2c (the rest of the link-graph walk doesn't depend on
-	// subscription state). All failure modes degrade to polling — never
-	// fatal — so CSIP V1.2's "recommended but not required" subscription
+	// subscription state). All failure modes degrade to polling : never
+	// fatal : so CSIP V1.2's "recommended but not required" subscription
 	// flow stays optional. The returned map keys are the subscribed
 	// resource hrefs; values are the server-assigned subscription hrefs
 	// (consumed by IEEE-052 for cancellation handling).
@@ -494,19 +494,19 @@ func main() {
 	// method as the dispatcher's CancelHook so status=1 notifications
 	// (CSIP V1.2 CORE-019 step 13: "subscription cancelled by server")
 	// free the inverter-side subscription entry. Polling for the affected
-	// resource continues unaffected — the hook only cleans local state
+	// resource continues unaffected : the hook only cleans local state
 	// so a future re-subscription attempt can fire again. Safe to wire
 	// even when the registry is empty (no entries → cancel is a no-op).
 	notifyDispatcher.RegisterCancelHook(subscriptionsByResource.CancelHookFunc())
 
-	// Phase 2c: FunctionSetAssignmentsList discovery (IEEE-035 — plan-1
+	// Phase 2c: FunctionSetAssignmentsList discovery (IEEE-035 : plan-1
 	// phase 4 entry). Extracted by IEEE-075 into runPhase2cFSAList so the
 	// deferred IEEE-072 integration cases have a function seam to test
 	// against. The full behavior contract (missing-link branches, empty-
 	// list idle policy, CSIP-strict gating) lives in
 	// cmd/inverterclient/phase2c_fsalist.go.
 	//
-	// log.Fatalf stays HERE — main() is the exit-code owner. The extracted
+	// log.Fatalf stays HERE : main() is the exit-code owner. The extracted
 	// function returns *fsaListFatal in place of every previous inline
 	// log.Fatalf, which main() unwraps via errors.As. ctx-cancel inside the
 	// function returns ctx.Err() (context.Canceled / DeadlineExceeded);
@@ -526,7 +526,7 @@ func main() {
 
 	// Phase 2c (continued, IEEE-036): walk each FSA's DERProgramListLink and
 	// fetch each DERProgram's DefaultDERControl + DERControlList + DERCurveList
-	// subtrees. CSIP V1.2 CORE-012 step 2 — list discovery, NOT selection.
+	// subtrees. CSIP V1.2 CORE-012 step 2 : list discovery, NOT selection.
 	// Primacy + mRID selection of the highest-priority DERProgram is IEEE-037,
 	// the next ticket. Control application (consuming the cache) is Phase 5.
 	//
@@ -540,10 +540,10 @@ func main() {
 	// The cache `derProgramsByMRID` is the seam IEEE-037 consumes. Keying on
 	// mRID matches the IEEE 2030.5 §10.1.3 list-ordering tie-break field; if
 	// the same DERProgram is reachable from multiple FSAs the later GET wins
-	// (acceptable per the spec — DERProgram resources are identified by mRID,
+	// (acceptable per the spec : DERProgram resources are identified by mRID,
 	// not by FSA path).
 	//
-	// log.Fatalf stays HERE — main() is the exit-code owner. The extracted
+	// log.Fatalf stays HERE : main() is the exit-code owner. The extracted
 	// function returns *derProgramWalkFatal in place of the previous inline
 	// log.Fatalf, which main() unwraps via errors.As. ctx-cancel inside the
 	// function returns ctx.Err() (context.Canceled / DeadlineExceeded);
@@ -591,7 +591,7 @@ func main() {
 	// discarded the value); we re-GET it here once selection is complete so
 	// the chosen program's default base is in scope at the consumption seam.
 	//
-	// Error handling: tolerant — log + leave defaultCtl nil. Mirrors the
+	// Error handling: tolerant : log + leave defaultCtl nil. Mirrors the
 	// IEEE-035 / IEEE-036 missing-link policy: a server that advertises a
 	// default but fails to serve it should not crash the inverter; the
 	// helper's rule-3 fall-through gives the existing no-op semantics.
@@ -600,7 +600,7 @@ func main() {
 		// IEEE-047: on 301 GetDefaultDERControl surfaces the new href; log
 		// the follow for observability. The local selectedDefaultControlHref
 		// has no further reads in this code path (the DefaultDERControl is
-		// one-shot per startup), so we do not re-assign it — the follow has
+		// one-shot per startup), so we do not re-assign it : the follow has
 		// already happened inside GetDefaultDERControl.
 		ddc, newDefaultDERControlHref, err := client.GetDefaultDERControl(ctx, selectedDefaultControlHref)
 		if err != nil {
@@ -608,7 +608,7 @@ func main() {
 				selectedDefaultControlHref, err)
 		} else {
 			if newDefaultDERControlHref != "" {
-				log.Printf("Phase 2c (IEEE-041): 301 follow — DefaultDERControl href %s → %s (one-shot; not re-cached)",
+				log.Printf("Phase 2c (IEEE-041): 301 follow : DefaultDERControl href %s → %s (one-shot; not re-cached)",
 					selectedDefaultControlHref, newDefaultDERControlHref)
 			}
 			ddcCopy := ddc.Copy()
@@ -625,7 +625,7 @@ func main() {
 	// machine that follow.
 	//
 	// pollRate source: dcap.PollRate. The advertised list-level pollRate lives
-	// on the ListResource returned by the GET — not on the *ListLink — so we
+	// on the ListResource returned by the GET : not on the *ListLink : so we
 	// seed the loop with the device's top-level pollRate the same way IEEE-029
 	// / IEEE-034 / IEEE-035 reuse it. IEEE-039+ may switch to the list-level
 	// pollRate once one tick has populated the cache.
@@ -648,7 +648,7 @@ func main() {
 		// bind them into the dispatcher so the IEEE-049 /notify listener stops
 		// being a no-op. Polling stays active above; notifications additively
 		// cut the latency floor from pollRate to "as soon as server POSTs."
-		// Bypass when the receiver never came up (notifyReceiver == nil) —
+		// Bypass when the receiver never came up (notifyReceiver == nil) :
 		// no listener means no inbound POSTs, so the dispatcher would never
 		// fire anyway. The Register call is still safe (idempotent), but the
 		// log line would be misleading without a corresponding listener.
@@ -671,7 +671,7 @@ func main() {
 	// freshest cache state. We hold a closure-local previous-snapshot map so
 	// cache.Diff yields added/cancelled buckets for THIS tick.
 	//
-	// pollDuration is duplicated rather than refactored — pinPollInterval
+	// pollDuration is duplicated rather than refactored : pinPollInterval
 	// lives in cmd/inverterclient and is out of scope to extract. The
 	// duplication is acknowledged in IEEE-040's ticket; the helper is the
 	// same internal/inverter.derControlPollDuration policy (60s floor,
@@ -679,7 +679,7 @@ func main() {
 	//
 	// Hook: IEEE-042 installs a curve-refresh hook here that fetches
 	// the active DERProgram's DERCurveList on every EVENT_RECEIVED →
-	// EVENT_STARTED transition (CSIP V1.2 CORE-012 step 6 — curves are
+	// EVENT_STARTED transition (CSIP V1.2 CORE-012 step 6 : curves are
 	// part of "apply," not "discover"). Phase 6 (IEEE-043+) layers the
 	// Response Function Set emitter on top of this same hook surface.
 	sched := inverter.NewScheduler(client.Now, mathrand.New(mathrand.NewPCG(uint64(time.Now().UnixNano()), 0xCAFEBABE)))
@@ -739,7 +739,7 @@ func main() {
 			prev := derControlCache.Snapshot()
 			tick := func() {
 				curr := derControlCache.Snapshot()
-				// Translate the cache to a fresh DERControl slice for Diff —
+				// Translate the cache to a fresh DERControl slice for Diff :
 				// Diff already returns Copy() values for added/cancelled.
 				next := make([]sep2.DERControl, 0, len(curr))
 				for _, v := range curr {
@@ -767,12 +767,12 @@ func main() {
 	} else {
 		log.Println("Phase 5 (IEEE-040): no DERControlListLink on selected program; state-machine tick skipped")
 	}
-	// stateMachine + defaultCtl are now live consumers — see the simulation
+	// stateMachine + defaultCtl are now live consumers : see the simulation
 	// tick loop below, which feeds inverter.ActiveControlBase(stateMachine.
 	// Current(), defaultCtl) into ApplyControls. IEEE-041 closes the
 	// long-standing ApplyControls(nil, ...) defect at this seam.
 
-	// Phase 3: DER Setup — follow EndDevice.DERListLink to find the first
+	// Phase 3: DER Setup : follow EndDevice.DERListLink to find the first
 	// DER, then PUT to its DERCapabilityLink / DERSettingsLink. DERStatus
 	// goes through the reporter loop in Phase 5 against DERStatusLink.
 	log.Println("=== Phase 3: DER Setup ===")
@@ -783,7 +783,7 @@ func main() {
 		// IEEE-047: on 301 client.Get surfaces the new DERList URL; one-shot
 		// Phase 3 setup so we log it for diagnostics rather than threading
 		// it onward (DER setup PUTs that follow are link-derived from
-		// derList.DER entries — no DERList href reuse downstream).
+		// derList.DER entries : no DERList href reuse downstream).
 		// IEEE-048: extracted into fetchDERListForSetup so the previously-
 		// fatal log.Fatalf on DER-list fetch failure is replaced with
 		// graceful bypass (Phase 7 exit criterion 1). See phase3_derlist.go.
@@ -799,13 +799,13 @@ func main() {
 			// through to the rest of main() with Phase 3 skipped.
 		default:
 			if newDERListHref != "" {
-				log.Printf("Phase 3 DER list: 301 follow — original %s → %s (one-shot; not cached)",
+				log.Printf("Phase 3 DER list: 301 follow : original %s → %s (one-shot; not cached)",
 					edev.DERListLink.Href, newDERListHref)
 			}
 			if len(derList.DER) == 0 {
 				log.Println("DER list empty; skipping Phase 3 DER setup")
 			} else {
-				// First DER only — multi-DER inverters are a follow-up.
+				// First DER only : multi-DER inverters are a follow-up.
 				der := derList.DER[0]
 
 				maxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
@@ -828,7 +828,7 @@ func main() {
 
 				setMaxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
 				if der.DERSettingsLink != nil {
-					// IEEE-031: outbound timestamp — use the server-synced clock
+					// IEEE-031: outbound timestamp : use the server-synced clock
 					// rather than local wall-clock. Before any TimeLink sync runs
 					// client.Now() degrades to time.Now(), so this is safe even
 					// when no TimeLink was advertised.
@@ -852,7 +852,7 @@ func main() {
 		}
 	}
 
-	// Phase 4: Metering Setup — POST a MirrorUsagePoint to the list href
+	// Phase 4: Metering Setup : POST a MirrorUsagePoint to the list href
 	// advertised by DeviceCapability. The response Location is then GET to
 	// read back the MirrorMeterReadingListLink for Phase 5 readings.
 	log.Println("=== Phase 4: Metering Setup ===")
@@ -873,7 +873,7 @@ func main() {
 		} else {
 			log.Printf("MirrorUsagePoint: %s", mupLoc)
 			// Read back the created resource to discover its
-			// MirrorMeterReadingListLink — we do not assume the URL.
+			// MirrorMeterReadingListLink : we do not assume the URL.
 			// IEEE-047: on 301 client.Get surfaces the new MUP URL; update
 			// mupLoc so any future reference (none in the current code,
 			// but the var is the canonical hold-point) targets the new
@@ -881,7 +881,7 @@ func main() {
 			var mup sep2.MirrorUsagePoint
 			newMupLoc, err := client.Get(ctx, mupLoc, &mup)
 			if newMupLoc != "" {
-				log.Printf("Phase 4 MUP read-back: 301 follow — cached mupLoc %s → %s",
+				log.Printf("Phase 4 MUP read-back: 301 follow : cached mupLoc %s → %s",
 					mupLoc, newMupLoc)
 				mupLoc = newMupLoc
 			}
@@ -895,7 +895,7 @@ func main() {
 		}
 	}
 
-	// Create reporter — empty hrefs cause the corresponding channel to be
+	// Create reporter : empty hrefs cause the corresponding channel to be
 	// a silent no-op (see reporter.go).
 	reporter := inverter.NewReporter(client, derStatusHref, mmrHref)
 
@@ -903,7 +903,7 @@ func main() {
 	//
 	// Source the LogEventList href from EndDevice.LogEventListLink (set by
 	// IEEE-030's registration/lookup). An empty/missing link means the
-	// server doesn't advertise the OPTIONAL LogEvent function set —
+	// server doesn't advertise the OPTIONAL LogEvent function set :
 	// NewAlarmDetector degrades to a no-op in that case (Evaluate becomes
 	// free) so the simulator runs without complaint.
 	var logEventListHref string
@@ -916,7 +916,7 @@ func main() {
 	if logEventListHref == "" {
 		log.Println("IEEE-054: EndDevice has no LogEventListLink; alarm-LogEvent emit disabled (graceful bypass)")
 	} else {
-		log.Printf("IEEE-054: alarm-LogEvent emit enabled — href=%s window=%v",
+		log.Printf("IEEE-054: alarm-LogEvent emit enabled : href=%s window=%v",
 			logEventListHref, logEventLimiter.Window())
 	}
 

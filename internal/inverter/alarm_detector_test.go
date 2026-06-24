@@ -2,15 +2,15 @@
 //
 // Two-layer coverage:
 //
-//  1. Unit tests against AlarmDetector.classify — drive every alarm
+//  1. Unit tests against AlarmDetector.classify : drive every alarm
 //     class on/off independently. No HTTP, no emitter.
 //
-//  2. Unit tests against AlarmDetector.Evaluate with a stub emitter —
+//  2. Unit tests against AlarmDetector.Evaluate with a stub emitter :
 //     edge-triggered semantics (rising-edge fires, level-hold no-op,
 //     falling-edge no-op), 405 suppression, ErrRateLimited soak.
 //
 //  3. Integration test against an httptest.NewServer that captures
-//     the POST body — drive an LVRT transition end-to-end and assert
+//     the POST body : drive an LVRT transition end-to-end and assert
 //     the body XML decodes to a LogEvent with the right code +
 //     PEN + non-zero CreatedDateTime.
 
@@ -200,7 +200,7 @@ func TestAlarmDetector_Evaluate_RisingEdgeEmits(t *testing.T) {
 		t.Fatalf("after nominal tick: %d calls, want 0", got)
 	}
 
-	// Tick 2: LVRT trip — off→on edge, emit.
+	// Tick 2: LVRT trip : off→on edge, emit.
 	in := nominal()
 	in.Grid.VoltsPU = 0.40
 	in.AbnormalDuration = 200 * time.Millisecond
@@ -241,7 +241,7 @@ func TestAlarmDetector_Evaluate_FallingEdgeNoEmit(t *testing.T) {
 	in.Grid.VoltsPU = 0.40
 	in.AbnormalDuration = 200 * time.Millisecond
 	d.Evaluate(context.Background(), in)
-	// Fall — clear-edge intentionally not emitted per BASIC-027.
+	// Fall : clear-edge intentionally not emitted per BASIC-027.
 	d.Evaluate(context.Background(), nominal())
 
 	if got := len(em.calls); got != 1 {
@@ -258,9 +258,9 @@ func TestAlarmDetector_Evaluate_ReRiseAfterFallEmits(t *testing.T) {
 	trip.Grid.VoltsPU = 0.40
 	trip.AbnormalDuration = 200 * time.Millisecond
 
-	d.Evaluate(context.Background(), trip)      // rise — emit #1
+	d.Evaluate(context.Background(), trip)      // rise : emit #1
 	d.Evaluate(context.Background(), nominal()) // fall
-	d.Evaluate(context.Background(), trip)      // rise again — emit #2
+	d.Evaluate(context.Background(), trip)      // rise again : emit #2
 
 	if got := len(em.calls); got != 2 {
 		t.Errorf("rise→fall→rise: %d calls, want 2", got)
@@ -282,7 +282,7 @@ func TestAlarmDetector_Evaluate_MultiClassFanOut(t *testing.T) {
 	d.Evaluate(context.Background(), in)
 
 	// Expect: VoltageLow + FrequencyLow + GenDisable. ActiveLimit could
-	// fire from P=0 vs PreP=1000 (100% drop > 5% margin) — that's a
+	// fire from P=0 vs PreP=1000 (100% drop > 5% margin) : that's a
 	// legitimate 4th emit.
 	wantMin := 3
 	if got := len(em.calls); got < wantMin {
@@ -314,7 +314,7 @@ func TestAlarmDetector_Evaluate_405Suppresses(t *testing.T) {
 
 	d.Evaluate(context.Background(), trip)      // emit attempted, 405 → suppress
 	d.Evaluate(context.Background(), nominal()) // fall
-	d.Evaluate(context.Background(), trip)      // re-rise — should NOT emit
+	d.Evaluate(context.Background(), trip)      // re-rise : should NOT emit
 
 	if got := len(em.calls); got != 1 {
 		t.Errorf("after 405 suppression, %d calls, want 1 (one suppress-marker call)", got)
@@ -341,13 +341,13 @@ func TestAlarmDetector_Evaluate_RateLimitedIsSoftDrop(t *testing.T) {
 
 func TestAlarmDetector_Evaluate_DisabledIsNoOp(t *testing.T) {
 	t.Parallel()
-	// nil emitter — Evaluate must not panic, must not emit.
+	// nil emitter : Evaluate must not panic, must not emit.
 	d := NewAlarmDetector(nil, "/edev/1/lel")
 	trip := nominal()
 	trip.Grid.VoltsPU = 0.40
 	trip.AbnormalDuration = 200 * time.Millisecond
 	d.Evaluate(context.Background(), trip)
-	// Empty href — same.
+	// Empty href : same.
 	em := &stubEmitter{}
 	d = NewAlarmDetector(em, "")
 	d.Evaluate(context.Background(), trip)
@@ -393,9 +393,9 @@ func TestAlarmDetector_Integration_LVRTPostedEndToEnd(t *testing.T) {
 
 	d := NewAlarmDetector(c, "/edev/1/lel")
 
-	// Tick 1: nominal — no emit.
+	// Tick 1: nominal : no emit.
 	d.Evaluate(context.Background(), nominal())
-	// Tick 2: LVRT trip — rising edge fires PostLogEvent → 201 path.
+	// Tick 2: LVRT trip : rising edge fires PostLogEvent → 201 path.
 	trip := nominal()
 	trip.Grid.VoltsPU = 0.40
 	trip.AbnormalDuration = 200 * time.Millisecond
@@ -449,7 +449,7 @@ func TestAlarmDetector_Integration_RateLimiterDropsDuplicate(t *testing.T) {
 
 	d := NewAlarmDetector(c, "/edev/1/lel")
 
-	// Fire LVRT three times with rise/fall in between — without the
+	// Fire LVRT three times with rise/fall in between : without the
 	// rate-limiter we'd see 3 POSTs. With it: 1 POST, 2 silent
 	// ErrRateLimited drops.
 	trip := nominal()
@@ -484,7 +484,7 @@ func TestAlarmDetector_Integration_GracefulBypassOn405(t *testing.T) {
 	trip.AbnormalDuration = 200 * time.Millisecond
 	d.Evaluate(context.Background(), trip)
 
-	// After 405, the code is suppressed — re-rise must not POST again.
+	// After 405, the code is suppressed : re-rise must not POST again.
 	d.Evaluate(context.Background(), nominal())
 	d.Evaluate(context.Background(), trip)
 

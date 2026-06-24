@@ -1,4 +1,4 @@
-// Package inverter — IEEE-050 inverter Subscription POST helper.
+// Package inverter : IEEE-050 inverter Subscription POST helper.
 //
 // CSIP V1.2 CORE-018 step 2 (pp 59-61). With the IEEE-049 /notify listener
 // up, the inverter registers subscriptions with the SEP2 server by POSTing
@@ -7,7 +7,7 @@
 // inverter persists it for the IEEE-052 cancellation path.
 //
 // Servers that don't implement subscription/notification respond 405 Method
-// Not Allowed. The inverter MUST fall back to polling on 405 — that's the
+// Not Allowed. The inverter MUST fall back to polling on 405 : that's the
 // CSIP V1.2 graceful-degradation contract against non-CSIP servers. Callers
 // branch on errors.Is(err, ErrMethodNotAllowed) (the typed sentinel surfaced
 // by IEEE-046's classifyResponse) and continue polling without aborting.
@@ -41,14 +41,14 @@ import (
 // On 405 Method Not Allowed the server doesn't support subscriptions;
 // PostSubscription returns the underlying ErrMethodNotAllowed (wrapped with
 // "%w" plus URL context). Callers match with errors.Is(err, ErrMethodNotAllowed)
-// and continue polling — no other server-side state is created on a 405.
+// and continue polling : no other server-side state is created on a 405.
 //
 // On any other status PostSubscription returns the wrapped error from the
-// underlying Post helper. Callers should log a warning and continue —
+// underlying Post helper. Callers should log a warning and continue :
 // subscription/notification is recommended-but-not-required per CSIP V1.2
 // CORE-018, so a failed registration must NOT crash the inverter.
 //
-// 301 follow is inherited from (*SEP2Client).Post — a redirect on the
+// 301 follow is inherited from (*SEP2Client).Post : a redirect on the
 // subscription-list path is followed once and the post-redirect Location
 // (the new subscription href, not the new list href) is returned.
 func (c *SEP2Client) PostSubscription(

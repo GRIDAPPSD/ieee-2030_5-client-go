@@ -168,7 +168,7 @@ func startGotlsListener(t *testing.T, env *ccmTestEnv, cipherSuites []uint16) (s
 // completes a TLS handshake against a CCM-8-only gotls server and that the
 // negotiated cipher suite is TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8 (0xC0AE).
 //
-// RED: with the stdlib crypto/tls client this fails at handshake — stdlib
+// RED: with the stdlib crypto/tls client this fails at handshake : stdlib
 // does not implement CCM-8. GREEN: once the inverter client is on the
 // vendored gotls stack, handshake completes and the cipher matches.
 func TestInverterNegotiatesCCM8(t *testing.T) {
@@ -213,7 +213,7 @@ func TestInverterStrictRejectsGCMOnlyServer(t *testing.T) {
 	env := newCCMTestEnv(t)
 
 	serverURL, _, stop := startGotlsListener(t, env, []uint16{
-		// GCM only — no CCM-8 on offer. A strict CSIP client must NOT
+		// GCM only : no CCM-8 on offer. A strict CSIP client must NOT
 		// negotiate.
 		0xC02B, // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
 	})

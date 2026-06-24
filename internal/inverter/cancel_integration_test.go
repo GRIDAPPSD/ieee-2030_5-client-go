@@ -1,4 +1,4 @@
-// IEEE-052 Phase 8 ticket 4 of 4 (final) — integration test for the
+// IEEE-052 Phase 8 ticket 4 of 4 (final) : integration test for the
 // /notify listener to SimulatorDispatcher to CancelHook chain.
 //
 // IEEESIM-004: updated to use dispatch.SimulatorDispatcher in place of the
@@ -26,7 +26,7 @@ import (
 
 // inlineRegistry is a minimal mutex-guarded subscription tracker used
 // only by this test. The production version lives in cmd/inverterclient
-// (subscriptionRegistry) — keeping the test self-contained avoids a
+// (subscriptionRegistry) : keeping the test self-contained avoids a
 // cross-package import from internal/inverter into cmd/.
 type inlineRegistry struct {
 	mu      sync.Mutex
@@ -66,7 +66,7 @@ func (r *inlineRegistry) cancel(sub string) {
 // TestNotifyHandler_Status1_CancelHookMutatesRegistry is the IEEE-052
 // integration anchor: an inbound Notification with status=1 must result
 // in the CancelHook firing with the SubscribedResource href, and the
-// caller's subscription-tracking state must be cleaned up — observable
+// caller's subscription-tracking state must be cleaned up : observable
 // here as registry.Len going from N to N-1.
 func TestNotifyHandler_Status1_CancelHookMutatesRegistry(t *testing.T) {
 	t.Parallel()

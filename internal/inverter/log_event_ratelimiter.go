@@ -1,22 +1,22 @@
-// Package inverter — IEEE-054 concrete LogEventRateLimiter, satisfying
+// Package inverter : IEEE-054 concrete LogEventRateLimiter, satisfying
 // the seam defined by IEEE-053 (log_event_emitter.go).
 //
 // CSIP V1.2 BASIC-027 lists trip-flap mitigation as a deployment concern:
 // a marginal voltage signal flapping in and out of the trip region must
 // not flood the server with LogEvents. The primary mitigation lives in
 // the alarm detector (edge-triggered: emit only on transitions, not while
-// the condition holds). This limiter is defense-in-depth — if the
+// the condition holds). This limiter is defense-in-depth : if the
 // detector's edge logic ever regresses, the limiter caps emissions to a
 // configurable rate per logEventCode so the server is never flooded
 // regardless.
 //
 // Design: per-code last-emit timestamp keyed by logEventCode, single
-// mutex (the lock is held for nanoseconds — no contention concern for
+// mutex (the lock is held for nanoseconds : no contention concern for
 // the simulator's ~1Hz tick). The window is configurable so tests can
 // pin a short window without sleeping a minute.
 //
 // Concurrency: Allow is safe for concurrent use. The clock function is
-// invoked under the mutex — callers that want a deterministic clock
+// invoked under the mutex : callers that want a deterministic clock
 // (tests) pass a synthetic time source.
 
 package inverter
@@ -38,7 +38,7 @@ const DefaultLogEventWindow = time.Minute
 // Allow returns true when (now - lastEmit[code]) >= window, false
 // otherwise. On allow the limiter records now as the new lastEmit, so
 // the next Allow for the same code within the window denies. Codes are
-// tracked independently — a deny on code 1 does not affect code 5.
+// tracked independently : a deny on code 1 does not affect code 5.
 //
 // The zero value is NOT ready; construct via NewPerCodeLogEventLimiter.
 //

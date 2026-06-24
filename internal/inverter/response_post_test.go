@@ -1,4 +1,4 @@
-// Package inverter_test backfills coverage for IEEE-043 — the
+// Package inverter_test backfills coverage for IEEE-043 : the
 // (*SEP2Client).PostResponse method that wires the client side of the
 // IEEE 2030.5 Response Function Set (CSIP V1.2 CORE-022). The test suite
 // asserts the nine behaviors called out in the IEEE-043 ticket body:
@@ -16,7 +16,7 @@
 // Fixture pattern matches the rest of the inverter package: gotls-backed
 // HTTPS listener via ccmTestEnv + startIdleListener, per-test mux, atomic
 // hit counters, t.Parallel() where safe. plan-1 deferred-tests override
-// LIFTED — tests live in the same PR as the implementation.
+// LIFTED : tests live in the same PR as the implementation.
 package inverter_test
 
 import (
@@ -39,7 +39,7 @@ import (
 )
 
 // captureLogsMu serializes concurrent captureLogs calls. The helper swaps
-// log.Default()'s output writer, which is a single global slot — two
+// log.Default()'s output writer, which is a single global slot : two
 // t.Parallel() tests calling captureLogs would otherwise interleave their
 // SetOutput calls AND their Printf writes, producing intermittent -race
 // failures (Pike Y3 / Pike DD trail; IEEE-081). Holding the mutex for the
@@ -70,7 +70,7 @@ func sampleDERControlResponse() sep2.DERControlResponse {
 // redaction without rebuilding the logger seam.
 //
 // IEEE-081 contract: callers MUST be serial (no t.Parallel()).
-// log.Default() is process-global — any other t.Parallel() test running
+// log.Default() is process-global : any other t.Parallel() test running
 // concurrently with a captureLogs caller will log.Printf into the captured
 // buffer (because we've SetOutput'd it) AND race buf.String(). Go's test
 // runtime runs serial tests in a single goroutine BEFORE resuming queued
@@ -113,7 +113,7 @@ func readBodyBytes(t *testing.T, r *http.Request) []byte {
 // =============================================================================
 
 func TestPostResponse_201CreatedHappyPath(t *testing.T) {
-	// IEEE-081: captureLogs callers must be serial — log.Default() is
+	// IEEE-081: captureLogs callers must be serial : log.Default() is
 	// process-global. See response_post_test.go captureLogs godoc.
 	env := newCCMTestEnv(t)
 
@@ -287,7 +287,7 @@ func TestPostResponse_AbsoluteHrefBypassesBaseURL(t *testing.T) {
 // =============================================================================
 
 func TestPostResponse_400BadRequestRedactsBody(t *testing.T) {
-	// IEEE-081: captureLogs callers must be serial — log.Default() is
+	// IEEE-081: captureLogs callers must be serial : log.Default() is
 	// process-global. See response_post_test.go captureLogs godoc.
 	env := newCCMTestEnv(t)
 
@@ -313,7 +313,7 @@ func TestPostResponse_400BadRequestRedactsBody(t *testing.T) {
 	if err == nil {
 		t.Fatal("PostResponse(400) returned nil; want error")
 	}
-	// Non-transient — must NOT match the sentinel.
+	// Non-transient : must NOT match the sentinel.
 	if errors.Is(err, inverter.ErrResponseTransient) {
 		t.Errorf("4xx error must not match ErrResponseTransient; got %v", err)
 	}
@@ -409,7 +409,7 @@ func TestPostResponse_ContextCancelledPropagates(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/rsps/1/rsp", func(w http.ResponseWriter, r *http.Request) {
-		// Block until the client cancels — gives the test deterministic
+		// Block until the client cancels : gives the test deterministic
 		// control over when the in-flight POST observes the cancellation.
 		select {
 		case <-r.Context().Done():
@@ -438,7 +438,7 @@ func TestPostResponse_ContextCancelledPropagates(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v; want errors.Is(err, context.Canceled) to succeed", err)
 	}
-	// Cancellation MUST NOT mask as a transient — IEEE-045's policy is
+	// Cancellation MUST NOT mask as a transient : IEEE-045's policy is
 	// keyed on ErrResponseTransient and ctx errors are the caller's
 	// stop-the-world signal, not retry signal.
 	if errors.Is(err, inverter.ErrResponseTransient) {
@@ -530,7 +530,7 @@ func TestPostResponse_EmptyHrefErrors(t *testing.T) {
 
 // =============================================================================
 // Bonus: a malformed href that url.Parse rejects produces a wrapped error
-// without a network call. Defensive — confirms the resolution helper
+// without a network call. Defensive : confirms the resolution helper
 // surfaces parse failures rather than turning them into transient retries.
 // =============================================================================
 
@@ -562,7 +562,7 @@ func TestPostResponse_MalformedHrefSurfacesParseError(t *testing.T) {
 	if err == nil {
 		t.Fatal("PostResponse(malformed href) returned nil; want error")
 	}
-	// Must NOT be classified as transient — retry would be pointless.
+	// Must NOT be classified as transient : retry would be pointless.
 	if errors.Is(err, inverter.ErrResponseTransient) {
 		t.Errorf("malformed-href error must not match ErrResponseTransient; got %v", err)
 	}

@@ -9,7 +9,7 @@ package main
 // any test process that drives it.
 //
 // runPhase2bRegistration owns ONLY the control flow that lived in the inline
-// switch — the missing-RegistrationLink branch (bypass vs idle), the
+// switch : the missing-RegistrationLink branch (bypass vs idle), the
 // RegistrationLink-resolved branch (PIN read + match enforcement), and the
 // idle loops that re-fetch the EndDevice (missing link) or the Registration
 // resource (PIN-not-yet-provisioned). It does not touch the upstream
@@ -48,7 +48,7 @@ package main
 //
 // Test seam: phase2bPollMin and phase2bPollDefault are vars (not consts) so
 // phase2b_test.go can shrink the floor below 60s without faking time. The
-// production pinPollInterval() helper is unchanged — these vars shadow its
+// production pinPollInterval() helper is unchanged : these vars shadow its
 // policy only inside runPhase2bRegistration. Mirrors IEEE-070's
 // minTimeSyncPollRate pattern. The production binary never writes to these.
 
@@ -149,7 +149,7 @@ func runPhase2bRegistration(
 			// IEEE-047: on 301 LookupOwnEndDevice surfaces the new edev-list
 			// base href; update our local copy so the next idle iteration
 			// hits the new URL directly. The follow has already happened
-			// inside LookupOwnEndDevice — newEdev is the live response.
+			// inside LookupOwnEndDevice : newEdev is the live response.
 			newEdev, newEdevListHref, err := client.LookupOwnEndDevice(ctx, edevListHref)
 			if err != nil {
 				return edev, &phase2bFatal{
@@ -158,7 +158,7 @@ func runPhase2bRegistration(
 				}
 			}
 			if newEdevListHref != "" {
-				log.Printf("Phase 2b re-lookup: 301 follow — cached edev-list href %s → %s",
+				log.Printf("Phase 2b re-lookup: 301 follow : cached edev-list href %s → %s",
 					edevListHref, newEdevListHref)
 				edevListHref = newEdevListHref
 			}
@@ -196,9 +196,9 @@ func runPhase2bRegistration(
 				}
 				continue
 			}
-			// Non-zero mismatch — wrong device/server pair. Operator must intervene.
+			// Non-zero mismatch : wrong device/server pair. Operator must intervene.
 			return edev, &phase2bFatal{reason: fmt.Sprintf(
-				"Registration: PIN mismatch — server=%s expected=%s (CSIP V1.2 BASIC-001 step 5; check --pin or device provisioning)",
+				"Registration: PIN mismatch : server=%s expected=%s (CSIP V1.2 BASIC-001 step 5; check --pin or device provisioning)",
 				redactPIN(uint(rg.PIN)), redactPIN(cfg.ExpectedPIN))}
 		}
 	}

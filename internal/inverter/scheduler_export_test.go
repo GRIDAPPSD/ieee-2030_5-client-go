@@ -44,7 +44,7 @@ func SeededRandForTesting(seed1, seed2 uint64) *rand.Rand {
 }
 
 // QueueSnapshotForTesting returns a copy of the scheduler's queue. The
-// returned slice is independent — mutating it does not affect the
+// returned slice is independent : mutating it does not affect the
 // scheduler. Each scheduledEvent's Source DERControl is the same value the
 // scheduler stored (already a Copy() at OnEventsAdded time).
 func QueueSnapshotForTesting(s *Scheduler) []scheduledEvent {

@@ -162,7 +162,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 		// IEEE-030: Register takes the EndDeviceList href, not a baked-in
 		// constant. The test server still mounts the list at /edev (which
 		// is what dcap.EndDeviceListLink.Href advertises), so we pass that
-		// literal here as the href — there is no hardcoded URL inside the
+		// literal here as the href : there is no hardcoded URL inside the
 		// client method anymore.
 		edev, _, err := client.Register(ctx, "/edev")
 		if err != nil {

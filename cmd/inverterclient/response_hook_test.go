@@ -1,4 +1,4 @@
-// Tests for IEEE-044 — state-machine → Response POST hook
+// Tests for IEEE-044 : state-machine → Response POST hook
 // (Phase 6 ticket 2 of 3).
 //
 // The hook produced by responsePOSTHook is the leaf consumer that turns
@@ -26,7 +26,7 @@
 // Tests use a hand-rolled `fakePoster` to record PostResponse calls
 // directly at the consumer-side interface boundary. The full SEP2Client
 // HTTP/TLS path is covered by IEEE-043's response_post_test.go in
-// internal/inverter — this file's scope ends at the hook contract.
+// internal/inverter : this file's scope ends at the hook contract.
 
 package main
 
@@ -52,7 +52,7 @@ var fixedTestNow = time.Date(2026, 5, 12, 12, 0, 0, 0, time.UTC)
 func fixedNowFn() time.Time { return fixedTestNow }
 
 // =============================================================================
-// (b) mapTransitionToStatus — table of all documented edges.
+// (b) mapTransitionToStatus : table of all documented edges.
 // =============================================================================
 
 func TestMapTransitionToStatus_Table(t *testing.T) {
@@ -94,7 +94,7 @@ func TestMapTransitionToStatus_Table(t *testing.T) {
 			want: sep2.ResponseStatusEventCancelled,
 		},
 		{
-			// Auto-revert from terminal to DEFAULT carries no wire status —
+			// Auto-revert from terminal to DEFAULT carries no wire status :
 			// the acknowledgement fired one transition earlier on the
 			// COMPLETED / CANCELLED record itself.
 			name: "completed to default returns 0 (silent edge)",
@@ -130,7 +130,7 @@ func TestMapTransitionToStatus_Table(t *testing.T) {
 }
 
 // =============================================================================
-// (c) responseRequiredOn — bitmap selection per Table 32.
+// (c) responseRequiredOn : bitmap selection per Table 32.
 // =============================================================================
 
 func TestResponseRequiredOn_Bitmask(t *testing.T) {
@@ -196,7 +196,7 @@ func TestResponseRequiredOn_Bitmask(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:   "0x07 mask does not select status 6 (cancelled — bit 5)",
+			name:   "0x07 mask does not select status 6 (cancelled : bit 5)",
 			mask:   0x07,
 			status: sep2.ResponseStatusEventCancelled,
 			want:   false,
@@ -244,7 +244,7 @@ func TestResponseRequiredOn_Bitmask(t *testing.T) {
 }
 
 // =============================================================================
-// (d) deriveResponseHref — determinism.
+// (d) deriveResponseHref : determinism.
 // =============================================================================
 
 func TestDeriveResponseHref_Deterministic(t *testing.T) {
@@ -270,7 +270,7 @@ func TestDeriveResponseHref_Deterministic(t *testing.T) {
 }
 
 // TestDeriveResponseHref_StatusSensitive confirms different statuses for
-// the same mRID derive distinct hrefs — protects the server-side router
+// the same mRID derive distinct hrefs : protects the server-side router
 // from collisions when an event walks through Received → Started →
 // Completed.
 func TestDeriveResponseHref_StatusSensitive(t *testing.T) {
@@ -523,7 +523,7 @@ func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
 	t.Parallel()
 	// First call returns a transient-wrapped error mirroring what
 	// PostResponse would surface on a persistent 5xx. With IEEE-045's
-	// PostResponseWithRetry layered in, the hook will retry — so the
+	// PostResponseWithRetry layered in, the hook will retry : so the
 	// first transition takes 2 PostResponse calls (attempt 1: transient,
 	// attempt 2: success). The hook must still log + move on with no
 	// panic / no state-machine wedge.
@@ -546,13 +546,13 @@ func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
 	}
 	sm.AddTransitionHook(responsePOSTHook(poster, "lfdi-500", fixedNowFn, tightRetry))
 
-	// Transition 1: DEFAULT→RECEIVED — attempt 1 transient, attempt 2 OK.
+	// Transition 1: DEFAULT→RECEIVED : attempt 1 transient, attempt 2 OK.
 	sm.Tick(clock(), []sep2.DERControl{dc}, nil, sched)
 	if got := len(poster.Calls()); got != 2 {
 		t.Errorf("after RECEIVED transition: calls = %d, want 2 (one transient retry, then success)", got)
 	}
 
-	// Transition 2: RECEIVED→STARTED — hook MUST still fire.
+	// Transition 2: RECEIVED→STARTED : hook MUST still fire.
 	tnow = fixedTestNow.Add(90 * time.Second)
 	sm.Tick(clock(), nil, nil, sched)
 	if got := len(poster.Calls()); got != 3 {
@@ -580,15 +580,15 @@ func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
 //  1. Drive cfg.MaxAttempts PostResponse calls (retry schedule consumed).
 //  2. Emit a dead-letter log line carrying the event mRID and Table 31
 //     status so an operator can audit the dropped Response.
-//  3. NOT wedge the state machine — the next transition
+//  3. NOT wedge the state machine : the next transition
 //     (RECEIVED→STARTED) must still fire its own Response POST.
 //
 // Pike rules satisfied: errors are values (dead-letter line preserves
 // %w chain to ErrResponseTransient), no goroutine leak (the test runs
-// synchronously on a fake retry clock effectively — InitialDelay is
+// synchronously on a fake retry clock effectively : InitialDelay is
 // 1ms via the tight cfg).
 func TestResponsePOSTHook_IEEE045DeadLetterOnPersistentTransient(t *testing.T) {
-	// IEEE-081: deliberately serial — captureLog (and the inline
+	// IEEE-081: deliberately serial : captureLog (and the inline
 	// SetOutput pattern below) swaps log.Default()'s writer, which is
 	// process-global. Any t.Parallel() sibling test that emits log
 	// lines via production code while we hold the capture would race
@@ -620,7 +620,7 @@ func TestResponsePOSTHook_IEEE045DeadLetterOnPersistentTransient(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(prev)
 
-	// Transition 1: DEFAULT→RECEIVED — 3 PostResponse attempts, all fail
+	// Transition 1: DEFAULT→RECEIVED : 3 PostResponse attempts, all fail
 	// transiently → dead-letter log emitted.
 	sm.Tick(clock(), []sep2.DERControl{dc}, nil, sched)
 	if got := len(poster.Calls()); got != tightRetry.MaxAttempts {
@@ -638,7 +638,7 @@ func TestResponsePOSTHook_IEEE045DeadLetterOnPersistentTransient(t *testing.T) {
 		t.Errorf("dead-letter log missing status=%d; got:\n%s", sep2.ResponseStatusEventReceived, logs)
 	}
 
-	// Transition 2: RECEIVED→STARTED — no queued errs left → succeeds
+	// Transition 2: RECEIVED→STARTED : no queued errs left → succeeds
 	// on the first attempt. Proves the state machine kept advancing.
 	tnow = fixedTestNow.Add(90 * time.Second)
 	sm.Tick(clock(), nil, nil, sched)

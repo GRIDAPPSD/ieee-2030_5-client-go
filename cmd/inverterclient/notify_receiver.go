@@ -2,7 +2,7 @@
 //
 // Extracted from main.go so the receiver-start path can fail gracefully
 // without growing the cmd/inverterclient log.Fatalf inventory (IEEE-048
-// audit). The receiver is optional — when bind, cert load, or address
+// audit). The receiver is optional : when bind, cert load, or address
 // resolution fails, we log and return nil; main() proceeds with polling-
 // only (CSIP CORE-018 recommends subscription/notification but doesn't
 // require it).
@@ -20,7 +20,7 @@ import (
 
 // startNotifyReceiver builds and starts the IEEE-049 inbound Notification
 // listener. Returns nil on disabled (empty addr) or on any failure path,
-// matching IEEE-048's graceful-bypass philosophy — the inverter can run
+// matching IEEE-048's graceful-bypass philosophy : the inverter can run
 // in polling-only mode when the recommended-but-not-required subscription
 // receiver can't come up.
 //

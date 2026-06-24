@@ -11,7 +11,7 @@ import (
 //
 // Hrefs are derived by main.go from the advertised link graph (see IEEE-030)
 // rather than built from ID segments. Empty hrefs cause the corresponding
-// report to be skipped silently — used when the server's DeviceCapability
+// report to be skipped silently : used when the server's DeviceCapability
 // or EndDevice didn't advertise the corresponding link, in which case the
 // inverter must continue running locally without poking endpoints that
 // don't exist on the server side.
@@ -40,7 +40,7 @@ func NewReporter(client *SEP2Client, derStatusHref, mmrHref string) *Reporter {
 }
 
 // ReportStatus sends a DERStatus PUT to the server. Returns nil immediately
-// (without error) when the configured derStatusHref is empty — the server
+// (without error) when the configured derStatusHref is empty : the server
 // did not advertise a DERStatusLink, so there is nothing to report against.
 func (r *Reporter) ReportStatus(ctx context.Context, state InverterState) error {
 	if r.derStatusHref == "" {
@@ -85,7 +85,7 @@ func (r *Reporter) ReportMetering(ctx context.Context, state InverterState) erro
 	// IEEE-031: outbound identifier derives from the server-synced clock
 	// (client.Now()), not local wall-clock. state.Time is simulation time
 	// (2024 sunrise + accelerated delta), so it stays where it is on the
-	// reading payload fields — replacing it would jump reported timestamps
+	// reading payload fields : replacing it would jump reported timestamps
 	// out of the simulation's time domain. The MRID is a unique ID the
 	// server may correlate against its own clock, so it goes through Now().
 	mmr := sep2.MirrorMeterReading{

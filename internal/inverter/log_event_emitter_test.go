@@ -141,7 +141,7 @@ func TestPostLogEvent_NilLimiterAllowsAllByDefault(t *testing.T) {
 	t.Parallel()
 	srv, _, _ := testServerWithStatus(t, http.StatusCreated, "/edev/1/lel/le-1")
 	c := newTestSEP2Client(t, srv.URL, srv.Client().Transport)
-	// Do not call SetLogEventRateLimiter — exercise the nil default.
+	// Do not call SetLogEventRateLimiter : exercise the nil default.
 
 	if _, err := c.PostLogEvent(context.Background(), "/edev/1/lel", sep2.LogEvent{LogEventCode: 99}); err != nil {
 		t.Fatalf("PostLogEvent err = %v, want nil with nil limiter", err)

@@ -6,10 +6,10 @@
 //
 // The deferred-tests Craig override (2026-05-12) was lifted later the same
 // day; this file is the plan-3-csip-test-debt-sweep Phase 2 deliverable
-// (IEEE-070). Origin ticket IEEE-031 is MERGED — behavior is frozen. These
+// (IEEE-070). Origin ticket IEEE-031 is MERGED : behavior is frozen. These
 // tests assert frozen behavior; they do not exercise unmerged future
 // changes. If a test reveals a defect, the project policy is to file a
-// separate MEDIUM ticket — do not fix inline.
+// separate MEDIUM ticket : do not fix inline.
 //
 // Fixture pattern mirrors IEEE-028's idle_test.go and IEEE-069's
 // client_test.go: each test stands up a gotls-backed HTTPS server via the
@@ -132,7 +132,7 @@ func TestGetServerTime_HappyPath(t *testing.T) {
 		t.Errorf("server saw path %q, want %q", got, "/tm")
 	}
 
-	// Empty href short-circuits before any HTTP — same defensive guard
+	// Empty href short-circuits before any HTTP : same defensive guard
 	// pattern IEEE-030 added across all href-taking methods.
 	if _, err := client.GetServerTime(ctx, ""); err == nil {
 		t.Error("GetServerTime(ctx, \"\") returned nil error; want failure")
@@ -145,7 +145,7 @@ func TestGetServerTime_HappyPath(t *testing.T) {
 }
 
 // TestGetServerTime_ServerErrorIsWrapped covers the GET-error branch in
-// GetServerTime — a 500 surfaces as a wrapped error containing the "get
+// GetServerTime : a 500 surfaces as a wrapped error containing the "get
 // server time" context. Lifts GetServerTime coverage over the ≥80% gate
 // without adding new IEEE-070 cases.
 func TestGetServerTime_ServerErrorIsWrapped(t *testing.T) {
@@ -186,7 +186,7 @@ func TestGetServerTime_ServerErrorIsWrapped(t *testing.T) {
 // Race-clean by construction: the goroutine reads no test state after
 // the cancel signal; the `done` channel is the only synchronization. The
 // production select{ <-ctx.Done() | <-time.After(pollRate) } returns on
-// the Done() arm immediately when cancel fires, regardless of pollRate —
+// the Done() arm immediately when cancel fires, regardless of pollRate :
 // so we pass the production floor (60s) without waiting for it.
 //
 // Must run under `go test -race` without warnings.
@@ -237,7 +237,7 @@ func TestRunTimeSync_GoroutineExitsOnCtxCancel(t *testing.T) {
 }
 
 // TestRunTimeSync_LoopBodyExecutesAndAppliesOffset covers the
-// RunTimeSync loop body — the path between the time.After arm of the
+// RunTimeSync loop body : the path between the time.After arm of the
 // select and the SyncServerTime call that updates the offset. The
 // production minTimeSyncPollRate floor (60s) makes this untestable at
 // the natural cadence, so the test uses SetMinTimeSyncPollRateForTesting
@@ -285,7 +285,7 @@ func TestRunTimeSync_LoopBodyExecutesAndAppliesOffset(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait for at least one sync iteration to complete — defined as
+	// Wait for at least one sync iteration to complete : defined as
 	// the offset becoming non-zero (SyncServerTime returned and wrote
 	// to the atomic). Counting HTTP hits alone races: a hit can be
 	// observed when the request *arrives* at the server while the
@@ -547,7 +547,7 @@ func TestPhase1bSkipsWhenTimeLinkAbsent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Build the DeviceCapability the way the production code does — with
+	// Build the DeviceCapability the way the production code does : with
 	// no TimeLink advertised by the server.
 	dcap := sep2.DeviceCapability{}
 	if dcap.TimeLink != nil {
@@ -556,7 +556,7 @@ func TestPhase1bSkipsWhenTimeLinkAbsent(t *testing.T) {
 
 	// Production gating expression (cmd/inverterclient/main.go Phase 1b):
 	// if dcap.TimeLink != nil { SyncServerTime + spawn RunTimeSync }.
-	// We replicate the branch literally — Pike's "stay in scope" rule
+	// We replicate the branch literally : Pike's "stay in scope" rule
 	// blocks extracting a helper from main.go, so the test exercises the
 	// same expression the production code does.
 	if dcap.TimeLink != nil {
@@ -614,7 +614,7 @@ func TestPhase1bSkipsWhenTimeLinkAbsent(t *testing.T) {
 //     suffix is at least many-seconds ahead of time.Now()'s formatting).
 //
 // A regression where reporter.go reverts to time.Now() would land the
-// MRID 42 seconds behind the client.Now() timestamp — well outside the
+// MRID 42 seconds behind the client.Now() timestamp : well outside the
 // ±2s window. The two-second tolerance absorbs second-rollover at the
 // minute boundary plus the small drift between SyncServerTime returning
 // and the MRID being formatted.
@@ -667,7 +667,7 @@ func TestReporterMRID_DerivesFromClientNow(t *testing.T) {
 		Connected:    true,
 		Energized:    true,
 		Mode:         inverter.ModeConstantPF,
-		Time:         time.Now(), // simulation time — independent of MRID source
+		Time:         time.Now(), // simulation time : independent of MRID source
 	}
 
 	// Capture client.Now() and time.Now() at the instant just before
@@ -700,7 +700,7 @@ func TestReporterMRID_DerivesFromClientNow(t *testing.T) {
 	suffix := strings.TrimPrefix(got.MRID, wantPrefix)
 
 	// Parse the formatted suffix back. The reporter uses
-	// "20060102-150405" — a wall-clock format with no timezone, so
+	// "20060102-150405" : a wall-clock format with no timezone, so
 	// parse it in Local to match how it was produced.
 	parsed, err := time.ParseInLocation("20060102-150405", suffix, time.Local)
 	if err != nil {
@@ -715,17 +715,17 @@ func TestReporterMRID_DerivesFromClientNow(t *testing.T) {
 
 	clientSkew := parsed.Sub(clientNowBefore)
 	if clientSkew < -tolerance || clientSkew > tolerance {
-		t.Errorf("MRID parsed=%v vs client.Now()=%v (skew=%v) outside ±%v — MRID does not derive from client.Now()",
+		t.Errorf("MRID parsed=%v vs client.Now()=%v (skew=%v) outside ±%v : MRID does not derive from client.Now()",
 			parsed, clientNowBefore, clientSkew, tolerance)
 	}
 
-	// And it must NOT be close to local time — that would mean the
+	// And it must NOT be close to local time : that would mean the
 	// reporter reverted to time.Now(). With a +42s offset the parsed
 	// MRID must be ~42s ahead of localNowBefore.
 	localSkew := parsed.Sub(localNowBefore)
 	wantLocalSkew := offsetSeconds * time.Second
 	if localSkew < wantLocalSkew-tolerance || localSkew > wantLocalSkew+tolerance {
-		t.Errorf("MRID parsed=%v vs time.Now()=%v (skew=%v) — want ~+%ds (offset applied)",
+		t.Errorf("MRID parsed=%v vs time.Now()=%v (skew=%v) : want ~+%ds (offset applied)",
 			parsed, localNowBefore, localSkew, offsetSeconds)
 	}
 }

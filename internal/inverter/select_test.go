@@ -124,7 +124,7 @@ func TestSelectHighestPriority(t *testing.T) {
 
 // TestSelectHighestPriorityNilDefaultLinkAccessSafe verifies that the nil
 // DefaultDERControlLink case (case 6) is not just selectable but also safe
-// to inspect after selection — guarding against a panic if a Phase 5 caller
+// to inspect after selection : guarding against a panic if a Phase 5 caller
 // reads the field directly.
 func TestSelectHighestPriorityNilDefaultLinkAccessSafe(t *testing.T) {
 	t.Parallel()

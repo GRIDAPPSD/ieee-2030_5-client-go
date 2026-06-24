@@ -60,7 +60,7 @@ func TestEnforceVALimit(t *testing.T) {
 		t.Errorf("S=%.0f exceeds VA rating %.0f", s, Rating.RatedVA)
 	}
 
-	// Exceeds limit — Q should be reduced
+	// Exceeds limit : Q should be reduced
 	p, q = EnforceVALimit(10000, 6000)
 	s = math.Sqrt(p*p + q*q)
 	if s > Rating.RatedVA+1 {

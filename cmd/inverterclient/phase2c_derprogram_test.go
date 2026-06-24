@@ -3,8 +3,8 @@ package main
 // Backfill of the 2 deferred Phase 2c DERProgram-walk outer-loop integration
 // cases from IEEE-073 PR #101. IEEE-076 extracted the Phase 2c DERProgram-walk
 // outer for-loop out of main() into runPhase2cDERProgramWalk
-// (cmd/inverterclient/phase2c_derprogram.go) so these cases — previously
-// blocked by inline-in-main + log.Fatalf — can be driven directly. Same
+// (cmd/inverterclient/phase2c_derprogram.go) so these cases : previously
+// blocked by inline-in-main + log.Fatalf : can be driven directly. Same
 // structural template as IEEE-074's Phase 2b backfill (phase2b_test.go) and
 // IEEE-075's Phase 2c FSAList backfill (phase2c_fsalist_test.go).
 //
@@ -99,7 +99,7 @@ func phase2cDERProgramDefaultDcap() sep2.DeviceCapability {
 	return sep2.DeviceCapability{PollRate: 0}
 }
 
-// TestRunPhase2cDERProgramWalk_HappyPathReturnsCache — baseline.
+// TestRunPhase2cDERProgramWalk_HappyPathReturnsCache : baseline.
 //
 // Single FSA with a non-empty DERProgramList. runPhase2cDERProgramWalk must
 // return the populated cache after exactly one walk pass, no idle, no fatal.
@@ -155,7 +155,7 @@ func TestRunPhase2cDERProgramWalk_HappyPathReturnsCache(t *testing.T) {
 	}
 }
 
-// TestRunPhase2cDERProgramWalk_EmptyAggregateIdleThenAppears — IEEE-073 #4.
+// TestRunPhase2cDERProgramWalk_EmptyAggregateIdleThenAppears : IEEE-073 #4.
 //
 // All FSAs return an empty DERProgramList on the first walk pass; on the
 // second pass the FSA returns a non-empty list. runPhase2cDERProgramWalk
@@ -175,12 +175,12 @@ func TestRunPhase2cDERProgramWalk_EmptyAggregateIdleThenAppears(t *testing.T) {
 	mux.HandleFunc("/edev/1/fsa/0/derp", func(w http.ResponseWriter, _ *http.Request) {
 		n := hits.Add(1)
 		if n == 1 {
-			// First pass: empty list — triggers idle.
+			// First pass: empty list : triggers idle.
 			empty := sep2.DERProgramList{}
 			writeSepXML(t, w, &empty)
 			return
 		}
-		// Second+ pass: non-empty list — triggers return.
+		// Second+ pass: non-empty list : triggers return.
 		list := sep2.DERProgramList{
 			ListResource: sep2.ListResource{All: 1, Results: 1},
 			DERProgram: []sep2.DERProgram{
@@ -229,7 +229,7 @@ func TestRunPhase2cDERProgramWalk_EmptyAggregateIdleThenAppears(t *testing.T) {
 	}
 }
 
-// TestRunPhase2cDERProgramWalk_PollRateThrottlesEmptyAggregateLoop — IEEE-073 #6.
+// TestRunPhase2cDERProgramWalk_PollRateThrottlesEmptyAggregateLoop : IEEE-073 #6.
 //
 // All FSAs keep returning empty DERProgramLists. runPhase2cDERProgramWalk is
 // parked in the empty-aggregate idle loop on a 25ms cadence (test seam).
@@ -335,12 +335,12 @@ func TestRunPhase2cDERProgramWalk_PollRateThrottlesEmptyAggregateLoop(t *testing
 	const tolerance = time.Duration(float64(25*time.Millisecond) * 0.5)
 	for i, g := range gapsSnap {
 		if g < tolerance {
-			t.Errorf("gap[%d] = %s; want >= %s (pollRate throttling collapsed — time.After gate may have been bypassed)", i, g, tolerance)
+			t.Errorf("gap[%d] = %s; want >= %s (pollRate throttling collapsed : time.After gate may have been bypassed)", i, g, tolerance)
 		}
 	}
 }
 
-// TestRunPhase2cDERProgramWalk_WalkErrorReturnsFatal — bonus.
+// TestRunPhase2cDERProgramWalk_WalkErrorReturnsFatal : bonus.
 //
 // One FSA's DERProgramList GET fails with HTTP 500. walkDERProgramTree wraps
 // that as `FSA mRID=%s DERProgramList: %w`. runPhase2cDERProgramWalk wraps
@@ -401,7 +401,7 @@ func TestRunPhase2cDERProgramWalk_WalkErrorReturnsFatal(t *testing.T) {
 	}
 }
 
-// TestRunPhase2cDERProgramWalk_EmptyAggregateAllowUnregisteredProceeds — bonus.
+// TestRunPhase2cDERProgramWalk_EmptyAggregateAllowUnregisteredProceeds : bonus.
 //
 // cfg.AllowUnregistered=true + all FSAs return empty DERProgramLists.
 // runPhase2cDERProgramWalk must log the proceed marker, return the empty

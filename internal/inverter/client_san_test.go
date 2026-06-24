@@ -149,7 +149,7 @@ func newHMNServerEnv(t *testing.T) *hmnServerEnv {
 // a critical SubjectAlternativeName whose only entry is an RFC 4108 §5
 // HardwareModuleName otherName. ExtKeyUsage is set to ServerAuth (and
 // ClientAuth, matching the production server cert) so the gotls server can
-// present it. The SAN is deliberately otherName-only — stdlib's SAN parser
+// present it. The SAN is deliberately otherName-only : stdlib's SAN parser
 // only adds the SAN OID to UnhandledCriticalExtensions when it parsed
 // zero of {DNSNames, EmailAddresses, IPAddresses, URIs} (parser.go ~L728), so
 // mixing a known form (DNS/IP) with the otherName would mask the failure.
@@ -211,7 +211,7 @@ func serverCertWithHMNSAN(caCert *x509.Certificate, caKey *ecdsa.PrivateKey, hwS
 // buildHardwareModuleNameOnlySAN constructs a critical SubjectAlternativeName
 // extension whose only entry is an RFC 4108 §5 HardwareModuleName otherName
 // carrying (hwType, hwSerial). Mirrors internal/certs/generate.go
-// buildHardwareModuleNameSAN — if that production marshaler's struct shape
+// buildHardwareModuleNameSAN : if that production marshaler's struct shape
 // changes, this test should be updated in lockstep.
 func buildHardwareModuleNameOnlySAN(hwType asn1.ObjectIdentifier, hwSerial string) (pkix.Extension, error) {
 	type hardwareModuleName struct {
@@ -261,7 +261,7 @@ func buildHardwareModuleNameOnlySAN(hwType asn1.ObjectIdentifier, hwSerial strin
 // startGotlsListenerWithCert boots a gotls-backed HTTPS server using the
 // fixture's hand-built server cert (critical HMN SAN). No client-verify hook
 // is installed because IEEE-027 is about the client's view of the server
-// cert — peer client auth is not the test surface here.
+// cert : peer client auth is not the test surface here.
 func startGotlsListenerWithCert(t *testing.T, env *hmnServerEnv, cipherSuites []uint16) (serverURL string, stop func()) {
 	t.Helper()
 

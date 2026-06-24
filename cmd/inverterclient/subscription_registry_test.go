@@ -167,7 +167,7 @@ func href(i int) string       { return "/edev/1/sub-target-" + itoa(i) }
 func serverHref(i int) string { return "/edev/1/sub/sub-" + itoa(i) }
 
 // itoa avoids importing strconv into a tiny test helper. The values
-// don't need to round-trip — they only need to be unique.
+// don't need to round-trip : they only need to be unique.
 func itoa(i int) string {
 	if i == 0 {
 		return "0"

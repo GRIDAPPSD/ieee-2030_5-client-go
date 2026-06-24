@@ -1,4 +1,4 @@
-// Package inverter — IEEE-054 edge-triggered alarm transition detector.
+// Package inverter : IEEE-054 edge-triggered alarm transition detector.
 //
 // CSIP V1.2 BASIC-027 (Alarms, pp 139-140) requires the DER Client to POST
 // a LogEvent on each alarm-class state TRANSITION. Continuous emission
@@ -8,13 +8,13 @@
 //
 // AlarmDetector tracks five alarm classes (mapped to Table 34 codes):
 //
-//	LogEventCodeVoltageLow      (1) — LVRT trip:    voltsPU < 0.88 and trip curve exceeded
-//	LogEventCodeVoltageHigh     (2) — HVRT trip:    voltsPU > 1.10 and trip curve exceeded
-//	LogEventCodeFrequencyLow    (3) — under-freq:   freqHz  < 59.0 and trip curve exceeded
-//	LogEventCodeFrequencyHigh   (4) — over-freq:    freqHz  > 60.5 and trip curve exceeded
-//	LogEventCodeReactiveLimit   (5) — VV curtail:   |Q| above curtailment threshold
-//	LogEventCodeActiveLimit     (6) — FW curtail:   freq-droop reduced active power below preDisturbance
-//	LogEventCodeGenDisable      (7) — inverter offline: !Connected || !Energized
+//	LogEventCodeVoltageLow      (1) : LVRT trip:    voltsPU < 0.88 and trip curve exceeded
+//	LogEventCodeVoltageHigh     (2) : HVRT trip:    voltsPU > 1.10 and trip curve exceeded
+//	LogEventCodeFrequencyLow    (3) : under-freq:   freqHz  < 59.0 and trip curve exceeded
+//	LogEventCodeFrequencyHigh   (4) : over-freq:    freqHz  > 60.5 and trip curve exceeded
+//	LogEventCodeReactiveLimit   (5) : VV curtail:   |Q| above curtailment threshold
+//	LogEventCodeActiveLimit     (6) : FW curtail:   freq-droop reduced active power below preDisturbance
+//	LogEventCodeGenDisable      (7) : inverter offline: !Connected || !Energized
 //
 // Wiring: cmd/inverterclient/main.go constructs one AlarmDetector at
 // startup, wires the LogEvent emitter (PostLogEvent) + rate-limiter +
@@ -47,7 +47,7 @@ import (
 // ErrLogEventLinkAbsent and ErrRateLimited are silent drops (logged at
 // debug-ish level only); ErrMethodNotAllowed is logged warn-level and
 // the alarm class is suppressed for the remainder of the run (BASIC-027
-// graceful-degradation — no retry storm).
+// graceful-degradation : no retry storm).
 type LogEventEmitter interface {
 	PostLogEvent(ctx context.Context, logEventListHref string, evt sep2.LogEvent) (string, error)
 }
@@ -72,7 +72,7 @@ type AlarmInputs struct {
 // between ticks. Edge = on→off or off→on; emission happens on the
 // off→on transition (alarm "set"). off→off and on→on are no-ops.
 //
-// Off-edge (on→off, the "clear" event) is intentionally NOT emitted —
+// Off-edge (on→off, the "clear" event) is intentionally NOT emitted :
 // BASIC-027 only requires emit on alarm onset. Adding clear-edge
 // emissions is a follow-up if the operator requests it; the state
 // machine already tracks the bits so adding the emit site is a
@@ -91,7 +91,7 @@ type AlarmState struct {
 // NewAlarmDetector; the zero value is NOT ready (no emitter, no href).
 //
 // suppressed tracks codes that returned ErrMethodNotAllowed from the
-// emitter — once a code is suppressed, future transitions for that
+// emitter : once a code is suppressed, future transitions for that
 // code are silently dropped (BASIC-027 graceful-degradation: the
 // server has signaled it does not implement the LogEvent function
 // set, so further POSTs would be wasted traffic).
@@ -101,7 +101,7 @@ type AlarmDetector struct {
 	prev             AlarmState
 	suppressed       map[uint8]bool
 	// reactiveLimitThreshold is the |Q| / RatedVAr ratio above which
-	// LE_REACTIVE_LIMIT fires. Default 0.10 (10% of rated VAr) — small
+	// LE_REACTIVE_LIMIT fires. Default 0.10 (10% of rated VAr) : small
 	// enough that the VV curve drives it past the deadband, large
 	// enough to ignore numerical noise inside the deadband. Operator
 	// can tune via NewAlarmDetector option in the future.
@@ -118,7 +118,7 @@ type AlarmDetector struct {
 // (Evaluate becomes free; the simulator runs without complaint, mirror-
 // ing the BASIC-027 "OPTIONAL function set" graceful-bypass contract).
 //
-// Tuning knobs are private — future expansion can convert to functional
+// Tuning knobs are private : future expansion can convert to functional
 // options without breaking the call site in main.go.
 func NewAlarmDetector(emitter LogEventEmitter, logEventListHref string) *AlarmDetector {
 	return &AlarmDetector{
@@ -148,7 +148,7 @@ func (d *AlarmDetector) enabled() bool {
 // The rate-limiter is defense-in-depth against a detector regression
 // that breaks edge semantics.
 //
-// ctx is propagated to PostLogEvent — a cancelled context aborts the
+// ctx is propagated to PostLogEvent : a cancelled context aborts the
 // in-flight HTTP traffic but does not roll back the state-mutation
 // (the alarm flipped on; cancelling the report doesn't unflip it).
 func (d *AlarmDetector) Evaluate(ctx context.Context, in AlarmInputs) AlarmState {
@@ -236,10 +236,10 @@ func (d *AlarmDetector) fireIfRising(
 		return // not a rising edge
 	}
 	if d.suppressed[code] {
-		return // server returned 405 previously — graceful bypass
+		return // server returned 405 previously : graceful bypass
 	}
 	if !d.enabled() {
-		return // no emitter / no href — no-op
+		return // no emitter / no href : no-op
 	}
 
 	evt := sep2.LogEvent{
@@ -247,7 +247,7 @@ func (d *AlarmDetector) fireIfRising(
 		LogEventCode: code,
 		ProfileID:    2, // DER profile per CSIP V1.2
 		Details:      logEventDetailFor(code, in),
-		// CreatedDateTime and LogEventPEN deliberately left zero —
+		// CreatedDateTime and LogEventPEN deliberately left zero :
 		// PostLogEvent fills both via c.Now() + c.PEN().
 	}
 
@@ -272,7 +272,7 @@ func (d *AlarmDetector) fireIfRising(
 
 // logEventDetailFor builds a short, fixed-form human-readable detail
 // string. The XSD limits Details to 32 characters in the 2018 schema,
-// 96 in 2023 — both are honored. Operators read this in their server
+// 96 in 2023 : both are honored. Operators read this in their server
 // UI; keep it terse.
 func logEventDetailFor(code uint8, in AlarmInputs) string {
 	switch code {

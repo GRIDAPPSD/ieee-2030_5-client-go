@@ -14,17 +14,17 @@ package inverter_test
 // from idle_test.go, plus the writer-helper / newClient-helper pattern set
 // by fsalist_test.go (Pike J's IEEE-072 PR #95).
 //
-// Cases shipped (from IEEE-073's mandatory + implicit unit case list — see
+// Cases shipped (from IEEE-073's mandatory + implicit unit case list : see
 // backlog.md IEEE-073 and the Phase 5 phase doc):
 //
 //  Per-method unit tests (4 methods × 4 cases = 16 cases):
-//    - HappyPath          — XML parsed end-to-end, exact-hit-count of 1
-//    - EmptyHref          — sentinel error, zero HTTP hits (the 4 mandatory
+//    - HappyPath          : XML parsed end-to-end, exact-hit-count of 1
+//    - EmptyHref          : sentinel error, zero HTTP hits (the 4 mandatory
 //                            implicit cases the IEEE-073 ticket calls out)
-//    - NotFound           — 404 wrapped, path + status surfaced
-//    - MalformedXML       — non-XML body unwraps to *xml.SyntaxError
+//    - NotFound           : 404 wrapped, path + status surfaced
+//    - MalformedXML       : non-XML body unwraps to *xml.SyntaxError
 //
-//  Paging-hint contract — single subtest table covering all three list
+//  Paging-hint contract : single subtest table covering all three list
 //  methods (`GetDERProgramList`, `GetDERControlList`, `GetDERCurveList`)
 //  to lock the `?l=255` / `&l=255` rule from the IEEE-036 doc comments.
 //  `GetDefaultDERControl` is not a list method and is excluded by design.
@@ -41,7 +41,7 @@ package inverter_test
 // current main.go), which has the same structural problem as Phase 2b /
 // Phase 2c-FSAList-discovery (log.Fatalf on walk error, no function seam
 // to drive the cfg.CSIP / cfg.AllowUnregistered / dcap.PollRate state
-// space). Deferred to IEEE-076 — see PR body.
+// space). Deferred to IEEE-076 : see PR body.
 
 import (
 	"context"
@@ -131,11 +131,11 @@ func newDERWalkTestClient(t *testing.T, handler http.Handler) (*inverter.SEP2Cli
 
 // ----- GetDERProgramList ----------------------------------------------------
 
-// TestGetDERProgramList_HappyPath — IEEE-073 implicit case (per-method happy
+// TestGetDERProgramList_HappyPath : IEEE-073 implicit case (per-method happy
 // path mirror of IEEE-072 case 1).
 //
-// Stub returns DERProgramList with 2 entries — each with a distinct mRID +
-// Primacy + DefaultDERControlLink / DERControlListLink / DERCurveListLink —
+// Stub returns DERProgramList with 2 entries : each with a distinct mRID +
+// Primacy + DefaultDERControlLink / DERControlListLink / DERCurveListLink :
 // and a non-zero All attribute. GetDERProgramList must return both entries
 // in order with every field parsed.
 func TestGetDERProgramList_HappyPath(t *testing.T) {
@@ -201,7 +201,7 @@ func TestGetDERProgramList_HappyPath(t *testing.T) {
 	}
 }
 
-// TestGetDERProgramList_EmptyHref — IEEE-073 mandatory implicit case (empty-href
+// TestGetDERProgramList_EmptyHref : IEEE-073 mandatory implicit case (empty-href
 // sentinel error). Empty href is rejected without an HTTP round trip; sentinel
 // "DERProgramList href required" is contractual (`walkDERProgramTree` returns
 // it wrapped under `FSA mRID=%s DERProgramList: %w`).
@@ -225,7 +225,7 @@ func TestGetDERProgramList_EmptyHref(t *testing.T) {
 	}
 }
 
-// TestGetDERProgramList_NotFound — IEEE-073 recommended per-method case.
+// TestGetDERProgramList_NotFound : IEEE-073 recommended per-method case.
 // Server returns 404; GetDERProgramList must return a non-nil error
 // surfacing both the path and the status, and the outer wrap
 // `GET DERProgramList: %w`.
@@ -258,7 +258,7 @@ func TestGetDERProgramList_NotFound(t *testing.T) {
 	}
 }
 
-// TestGetDERProgramList_MalformedXML — IEEE-073 recommended per-method case.
+// TestGetDERProgramList_MalformedXML : IEEE-073 recommended per-method case.
 // Server returns 200 with a non-XML body; GetDERProgramList must wrap the
 // xml.SyntaxError through the c.Get + GetDERProgramList chain so errors.As
 // succeeds.
@@ -292,7 +292,7 @@ func TestGetDERProgramList_MalformedXML(t *testing.T) {
 
 // ----- GetDefaultDERControl -------------------------------------------------
 
-// TestGetDefaultDERControl_HappyPath — IEEE-073 per-method happy path.
+// TestGetDefaultDERControl_HappyPath : IEEE-073 per-method happy path.
 func TestGetDefaultDERControl_HappyPath(t *testing.T) {
 	t.Parallel()
 
@@ -320,7 +320,7 @@ func TestGetDefaultDERControl_HappyPath(t *testing.T) {
 	}
 }
 
-// TestGetDefaultDERControl_EmptyHref — IEEE-073 mandatory implicit case
+// TestGetDefaultDERControl_EmptyHref : IEEE-073 mandatory implicit case
 // (empty-href sentinel). Per IEEE-036's implementation note,
 // `GetDefaultDERControl` got the same empty-href guard as the new methods
 // for consistency.
@@ -344,7 +344,7 @@ func TestGetDefaultDERControl_EmptyHref(t *testing.T) {
 	}
 }
 
-// TestGetDefaultDERControl_NotFound — IEEE-073 recommended per-method case.
+// TestGetDefaultDERControl_NotFound : IEEE-073 recommended per-method case.
 func TestGetDefaultDERControl_NotFound(t *testing.T) {
 	t.Parallel()
 
@@ -374,7 +374,7 @@ func TestGetDefaultDERControl_NotFound(t *testing.T) {
 	}
 }
 
-// TestGetDefaultDERControl_MalformedXML — IEEE-073 recommended per-method case.
+// TestGetDefaultDERControl_MalformedXML : IEEE-073 recommended per-method case.
 func TestGetDefaultDERControl_MalformedXML(t *testing.T) {
 	t.Parallel()
 
@@ -405,7 +405,7 @@ func TestGetDefaultDERControl_MalformedXML(t *testing.T) {
 
 // ----- GetDERControlList ----------------------------------------------------
 
-// TestGetDERControlList_HappyPath — IEEE-073 per-method happy path.
+// TestGetDERControlList_HappyPath : IEEE-073 per-method happy path.
 func TestGetDERControlList_HappyPath(t *testing.T) {
 	t.Parallel()
 
@@ -439,7 +439,7 @@ func TestGetDERControlList_HappyPath(t *testing.T) {
 	}
 }
 
-// TestGetDERControlList_EmptyHref — IEEE-073 mandatory implicit case
+// TestGetDERControlList_EmptyHref : IEEE-073 mandatory implicit case
 // (empty-href sentinel).
 func TestGetDERControlList_EmptyHref(t *testing.T) {
 	t.Parallel()
@@ -461,7 +461,7 @@ func TestGetDERControlList_EmptyHref(t *testing.T) {
 	}
 }
 
-// TestGetDERControlList_NotFound — IEEE-073 recommended per-method case.
+// TestGetDERControlList_NotFound : IEEE-073 recommended per-method case.
 func TestGetDERControlList_NotFound(t *testing.T) {
 	t.Parallel()
 
@@ -491,7 +491,7 @@ func TestGetDERControlList_NotFound(t *testing.T) {
 	}
 }
 
-// TestGetDERControlList_MalformedXML — IEEE-073 recommended per-method case.
+// TestGetDERControlList_MalformedXML : IEEE-073 recommended per-method case.
 func TestGetDERControlList_MalformedXML(t *testing.T) {
 	t.Parallel()
 
@@ -522,7 +522,7 @@ func TestGetDERControlList_MalformedXML(t *testing.T) {
 
 // ----- GetDERCurveList ------------------------------------------------------
 
-// TestGetDERCurveList_HappyPath — IEEE-073 per-method happy path.
+// TestGetDERCurveList_HappyPath : IEEE-073 per-method happy path.
 func TestGetDERCurveList_HappyPath(t *testing.T) {
 	t.Parallel()
 
@@ -553,7 +553,7 @@ func TestGetDERCurveList_HappyPath(t *testing.T) {
 	}
 }
 
-// TestGetDERCurveList_EmptyHref — IEEE-073 mandatory implicit case
+// TestGetDERCurveList_EmptyHref : IEEE-073 mandatory implicit case
 // (empty-href sentinel).
 func TestGetDERCurveList_EmptyHref(t *testing.T) {
 	t.Parallel()
@@ -575,7 +575,7 @@ func TestGetDERCurveList_EmptyHref(t *testing.T) {
 	}
 }
 
-// TestGetDERCurveList_NotFound — IEEE-073 recommended per-method case.
+// TestGetDERCurveList_NotFound : IEEE-073 recommended per-method case.
 func TestGetDERCurveList_NotFound(t *testing.T) {
 	t.Parallel()
 
@@ -605,7 +605,7 @@ func TestGetDERCurveList_NotFound(t *testing.T) {
 	}
 }
 
-// TestGetDERCurveList_MalformedXML — IEEE-073 recommended per-method case.
+// TestGetDERCurveList_MalformedXML : IEEE-073 recommended per-method case.
 func TestGetDERCurveList_MalformedXML(t *testing.T) {
 	t.Parallel()
 

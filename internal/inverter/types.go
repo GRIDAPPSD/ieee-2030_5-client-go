@@ -114,7 +114,7 @@ type SimConfig struct {
 	// Registration resource. Default false: in CSIP mode, a nil RegistrationLink
 	// triggers an idle-loop that re-fetches the EndDevice on dcap.PollRate until
 	// the server publishes the link (CSIP V1.2 BASIC-001 step 5 commissioning
-	// gate). Non-CSIP mode (--csip=false) ignores this flag — the legacy
+	// gate). Non-CSIP mode (--csip=false) ignores this flag : the legacy
 	// IEEE 2030.5 Register() POST path skips Phase 2b entirely.
 	// See IEEE-034.
 	AllowUnregistered bool

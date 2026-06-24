@@ -38,7 +38,7 @@ import (
 // surrounding whitespace) on which `log.Fatalf(` may legitimately appear in
 // cmd/inverterclient/main.go after IEEE-048.
 //
-// Each entry is the unique prefix of the source line — the literal call
+// Each entry is the unique prefix of the source line : the literal call
 // site, not its line number, so the test does not need to re-baseline on
 // every comment-only edit. If a fatal call site is removed (e.g. extracted
 // like IEEE-048 just did for Phase 1b / Phase 3), drop its entry here.
@@ -59,7 +59,7 @@ var expectedFatalfSitePrefixes = []string{
 }
 
 // expectedFatalfPercentSCount is the number of `log.Fatalf("%s", fe.Error())`
-// occurrences in main.go — one per extracted phase (IEEE-074 phase2b,
+// occurrences in main.go : one per extracted phase (IEEE-074 phase2b,
 // IEEE-075 phase2c-fsalist, IEEE-076 phase2c-derprogram). Pinned so a fourth
 // extraction (or a fourth call site sneaking in) trips this test.
 const expectedFatalfPercentSCount = 3
@@ -75,7 +75,7 @@ func TestLogFatalfCallSites(t *testing.T) {
 	var callLines []string
 	for _, line := range strings.Split(string(source), "\n") {
 		trimmed := strings.TrimSpace(line)
-		// Filter out comments — `// log.Fatalf ...` is prose, not a call.
+		// Filter out comments : `// log.Fatalf ...` is prose, not a call.
 		if strings.HasPrefix(trimmed, "//") {
 			continue
 		}

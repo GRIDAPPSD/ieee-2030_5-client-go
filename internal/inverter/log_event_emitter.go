@@ -1,4 +1,4 @@
-// Package inverter — IEEE-053 LogEvent emitter primitive (plan-1 Phase 9 entry).
+// Package inverter : IEEE-053 LogEvent emitter primitive (plan-1 Phase 9 entry).
 //
 // CSIP V1.2 BASIC-027 (Alarms, pp 139-140) requires the DER Client to POST
 // LogEvent resources to the server when alarm-class state transitions
@@ -8,13 +8,13 @@
 // outbound primitive so the alarm callers (IEEE-054) can fire-and-document.
 //
 // IEEE-053 ships:
-//  1. PostLogEvent — the HTTP primitive. Returns the new resource href on
+//  1. PostLogEvent : the HTTP primitive. Returns the new resource href on
 //     201 Created, or a wrapped error (typed sentinels where useful).
-//  2. PEN plumbing — SimConfig.LogEventPEN → SEP2Client.pen → stamped into
+//  2. PEN plumbing : SimConfig.LogEventPEN → SEP2Client.pen → stamped into
 //     the outgoing LogEvent if the caller left logEventPEN zero.
-//  3. logEventLimiter seam — IEEE-054 plugs in a concrete throttle; the
+//  3. logEventLimiter seam : IEEE-054 plugs in a concrete throttle; the
 //     default nil limiter allows every POST through.
-//  4. Reuse of (*SEP2Client).Now() (IEEE-031 server-synced clock) — the
+//  4. Reuse of (*SEP2Client).Now() (IEEE-031 server-synced clock) : the
 //     emitter does NOT synthesize createdDateTime; it only fills in zero
 //     values left by the caller as a convenience so the alarm sites can
 //     stay terse.
@@ -41,13 +41,13 @@ import (
 // carrying the supplied logEventCode, false to deny. The emitter performs
 // no HTTP traffic on a deny and returns ErrRateLimited.
 //
-// The interface is intentionally tiny — one method, no setup, no
-// teardown — so IEEE-054 can ship a simple in-memory ring buffer keyed by
+// The interface is intentionally tiny : one method, no setup, no
+// teardown : so IEEE-054 can ship a simple in-memory ring buffer keyed by
 // code (1 LogEvent per code per minute, the BASIC-027 trip-flap mitigation)
 // without dragging context, cancellation, or persistence into the seam.
 // Per the Pike rule "accept interfaces, return concrete types," this
 // interface is declared at the consumer (inverter package, where
-// PostLogEvent calls it) — IEEE-054's struct just satisfies it implicitly.
+// PostLogEvent calls it) : IEEE-054's struct just satisfies it implicitly.
 type LogEventRateLimiter interface {
 	Allow(logEventCode uint8) bool
 }
@@ -58,7 +58,7 @@ type LogEventRateLimiter interface {
 // logEventListHref is the path published by the server in
 // EndDevice.LogEventListLink (typically "/edev/{id}/lel"). The caller
 // sources it via IEEE-030 link-derivation. An empty string returns
-// ErrLogEventLinkAbsent without making any HTTP request — LogEvent is an
+// ErrLogEventLinkAbsent without making any HTTP request : LogEvent is an
 // OPTIONAL function set, and a missing link is a server gap to be logged
 // and bypassed, not a fatal.
 //
@@ -75,7 +75,7 @@ type LogEventRateLimiter interface {
 //     a PEN with IANA and pass --pen at startup.
 //
 // FunctionSet, LogEventCode, LogEventID, ProfileID, Details, and
-// ExtendedData are caller-controlled — the emitter does not synthesize
+// ExtendedData are caller-controlled : the emitter does not synthesize
 // them. The mutation is intentional so IEEE-054's alarm callers can pass
 // a partially-filled event and rely on the emitter for the time + PEN.
 //
@@ -84,7 +84,7 @@ type LogEventRateLimiter interface {
 //
 // On 405 Method Not Allowed the server doesn't support LogEvent submission;
 // PostLogEvent returns the wrapped ErrMethodNotAllowed (via classifyResponse).
-// Callers match with errors.Is(err, ErrMethodNotAllowed) and continue —
+// Callers match with errors.Is(err, ErrMethodNotAllowed) and continue :
 // alarm reporting is graceful-bypass, not fatal.
 //
 // On a rate-limit deny (configured via SetLogEventRateLimiter) PostLogEvent
@@ -95,7 +95,7 @@ type LogEventRateLimiter interface {
 // is returned. CSIP V1.2 BASIC-027 graceful-degradation: a failed POST
 // must NOT crash the inverter.
 //
-// 301 follow is inherited from (*SEP2Client).Post — a redirect on the
+// 301 follow is inherited from (*SEP2Client).Post : a redirect on the
 // LogEventList path is followed once.
 func (c *SEP2Client) PostLogEvent(
 	ctx context.Context,

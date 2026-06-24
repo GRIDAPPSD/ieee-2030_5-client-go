@@ -20,7 +20,7 @@ func FreqDroop(freqHz, nominalHz, droopPct, preDisturbancePW, ratedW float64) fl
 	deltaF := freqHz - nominalHz
 	deadband := 0.036 * nominalHz // ~2.16 Hz deadband per typical settings
 
-	// Within deadband — no adjustment
+	// Within deadband : no adjustment
 	if math.Abs(deltaF) < 0.017*nominalHz {
 		return preDisturbancePW
 	}

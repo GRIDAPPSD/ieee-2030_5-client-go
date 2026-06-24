@@ -1,4 +1,4 @@
-// Tests for IEEE-044 — StateMachine.AddTransitionHook multiplex (Phase 6
+// Tests for IEEE-044 : StateMachine.AddTransitionHook multiplex (Phase 6
 // ticket 2 of 3).
 //
 // AddTransitionHook is the append-only hook surface added in IEEE-044 so
@@ -8,7 +8,7 @@
 //
 // Coverage:
 //   - Two appended hooks both fire on every transition, in registration order.
-//   - Nil hook is silently ignored — no panic, no spurious slot.
+//   - Nil hook is silently ignored : no panic, no spurious slot.
 //   - OnTransition slot + AddTransitionHook entries compose (OnTransition
 //     fires first, then appended hooks in order).
 package inverter_test
@@ -71,7 +71,7 @@ func TestStateMachine_AddTransitionHookMultiplex(t *testing.T) {
 }
 
 // TestStateMachine_AddTransitionHookNilIgnored confirms AddTransitionHook
-// silently drops a nil hook — callers can guard with "register if
+// silently drops a nil hook : callers can guard with "register if
 // non-nil" knowing AddTransitionHook tolerates the nil path too.
 func TestStateMachine_AddTransitionHookNilIgnored(t *testing.T) {
 	t.Parallel()

@@ -1,4 +1,4 @@
-// Package main — IEEE-044 hook: wire IEEE-040 StateMachine transitions to
+// Package main : IEEE-044 hook: wire IEEE-040 StateMachine transitions to
 // IEEE-043 (*SEP2Client).PostResponse. Phase 6 ticket 2 of 3.
 //
 // On every state-machine transition the hook produced by responsePOSTHook:
@@ -17,13 +17,13 @@
 //     layers on top of (*SEP2Client).PostResponse's one-shot internal
 //     retry; transient 5xx failures are retried, 4xx and context errors
 //     are not. All-attempts-failed emits a dead-letter log line and
-//     returns a wrapped error — the hook logs it but does NOT block
+//     returns a wrapped error : the hook logs it but does NOT block
 //     the state machine.
 //
-// The hook never blocks the state-machine Tick — PostResponseWithRetry
+// The hook never blocks the state-machine Tick : PostResponseWithRetry
 // is synchronous, but its 30s ctx bounds total elapsed time. Async
 // dispatch is intentionally out of scope (the retry schedule worst case
-// — 500ms + 1s ≈ 1.5s of waits plus three in-flight HTTP requests —
+// : 500ms + 1s ≈ 1.5s of waits plus three in-flight HTTP requests :
 // fits comfortably inside Tick's cadence).
 //
 // Pike rules satisfied:
@@ -145,7 +145,7 @@ func responsePOSTHook(client responsePoster, lfdi string, now nowFunc, retryCfg 
 		// IEEE-045: PostResponseWithRetry layers a 3-attempt exponential
 		// backoff plus dead-letter log on top of PostResponse's one-shot
 		// internal retry. On all-attempts-failed it returns a wrapped
-		// ErrResponseTransient; the hook logs that and moves on — the
+		// ErrResponseTransient; the hook logs that and moves on : the
 		// state machine MUST keep advancing per CSIP V1.2 CORE-022.
 		if err := inverter.PostResponseWithRetry(ctx, client, evt.ReplyTo, resp, cfg); err != nil {
 			log.Printf("IEEE-044/045: response POST failed event=%q status=%d replyTo=%q: %v",
@@ -158,7 +158,7 @@ func responsePOSTHook(client responsePoster, lfdi string, now nowFunc, retryCfg 
 
 // mapTransitionToStatus reduces a state-machine edge to its IEEE 2030.5-2023
 // §10.10 Table 31 wire-value Response status. Returns 0 ("no wire status
-// applies") for edges the spec does not require an acknowledgement on —
+// applies") for edges the spec does not require an acknowledgement on :
 // notably the auto-revert from EVENT_COMPLETED → DEFAULT and
 // EVENT_CANCELLED → DEFAULT (those acknowledgements fire on the
 // COMPLETED / CANCELLED record itself, one transition earlier).
@@ -191,15 +191,15 @@ func mapTransitionToStatus(prev, next inverter.EventState) uint8 {
 
 // responseRequiredOn tests whether the responseRequired bitmap selects a
 // given Table 31 wire status. IEEE 2030.5-2023 §10.10 Table 32 defines
-// the bit layout (HexBinary8 — one octet, eight bits):
+// the bit layout (HexBinary8 : one octet, eight bits):
 //
-//	bit 0 (0x01) — Response required on receipt        (status 1)
-//	bit 1 (0x02) — Response required on event start    (status 2)
-//	bit 2 (0x04) — Response required on event complete (status 3)
-//	bit 3 (0x08) — Response required on user opt-out   (status 4)
-//	bit 4 (0x10) — Response required on user opt-in    (status 5)
-//	bit 5 (0x20) — Response required on cancellation   (status 6)
-//	bits 6..7    — reserved
+//	bit 0 (0x01) : Response required on receipt        (status 1)
+//	bit 1 (0x02) : Response required on event start    (status 2)
+//	bit 2 (0x04) : Response required on event complete (status 3)
+//	bit 3 (0x08) : Response required on user opt-out   (status 4)
+//	bit 4 (0x10) : Response required on user opt-in    (status 5)
+//	bit 5 (0x20) : Response required on cancellation   (status 6)
+//	bits 6..7    : reserved
 //
 // Returns false for any status the hook never emits (4/5/7+); those are
 // out-of-scope for IEEE-044 (opt-in/opt-out and superseded paths land
@@ -228,7 +228,7 @@ func responseRequiredOn(mask uint8, status uint8) bool {
 // href, so a transient retry that re-POSTs against a server already
 // holding the resource sees a 200 (or 201 with the same Location) rather
 // than allocating a duplicate Response. Servers that ignore client-set
-// hrefs allocate their own — IEEE 2030.5 §10.1.1 leaves the choice to
+// hrefs allocate their own : IEEE 2030.5 §10.1.1 leaves the choice to
 // the server. The client-suggested href is a hint, never a contract.
 //
 // Non-cryptographic uses of SHA-256 are idiomatic in Go for opaque

@@ -61,7 +61,7 @@ func TestPerCodeLogEventLimiter_SecondAllowWithinWindowDenies(t *testing.T) {
 	if rl.Allow(LogEventCodeVoltageLow) {
 		t.Error("second Allow within window = true, want false")
 	}
-	// Edge case: exactly at the boundary (now == last + window) — allow.
+	// Edge case: exactly at the boundary (now == last + window) : allow.
 	clk.step(30 * time.Second) // total 60s since first emit
 	if !rl.Allow(LogEventCodeVoltageLow) {
 		t.Error("Allow at exact window boundary = false, want true")
@@ -81,11 +81,11 @@ func TestPerCodeLogEventLimiter_PerCodeIsolation(t *testing.T) {
 	if rl.Allow(LogEventCodeVoltageLow) {
 		t.Error("Allow(1) within window = true, want false")
 	}
-	// Code 5 is unaffected — first emit allowed.
+	// Code 5 is unaffected : first emit allowed.
 	if !rl.Allow(LogEventCodeReactiveLimit) {
 		t.Error("Allow(5) after Allow(1) deny = false, want true (per-code isolation)")
 	}
-	// Code 5 is now in its own window — second emit denied.
+	// Code 5 is now in its own window : second emit denied.
 	clk.step(10 * time.Second)
 	if rl.Allow(LogEventCodeReactiveLimit) {
 		t.Error("Allow(5) within its own window = true, want false")
@@ -100,7 +100,7 @@ func TestPerCodeLogEventLimiter_TimeBasedReset(t *testing.T) {
 	if !rl.Allow(LogEventCodeVoltageLow) {
 		t.Fatal("first Allow = false")
 	}
-	// Step past window — limiter must re-allow.
+	// Step past window : limiter must re-allow.
 	clk.step(2 * time.Minute)
 	if !rl.Allow(LogEventCodeVoltageLow) {
 		t.Error("Allow after window expired = false, want true")

@@ -106,7 +106,7 @@ func TestApplyControlsPriorityDisconnectOverAll(t *testing.T) {
 
 	out := ApplyControls(base, grid, 8000)
 
-	// Disconnect has highest priority — all others ignored
+	// Disconnect has highest priority : all others ignored
 	if out.Connected {
 		t.Error("disconnect should override all")
 	}

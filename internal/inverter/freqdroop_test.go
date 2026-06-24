@@ -37,7 +37,7 @@ func TestFreqDroopOverFreq(t *testing.T) {
 }
 
 func TestFreqDroopWithinDeadband(t *testing.T) {
-	// Small deviation within deadband — no adjustment
+	// Small deviation within deadband : no adjustment
 	p := FreqDroop(60.5, 60.0, 5.0, 8000, 10000)
 	// 0.5 Hz deviation, deadband is ~1.02 Hz (0.017*60), so 0.5 < 1.02
 	if math.Abs(p-8000) > 1 {

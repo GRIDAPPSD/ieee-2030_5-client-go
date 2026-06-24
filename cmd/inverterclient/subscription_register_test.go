@@ -1,7 +1,7 @@
 // IEEE-050 cmd-side wiring tests: registerSubscriptions + notifyURLForReceiver.
 //
 // Covers the graceful-bypass policy contract from subscription_register.go.
-// PostSubscription itself is tested in internal/inverter — this file only
+// PostSubscription itself is tested in internal/inverter : this file only
 // exercises the per-resource loop, error-class dispatch, and the
 // nil-receiver / missing-link short circuits.
 

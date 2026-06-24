@@ -1,4 +1,4 @@
-// Package dispatch — simulator dispatcher (relocated from package inverter).
+// Package dispatch : simulator dispatcher (relocated from package inverter).
 //
 // IEEE-051 Notification dispatcher for the simulator role.
 //

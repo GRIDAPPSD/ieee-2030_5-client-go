@@ -1,9 +1,9 @@
-// Package inverter — IEEE-045 (Phase 6 closer):
+// Package inverter : IEEE-045 (Phase 6 closer):
 // `PostResponseWithRetry` layers a multi-attempt exponential-backoff retry
 // plus a dead-letter log on top of IEEE-043's one-shot `PostResponse`.
 //
 // CSIP V1.2 CORE-022 conformance requires the inverter to keep applying
-// controls regardless of Response delivery — the dead letter is
+// controls regardless of Response delivery : the dead letter is
 // informational, not blocking. Callers (IEEE-044's state-machine hook)
 // receive a wrapped error on terminal failure but MUST NOT short-circuit
 // the state machine on it.
@@ -55,7 +55,7 @@ type ResponseRetryConfig struct {
 
 	// MaxDelay caps the post-multiplier delay. Must be > 0; 0 is replaced
 	// with the default 30s. Setting MaxDelay below InitialDelay clamps
-	// every wait to MaxDelay (legal — useful for tight-loop tests).
+	// every wait to MaxDelay (legal : useful for tight-loop tests).
 	MaxDelay time.Duration
 
 	// BackoffMultiplier scales the previous delay each attempt. Must be
@@ -65,7 +65,7 @@ type ResponseRetryConfig struct {
 	BackoffMultiplier float64
 }
 
-// Documented defaults — exposed as a function so callers cannot mutate
+// Documented defaults : exposed as a function so callers cannot mutate
 // the shared struct.
 const (
 	defaultRetryMaxAttempts       = 3
@@ -106,7 +106,7 @@ func (cfg ResponseRetryConfig) withDefaults() ResponseRetryConfig {
 
 // ResponsePoster is the consumer-side interface that captures the single
 // method `PostResponseWithRetry` depends on. Defined here so the helper
-// stays trivially testable — a fake recording PostResponse calls is the
+// stays trivially testable : a fake recording PostResponse calls is the
 // whole fixture. `*SEP2Client` already satisfies this surface.
 //
 // Pike rule: interfaces defined at the consumer. The SEP2Client does not
@@ -158,7 +158,7 @@ func (realRetryClock) wait(ctx context.Context, d time.Duration) error {
 //   - Success (nil err from PostResponse) → returns nil immediately.
 //   - Non-transient err (4xx, build error, etc.) → returns the err
 //     unchanged. NO retry.
-//   - Context cancelled / deadline exceeded — either before, during, or
+//   - Context cancelled / deadline exceeded : either before, during, or
 //     between attempts → returns a wrapped ctx error.
 //   - Transient err, attempts remaining → sleep the current delay,
 //     scale by `BackoffMultiplier`, cap at `MaxDelay`, retry.
@@ -210,7 +210,7 @@ func postResponseWithRetryClock(
 		}
 		lastErr = err
 
-		// Context errors always abort — never retry, never sentinel-wrap.
+		// Context errors always abort : never retry, never sentinel-wrap.
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("post response: %w", err)
 		}
@@ -220,13 +220,13 @@ func postResponseWithRetryClock(
 		if !errors.Is(err, ErrResponseTransient) {
 			return err
 		}
-		// Transient — retry unless we're out of attempts.
+		// Transient : retry unless we're out of attempts.
 		if attempt == cfg.MaxAttempts {
 			break
 		}
 		if waitErr := clock.wait(ctx, delay); waitErr != nil {
 			// Context cancelled during the backoff wait. Surface the
-			// ctx error wrapped — same contract as the per-attempt
+			// ctx error wrapped : same contract as the per-attempt
 			// cancellation branch above.
 			return fmt.Errorf("post response: %w", waitErr)
 		}

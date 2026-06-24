@@ -1,4 +1,4 @@
-// Tests for IEEE-042 — DERCurve retrieval and curve-typed control
+// Tests for IEEE-042 : DERCurve retrieval and curve-typed control
 // application (Phase 5 closer).
 //
 // Three layers:
@@ -24,7 +24,7 @@ import (
 )
 
 // =============================================================================
-// MapCurveData — pure converter.
+// MapCurveData : pure converter.
 // =============================================================================
 
 // TestMapCurveData_HappyPath exercises a 10-point CurveData slice (the typical
@@ -74,7 +74,7 @@ func TestMapCurveData_EmptyInputReturnsNonNilEmpty(t *testing.T) {
 }
 
 // =============================================================================
-// DERCurveCache — Set / Lookup / Len round-trip.
+// DERCurveCache : Set / Lookup / Len round-trip.
 // =============================================================================
 
 // TestDERCurveCache_RoundTrip pins Set/Lookup/Len. Verifies the cache
@@ -151,7 +151,7 @@ func TestDERCurveCache_RoundTrip(t *testing.T) {
 }
 
 // =============================================================================
-// fetchProgramCurves — drives the curveClient interface against in-memory
+// fetchProgramCurves : drives the curveClient interface against in-memory
 // stubs. No TLS, no goroutines.
 // =============================================================================
 
@@ -321,11 +321,11 @@ func TestFetchProgramCurves_DuplicateTypeLastWins(t *testing.T) {
 }
 
 // =============================================================================
-// ApplyControlsWithCurves — cached-curve consumption + fallback + multi-mode.
+// ApplyControlsWithCurves : cached-curve consumption + fallback + multi-mode.
 // =============================================================================
 
 // vvHelper returns a DERControlBase with OpModVoltVar set to a non-nil value
-// (the integer value itself is irrelevant — the controller only checks
+// (the integer value itself is irrelevant : the controller only checks
 // the pointer for nil-ness when deciding to route through the V/V curve).
 func vvHelper() *sep2.DERControlBase {
 	v := int32(1)
@@ -334,8 +334,8 @@ func vvHelper() *sep2.DERControlBase {
 
 // TestApplyControlsWithCurves_CachedVoltVarCurve injects a custom V/V curve
 // that produces Q(V=1.0) = +0.5 (i.e., 50% var injection at nominal
-// voltage). The IEEE 1547 default sits in its 0.98–1.02 deadband at
-// V=1.0, so Q would be 0 — the cached-curve path is visibly different.
+// voltage). The IEEE 1547 default sits in its 0.98-1.02 deadband at
+// V=1.0, so Q would be 0 : the cached-curve path is visibly different.
 func TestApplyControlsWithCurves_CachedVoltVarCurve(t *testing.T) {
 	t.Parallel()
 
@@ -359,11 +359,11 @@ func TestApplyControlsWithCurves_CachedVoltVarCurve(t *testing.T) {
 		t.Errorf("ReactivePowerVAr = %.3f, want %.3f (cached V/V curve at V=1.0)", out.ReactivePowerVAr, wantQ)
 	}
 
-	// Confirm the IEEE 1547 default differs at V=1.0 — pinning that the
+	// Confirm the IEEE 1547 default differs at V=1.0 : pinning that the
 	// cached path actually overrode the default.
 	defaultOut := ApplyControlsWithCurves(vvHelper(), grid, maxP, nil)
 	if defaultOut.ReactivePowerVAr == out.ReactivePowerVAr {
-		t.Error("cached curve produced same Q as default at V=1.0 — cached path not exercised")
+		t.Error("cached curve produced same Q as default at V=1.0 : cached path not exercised")
 	}
 	if defaultOut.ReactivePowerVAr != 0 {
 		t.Errorf("IEEE 1547 default Q at V=1.0 = %.3f, want 0 (deadband)", defaultOut.ReactivePowerVAr)
@@ -399,7 +399,7 @@ func TestApplyControlsWithCurves_EmptyCacheFallsBackToDefault(t *testing.T) {
 //
 // The controller's pre-existing quirk is that OpModVoltVar drives BOTH the
 // V/V reactive-power branch AND the V/W active-power-limit branch (the V/W
-// branch is gated on OpModVoltVar in controller.go — flagged in IEEE-041,
+// branch is gated on OpModVoltVar in controller.go : flagged in IEEE-041,
 // untouched in IEEE-042). The multi-mode test exploits this: a single
 // non-nil OpModVoltVar lights both code paths so we can pin both curves.
 func TestApplyControlsWithCurves_MultiModeDispatch(t *testing.T) {
@@ -437,7 +437,7 @@ func TestApplyControlsWithCurves_MultiModeDispatch(t *testing.T) {
 	// (0.25 vs 0.40) make the cross-talk failure mode loud.
 }
 
-// TestApplyControlsWithCurves_NilBaseSafe pins the no-controls fallback —
+// TestApplyControlsWithCurves_NilBaseSafe pins the no-controls fallback :
 // a nil base must still produce the no-op output regardless of cache
 // contents.
 func TestApplyControlsWithCurves_NilBaseSafe(t *testing.T) {
