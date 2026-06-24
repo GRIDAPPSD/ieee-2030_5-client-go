@@ -1,11 +1,3 @@
-//go:build ignore
-// +build ignore
-// Gated: imports github.com/GRIDAPPSD/ieee-2030_5-go/internal/config and
-// internal/server, which are server-stay packages that Go's module internal
-// visibility rule forbids cross-module importing. This test needs rewriting
-// against a core-provided server scaffold before it can be compiled.
-// See IEEESIM-002 findings for the follow-up card.
-
 package inverter_test
 
 import (
@@ -14,26 +6,82 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"testing"
 	"time"
 
-	certs "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2cert"
-	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/config"
-	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
-	"github.com/GRIDAPPSD/ieee-2030_5-go/internal/server"
-	sepTLS "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2tls"
 	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
+	certs "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2cert"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2srv/assembly"
+	sepTLS "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2tls"
 	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/store/memory"
+	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
 )
 
+// deviceIdentityKey is a package-private context key used by the test-only
+// identity middleware to store the device LFDI/SFDI derived from the TLS peer
+// certificate.  A private type prevents accidental collision with any other
+// context key in the call chain.
+type deviceIdentityKey struct{}
+
+// deviceIdentity holds the pair extracted from the peer cert.
+type deviceIdentity struct {
+	lfdi string
+	sfdi string
+}
+
+// buildTestAuthPolicy returns an assembly.AuthPolicy suitable for the
+// integration test:
+//
+//   - Wrap installs middleware that reads the TLS peer certificate from the
+//     request, derives LFDI and SFDI via sepTLS helpers, and stashes the pair
+//     in the request context.  Requests without a TLS peer cert are rejected
+//     with 403 Forbidden.
+//   - Identity reads the pair back from context (ok=false when absent).
+//   - SFDIPrefix returns the first 8 characters of the SFDI, matching the
+//     auth.ExtractSFDIPrefix rule (IEEE-014).
+func buildTestAuthPolicy() assembly.AuthPolicy {
+	return assembly.AuthPolicy{
+		Wrap: func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+					http.Error(w, "client certificate required", http.StatusForbidden)
+					return
+				}
+				cert := r.TLS.PeerCertificates[0]
+				id := deviceIdentity{
+					lfdi: sepTLS.LFDI(cert),
+					sfdi: sepTLS.SFDI(cert),
+				}
+				ctx := context.WithValue(r.Context(), deviceIdentityKey{}, id)
+				next.ServeHTTP(w, r.WithContext(ctx))
+			})
+		},
+		Identity: func(ctx context.Context) (lfdi, sfdi string, ok bool) {
+			id, ok := ctx.Value(deviceIdentityKey{}).(deviceIdentity)
+			if !ok {
+				return "", "", false
+			}
+			return id.lfdi, id.sfdi, true
+		},
+		SFDIPrefix: func(sfdi string) (string, error) {
+			if len(sfdi) < 8 {
+				return "", fmt.Errorf("SFDI %q too short: need at least 8 chars", sfdi)
+			}
+			return sfdi[:8], nil
+		},
+	}
+}
+
 // TestEndToEndInverterLifecycle runs the full IEEE 2030.5 protocol lifecycle:
-// discovery → registration → DER setup → metering → status reporting.
-// Uses a real TLS server with generated certs.
+// discovery, registration, DER setup, metering, status reporting.
+// Uses a real TLS server with generated certs and drives the real inverter
+// client over the wire.
 func TestEndToEndInverterLifecycle(t *testing.T) {
-	// Generate all certificates
+	// Generate all certificates.
 	caCertPEM, caKeyPEM, err := certs.GenerateCA(certs.CAOptions{
 		CommonName: "E2E Test CA",
 		ValidYears: 1,
@@ -61,20 +109,21 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Write certs to temp files for the client
+	// Write certs to temp files for the client.
 	tmpDir := t.TempDir()
 	writeFile(t, tmpDir+"/ca.crt", caCertPEM)
 	writeFile(t, tmpDir+"/device.crt", deviceCertPEM)
 	writeFile(t, tmpDir+"/device.key", deviceKeyPEM)
 
-	// Start TLS server
+	// Build the in-process server.
 	serverTLSCfg, err := sepTLS.NewServerTLSConfigFromPEM(serverCertPEM, serverKeyPEM, caCertPEM)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	stores := &server.Stores{
+	stores := &assembly.Stores{
 		EndDevices:               memory.NewEndDeviceStore(),
+		Registrations:            memory.NewRegistrationStore(),
 		MirrorUsagePoints:        memory.NewStore[sep2.MirrorUsagePoint](),
 		MirrorMeterReadings:      memory.NewScopedStore[sep2.MirrorMeterReading](),
 		DERs:                     memory.NewScopedStore[sep2.DER](),
@@ -104,10 +153,11 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 		Responses:                memory.NewScopedStore[sep2.Response](),
 	}
 
-	cfg := &config.Config{
+	routerCfg := assembly.RouterConfig{
 		TZOffset:    -28800,
 		TimeQuality: sep2.TimeQualityNTP,
 	}
+	authPolicy := buildTestAuthPolicy()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -116,14 +166,14 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	defer func() { _ = listener.Close() }()
 
 	tlsListener := tls.NewListener(listener, serverTLSCfg)
-	router, _ := server.BuildProtocolRouter(cfg, stores, nil, "", "", nil)
+	router, _ := assembly.BuildProtocolRouter(routerCfg, stores, authPolicy, "", "", nil)
 	srv := &http.Server{Handler: router}
 	go func() { _ = srv.Serve(tlsListener) }()
 	defer func() { _ = srv.Close() }()
 
 	serverURL := "https://" + listener.Addr().String()
 
-	// Create inverter client
+	// Create the inverter client.
 	client, err := inverter.NewSEP2Client(inverter.SimConfig{
 		ServerURL: serverURL,
 		CertFile:  tmpDir + "/device.crt",
@@ -143,10 +193,10 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 			t.Fatalf("Discover: %v", err)
 		}
 		if dcap.Href != "/dcap" {
-			t.Errorf("dcap.Href = %q", dcap.Href)
+			t.Errorf("dcap.Href = %q, want /dcap", dcap.Href)
 		}
 		if dcap.TimeLink == nil || dcap.TimeLink.Href != "/tm" {
-			t.Error("missing TimeLink")
+			t.Error("missing TimeLink href /tm")
 		}
 		if dcap.EndDeviceListLink == nil {
 			t.Error("missing EndDeviceListLink")
@@ -160,10 +210,8 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	var edevID string
 	t.Run("register", func(t *testing.T) {
 		// IEEE-030: Register takes the EndDeviceList href, not a baked-in
-		// constant. The test server still mounts the list at /edev (which
-		// is what dcap.EndDeviceListLink.Href advertises), so we pass that
-		// literal here as the href : there is no hardcoded URL inside the
-		// client method anymore.
+		// constant.  The test server mounts the list at /edev (which is what
+		// dcap.EndDeviceListLink.Href advertises), so we pass that literal.
 		edev, _, err := client.Register(ctx, "/edev")
 		if err != nil {
 			t.Fatalf("Register: %v", err)
@@ -193,10 +241,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 		modes := uint32(0xFF)
 		dtype := uint8(4)
 
-		// IEEE-030: PutDERCapability takes the DERCapabilityLink href
-		// directly. The test asserts the server's existing
-		// /edev/{id}/der/{id}/dercap route is still wired, so we pass that
-		// path explicitly here.
+		// IEEE-030: PutDERCapability takes the DERCapabilityLink href directly.
 		err := client.PutDERCapability(ctx, "/edev/"+edevID+"/der/"+derID+"/dercap", sep2.DERCapability{
 			RTGMaxW:        &maxW,
 			RTGMaxVar:      &maxVAr,
@@ -207,7 +252,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 			t.Fatalf("PutDERCapability: %v", err)
 		}
 
-		// Verify it was stored by reading back
+		// Verify stored value via a GET (data-invariants Rule 1: assert field values).
 		var cap sep2.DERCapability
 		_, err = client.Get(ctx, "/edev/"+edevID+"/der/"+derID+"/dercap", &cap)
 		if err != nil {
@@ -215,6 +260,9 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 		}
 		if cap.RTGMaxW == nil || cap.RTGMaxW.Value != 10000 {
 			t.Errorf("RTGMaxW = %v, want 10000", cap.RTGMaxW)
+		}
+		if cap.RTGMaxVar == nil || cap.RTGMaxVar.Value != 4400 {
+			t.Errorf("RTGMaxVar = %v, want 4400", cap.RTGMaxVar)
 		}
 	})
 
@@ -227,6 +275,16 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatalf("PutDERSettings: %v", err)
+		}
+
+		// Verify stored value (data-invariants Rule 1).
+		var derg sep2.DERSettings
+		_, err = client.Get(ctx, "/edev/"+edevID+"/der/"+derID+"/derg", &derg)
+		if err != nil {
+			t.Fatalf("GET derg: %v", err)
+		}
+		if derg.SetMaxW == nil || derg.SetMaxW.Value != 10000 {
+			t.Errorf("DERSettings.SetMaxW = %v, want 10000", derg.SetMaxW)
 		}
 	})
 
@@ -244,7 +302,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 			t.Fatalf("PutDERStatus: %v", err)
 		}
 
-		// Read back
+		// Verify stored value (data-invariants Rule 1).
 		var status sep2.DERStatus
 		_, err = client.Get(ctx, "/edev/"+edevID+"/der/"+derID+"/ders", &status)
 		if err != nil {
@@ -282,7 +340,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 
 		uomW := sep2.UomWatts
 		val := int64(8500)
-		// IEEE-030: pass the MirrorMeterReadingList href explicitly. The
+		// IEEE-030: pass the MirrorMeterReadingList href explicitly.  The
 		// server mounts the list at /mup/{mupID}/mr.
 		err := client.PostMeterReading(ctx, "/mup/"+mupID+"/mr", sep2.MirrorMeterReading{
 			MRID:           "mmr-e2e-001",
@@ -312,6 +370,9 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 		if tm.CurrentTime == 0 {
 			t.Error("CurrentTime should not be 0")
 		}
+		if tm.TzOffset != -28800 {
+			t.Errorf("TzOffset = %d, want -28800", tm.TzOffset)
+		}
 	})
 
 	// Phase 7: Verify EndDevice list shows our device
@@ -337,32 +398,32 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 		}
 	})
 
-	// Phase 8: Duplicate registration returns existing
+	// Phase 8: Duplicate registration returns existing device
 	t.Run("duplicate_register", func(t *testing.T) {
 		// IEEE-030: pass the EndDeviceList href explicitly.
 		edev2, _, err := client.Register(ctx, "/edev")
 		if err != nil {
 			t.Fatalf("duplicate Register: %v", err)
 		}
-		// Should return the same device, not create a new one
+		// Should return the same device, not create a new one.
 		if edev2.SFDI != client.SFDI() {
-			t.Error("duplicate registration should return same SFDI")
+			t.Errorf("duplicate registration SFDI = %q, want %q", edev2.SFDI, client.SFDI())
 		}
 	})
 
-	// Phase 9: DefaultDERControl (empty default when no data)
+	// Phase 9: DefaultDERControl (empty default when no data seeded)
 	t.Run("get_default_der_control", func(t *testing.T) {
 		var dderc sep2.DefaultDERControl
-		// This path may not have data seeded, but should return an empty default (200)
+		// This path may not have data seeded, but should return an empty default (200).
 		_, err := client.Get(ctx, "/edev/"+edevID+"/fsa/1/derp/1/dderc", &dderc)
 		if err != nil {
 			t.Fatalf("GET dderc: %v", err)
 		}
-		// Should return 200 with empty/default resource
+		// Should return 200 with empty/default resource.
 		t.Logf("DefaultDERControl: href=%s", dderc.Href)
 	})
 
-	t.Logf("=== End-to-end lifecycle complete: %d phases passed ===", 9)
+	t.Logf("=== End-to-end lifecycle complete: 9 phases passed ===")
 }
 
 // helpers
