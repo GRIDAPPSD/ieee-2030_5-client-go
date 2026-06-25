@@ -1003,6 +1003,10 @@ func main() {
 					log.Printf("WARN ApplySetpoint guard-reject (malformed control): %v", applyErr)
 				case errors.Is(applyErr, device.ErrRateLimitExceeded):
 					log.Printf("WARN ApplySetpoint guard-reject (rate limit): %v", applyErr)
+				case errors.Is(applyErr, device.ErrScaleMismatch):
+					log.Printf("WARN ApplySetpoint guard-reject (scale mismatch): %v", applyErr)
+				case errors.Is(applyErr, device.ErrStaleState):
+					log.Printf("WARN ApplySetpoint guard-reject (stale state): %v", applyErr)
 				default:
 					log.Printf("ApplySetpoint failed (fail-safe active): %v", applyErr)
 				}

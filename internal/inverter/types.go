@@ -135,6 +135,12 @@ type SimConfig struct {
 	// Selection happens once at construction; the tick loop never branches on it.
 	Backend string
 
+	// DeviceMaxStateAge is the staleness bound for guard 4 on the real-device
+	// path. ApplySetpoint is refused when the most recent successful ReadState
+	// call is older than this value. Zero uses the package default (5 seconds).
+	// Has no effect on the synthetic or gridlabd backends.
+	DeviceMaxStateAge time.Duration
+
 	// Role selects the consumer-policy role for notification dispatch:
 	//   "simulator" (default): the SimulatorDispatcher cache-refresh policy.
 	//   "production": the ProductionDispatcher policy (scaffold with TBD
