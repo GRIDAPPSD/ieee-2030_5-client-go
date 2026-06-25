@@ -2,9 +2,16 @@ package device
 
 import (
 	"fmt"
+	"time"
 
 	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
 )
+
+// defaultMaxStateAge is the staleness bound used when the caller does not
+// supply a DeviceMaxStateAge in SimConfig. Five seconds is generous enough
+// to cover a tick loop that reads state immediately before writing, while
+// tight enough to catch a loop that has stalled or is replaying old data.
+const defaultMaxStateAge = 5 * time.Second
 
 // New constructs the DERDevice for the configured backend. Selection happens
 // once at startup; the tick loop never branches on backend identity.
@@ -26,7 +33,11 @@ func New(cfg inverter.SimConfig, sc inverter.Scenario) (DERDevice, error) {
 		if err != nil {
 			return nil, err
 		}
-		return WithSafetyGuards(base, nameplateFromRating()), nil
+		maxAge := cfg.DeviceMaxStateAge
+		if maxAge <= 0 {
+			maxAge = defaultMaxStateAge
+		}
+		return WithSafetyGuards(base, nameplateFromRating(), GuardConfig{MaxStateAge: maxAge}), nil
 	default:
 		return nil, fmt.Errorf("unknown backend %q (want synthetic|gridlabd|realdevice)", cfg.Backend)
 	}
