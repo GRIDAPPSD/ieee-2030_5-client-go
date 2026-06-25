@@ -15,10 +15,14 @@ import (
 type fakeDevice struct {
 	calls    []inverter.ControlOutputs
 	retErr   error
+	readErr  error // if non-nil, ReadState returns this error and does not update lastReadTime
 	retState inverter.InverterState
 }
 
 func (f *fakeDevice) ReadState(_ context.Context) (StateReading, error) {
+	if f.readErr != nil {
+		return StateReading{}, f.readErr
+	}
 	return StateReading{Grid: inverter.GridState{VoltsPU: 1.0, FreqHz: 60.0}}, nil
 }
 
@@ -37,15 +41,11 @@ func testNameplate() Nameplate {
 	}
 }
 
-// noGuardConfig returns a GuardConfig that disables guard 4 (staleness). Used
-// by tests that do not call ReadState before ApplySetpoint.
-func noGuardConfig() GuardConfig { return GuardConfig{} }
-
 // TestGuard1_ClampActivePower asserts guard 1: a 12kW request on a 10kW
 // nameplate delegates to inner with ActivePowerW == 10000 (exact field value).
 func TestGuard1_ClampActivePower(t *testing.T) {
 	fake := &fakeDevice{retState: inverter.InverterState{ActivePowerW: 10000}}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW:     12000, // over nameplate
@@ -68,7 +68,7 @@ func TestGuard1_ClampActivePower(t *testing.T) {
 // ActivePowerW to 0. Negative P is on-the-floor, not malformed (item 7).
 func TestGuard1_ClampNegativeActivePower(t *testing.T) {
 	fake := &fakeDevice{retState: inverter.InverterState{}}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW:     -500, // below zero
@@ -92,7 +92,7 @@ func TestGuard1_ClampNegativeActivePower(t *testing.T) {
 // Guard 1 uses strict > and strict <, so on-the-dot must pass through.
 func TestGuard1_ExactNameplateBoundary(t *testing.T) {
 	fake := &fakeDevice{retState: inverter.InverterState{}}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW:     inverter.Rating.RatedW,   // exactly 10000.0
@@ -120,7 +120,7 @@ func TestGuard1_ExactNameplateBoundary(t *testing.T) {
 // VAr to +RatedVAr.
 func TestGuard1_ClampReactivePower_PositiveRail(t *testing.T) {
 	fake := &fakeDevice{retState: inverter.InverterState{}}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW:     5000,
@@ -144,7 +144,7 @@ func TestGuard1_ClampReactivePower_PositiveRail(t *testing.T) {
 // VAr to -RatedVAr.
 func TestGuard1_ClampReactivePower_NegativeRail(t *testing.T) {
 	fake := &fakeDevice{retState: inverter.InverterState{}}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW:     5000,
@@ -172,8 +172,9 @@ func TestGuard1_ClampReactivePower_NegativeRail(t *testing.T) {
 // ActivePowerW values exceeding defaultScaleMultiplier times RatedW.
 // The inner backend must receive zero calls (not reached on reject).
 func TestGuard2_RejectActivePower_OverScaleBound(t *testing.T) {
+	t.Parallel()
 	fake := &fakeDevice{}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	// Submit a value that is 101x the scale bound to ensure guard 2 fires.
 	// scaleMaxW = RatedW * 100 = 1_000_000 W; 1_010_000 exceeds it.
@@ -196,8 +197,9 @@ func TestGuard2_RejectActivePower_OverScaleBound(t *testing.T) {
 // TestGuard2_RejectActivePower_NegativeOverScaleBound asserts guard 2 rejects
 // ActivePowerW whose negative magnitude exceeds the scale bound.
 func TestGuard2_RejectActivePower_NegativeOverScaleBound(t *testing.T) {
+	t.Parallel()
 	fake := &fakeDevice{}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	negOverScale := -(inverter.Rating.RatedW*defaultScaleMultiplier + 10000)
 
@@ -219,8 +221,9 @@ func TestGuard2_RejectActivePower_NegativeOverScaleBound(t *testing.T) {
 // positive ReactivePowerVAr values exceeding defaultScaleMultiplier times
 // RatedVAr. Inner must not be called.
 func TestGuard2_RejectReactivePower_OverScaleBound(t *testing.T) {
+	t.Parallel()
 	fake := &fakeDevice{}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	overScale := inverter.Rating.RatedVAr*defaultScaleMultiplier + 5000
 
@@ -242,8 +245,9 @@ func TestGuard2_RejectReactivePower_OverScaleBound(t *testing.T) {
 // TestGuard2_RejectReactivePower_NegativeOverScaleBound asserts guard 2
 // rejects negative VAr whose magnitude exceeds the scale bound.
 func TestGuard2_RejectReactivePower_NegativeOverScaleBound(t *testing.T) {
+	t.Parallel()
 	fake := &fakeDevice{}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	negOverScale := -(inverter.Rating.RatedVAr*defaultScaleMultiplier + 5000)
 
@@ -266,10 +270,11 @@ func TestGuard2_RejectReactivePower_NegativeOverScaleBound(t *testing.T) {
 // guard 2 and reaches the inner backend with the exact submitted values
 // (before guard 1 clamps, the values below nameplate should be unchanged).
 func TestGuard2_AcceptsWithinBound(t *testing.T) {
+	t.Parallel()
 	wantPW := 5000.0
 	wantVAr := 2000.0
 	fake := &fakeDevice{retState: inverter.InverterState{ActivePowerW: wantPW, ReactivePowerVAr: wantVAr}}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW:     wantPW,
@@ -296,9 +301,10 @@ func TestGuard2_AcceptsWithinBound(t *testing.T) {
 // when the nameplate has zero values (indeterminate scale bounds). The guard
 // must not pass the write through as a default.
 func TestGuard2_FailsClosedOnZeroNameplate(t *testing.T) {
+	t.Parallel()
 	fake := &fakeDevice{}
 	// Zero nameplate: scaleMaxW and scaleMaxVAr derive as 0.
-	guarded := WithSafetyGuards(fake, Nameplate{RatedW: 0, RatedVAr: 0}, noGuardConfig())
+	guarded := WithSafetyGuards(fake, Nameplate{RatedW: 0, RatedVAr: 0}, GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW: 5000,
@@ -322,7 +328,7 @@ func TestGuard2_FailsClosedOnZeroNameplate(t *testing.T) {
 // and the inner backend ApplySetpoint is NEVER called (zero calls on the fake).
 func TestGuard5_RejectNaN(t *testing.T) {
 	fake := &fakeDevice{}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW: math.NaN(),
@@ -341,7 +347,7 @@ func TestGuard5_RejectNaN(t *testing.T) {
 // TestGuard5_RejectNaN_ReactivePower asserts guard 5 rejects NaN VAr.
 func TestGuard5_RejectNaN_ReactivePower(t *testing.T) {
 	fake := &fakeDevice{}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW:     5000,
@@ -361,7 +367,7 @@ func TestGuard5_RejectNaN_ReactivePower(t *testing.T) {
 // TestGuard5_RejectInf asserts guard 5 rejects +Inf ActivePowerW (item 9).
 func TestGuard5_RejectInf(t *testing.T) {
 	fake := &fakeDevice{}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW: math.Inf(1),
@@ -381,7 +387,7 @@ func TestGuard5_RejectInf(t *testing.T) {
 // ActivePowerW (item 9).
 func TestGuard5_RejectNegInf_ActivePower(t *testing.T) {
 	fake := &fakeDevice{}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW: math.Inf(-1),
@@ -401,7 +407,7 @@ func TestGuard5_RejectNegInf_ActivePower(t *testing.T) {
 // (item 9).
 func TestGuard5_RejectPosInf_ReactivePower(t *testing.T) {
 	fake := &fakeDevice{}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW:     5000,
@@ -422,7 +428,7 @@ func TestGuard5_RejectPosInf_ReactivePower(t *testing.T) {
 // (item 9).
 func TestGuard5_RejectNegInf_ReactivePower(t *testing.T) {
 	fake := &fakeDevice{}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	_, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW:     5000,
@@ -533,6 +539,7 @@ func TestGuard3_RateLimitRefill(t *testing.T) {
 // when ReadState has never been called (lastReadTime is zero). The inner
 // backend must not be called; this is the fail-closed posture.
 func TestGuard4_Staleness_NeverRead(t *testing.T) {
+	t.Parallel()
 	fake := &fakeDevice{retState: inverter.InverterState{ActivePowerW: 5000}}
 	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{MaxStateAge: 100 * time.Millisecond})
 
@@ -557,8 +564,9 @@ func TestGuard4_Staleness_NeverRead(t *testing.T) {
 // when the last ReadState was called longer ago than MaxStateAge. Inner must
 // not be called (the write must be blocked before reaching the device).
 func TestGuard4_Staleness_TooOld(t *testing.T) {
+	t.Parallel()
 	fake := &fakeDevice{retState: inverter.InverterState{ActivePowerW: 5000}}
-	maxAge := 20 * time.Millisecond
+	maxAge := 100 * time.Millisecond
 	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{MaxStateAge: maxAge})
 
 	// Call ReadState to establish a valid timestamp.
@@ -566,8 +574,8 @@ func TestGuard4_Staleness_TooOld(t *testing.T) {
 		t.Fatalf("ReadState: %v", err)
 	}
 
-	// Wait past the staleness window.
-	time.Sleep(maxAge + 10*time.Millisecond)
+	// Wait past the staleness window with generous margin to avoid CI flakes.
+	time.Sleep(maxAge + 50*time.Millisecond)
 
 	ctrl := inverter.ControlOutputs{ActivePowerW: 5000, Connected: true, Energized: true}
 	_, err := guarded.ApplySetpoint(context.Background(), ctrl)
@@ -586,6 +594,7 @@ func TestGuard4_Staleness_TooOld(t *testing.T) {
 // ReadState was called within MaxStateAge. The inner backend receives the
 // call with the exact clamped field values.
 func TestGuard4_Staleness_Fresh(t *testing.T) {
+	t.Parallel()
 	wantPW := 5000.0
 	wantVAr := 1000.0
 	fake := &fakeDevice{
@@ -637,6 +646,7 @@ func TestGuard4_Staleness_Fresh(t *testing.T) {
 // call. This is the correct configuration for simulator backends and tests
 // that exercise other guards in isolation.
 func TestGuard4_Staleness_Disabled(t *testing.T) {
+	t.Parallel()
 	fake := &fakeDevice{retState: inverter.InverterState{ActivePowerW: 5000}}
 	// GuardConfig{} has MaxStateAge == 0: staleness guard disabled.
 	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
@@ -654,38 +664,36 @@ func TestGuard4_Staleness_Disabled(t *testing.T) {
 	}
 }
 
-// TestGuard4_Staleness_ReadStateFailureDoesNotUpdateClock asserts that a
+// TestGuard4_Staleness_FailedReadStateDoesNotAdvanceClock asserts that a
 // failed ReadState call does NOT advance the staleness clock. Only a
-// successful ReadState extends the freshness window. We model this by using a
-// DERDevice whose ReadState always returns an error, calling it once, then
-// verifying ApplySetpoint is still refused with ErrStaleState.
-func TestGuard4_Staleness_ReadStateFailureDoesNotUpdateClock(t *testing.T) {
-	erd := &struct {
-		inner *fakeDevice
-	}{inner: &fakeDevice{retState: inverter.InverterState{ActivePowerW: 5000}}}
+// successful ReadState extends the freshness window. The test calls ReadState
+// on a device that returns an error, then verifies ApplySetpoint is still
+// refused with ErrStaleState because the clock was never advanced.
+func TestGuard4_Staleness_FailedReadStateDoesNotAdvanceClock(t *testing.T) {
+	t.Parallel()
+	// fakeDevice whose ReadState always returns an error.
+	fake := &fakeDevice{
+		readErr:  errors.New("simulated read failure"),
+		retState: inverter.InverterState{ActivePowerW: 5000},
+	}
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{MaxStateAge: 100 * time.Millisecond})
 
-	// Build guardedDevice directly. lastReadTime is zero (the zero value of
-	// time.Time), which is what a never-succeeded ReadState looks like.
-	guarded := &guardedDevice{
-		inner:       erd.inner,
-		nameplate:   testNameplate(),
-		scaleMaxW:   testNameplate().RatedW * defaultScaleMultiplier,
-		scaleMaxVAr: testNameplate().RatedVAr * defaultScaleMultiplier,
-		maxStateAge: 200 * time.Millisecond,
-		limiter:     newTokenBucket(defaultWriteBurst, defaultWriteWindow),
-		// lastReadTime is zero: no ReadState has ever succeeded.
+	// Call ReadState: the inner returns an error, so lastReadTime must NOT advance.
+	if _, err := guarded.ReadState(context.Background()); err == nil {
+		t.Fatal("ReadState: want error from failing device, got nil")
 	}
 
+	// ApplySetpoint must be refused: the staleness clock was never advanced.
 	ctrl := inverter.ControlOutputs{ActivePowerW: 5000, Connected: true, Energized: true}
 	_, err := guarded.ApplySetpoint(context.Background(), ctrl)
 	if err == nil {
-		t.Fatal("guard 4: want ErrStaleState when ReadState never succeeded, got nil")
+		t.Fatal("guard 4: want ErrStaleState when only failed ReadState was called, got nil")
 	}
 	if !errors.Is(err, ErrStaleState) {
 		t.Errorf("guard 4: want ErrStaleState, got %v", err)
 	}
-	if len(erd.inner.calls) != 0 {
-		t.Errorf("guard 4: inner called %d time(s), want 0", len(erd.inner.calls))
+	if len(fake.calls) != 0 {
+		t.Errorf("guard 4: inner ApplySetpoint called %d time(s), want 0", len(fake.calls))
 	}
 }
 
@@ -697,6 +705,7 @@ func TestGuard4_Staleness_ReadStateFailureDoesNotUpdateClock(t *testing.T) {
 // backend returns an error AFTER a successful call, the guarded device returns
 // the cached lastGood state field-by-field (items 4, 14, 15).
 func TestGuard4_FailSafe_LastGood(t *testing.T) {
+	t.Parallel()
 	good := inverter.InverterState{
 		ActivePowerW:     7500,
 		ReactivePowerVAr: 500,
@@ -708,7 +717,7 @@ func TestGuard4_FailSafe_LastGood(t *testing.T) {
 		Mode:             inverter.ModeVoltVar,
 	}
 	fake := &fakeDevice{retState: good}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 	ctx := context.Background()
 
 	// First call succeeds: caches lastGood.
@@ -755,8 +764,9 @@ func TestGuard4_FailSafe_LastGood(t *testing.T) {
 // good state has ever been cached, the fail-safe returns the safe default
 // (disconnected, zero P/Q, ModeDisconnected) (items 4, 15).
 func TestGuard4_FailSafe_SafeDefault(t *testing.T) {
+	t.Parallel()
 	fake := &fakeDevice{retErr: errors.New("device unreachable")}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 
 	state, err := guarded.ApplySetpoint(context.Background(), inverter.ControlOutputs{
 		ActivePowerW: 5000,
@@ -788,7 +798,7 @@ func TestGuard4_FailSafe_SafeDefault(t *testing.T) {
 // guards and delegates directly to inner.
 func TestGuard_ReadStatePassthrough(t *testing.T) {
 	fake := &fakeDevice{}
-	guarded := WithSafetyGuards(fake, testNameplate(), noGuardConfig())
+	guarded := WithSafetyGuards(fake, testNameplate(), GuardConfig{})
 	reading, err := guarded.ReadState(context.Background())
 	if err != nil {
 		t.Fatalf("ReadState: %v", err)

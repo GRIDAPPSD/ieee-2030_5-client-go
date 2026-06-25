@@ -152,6 +152,14 @@ const (
 
 // ReadState passes through to inner and records the timestamp on success.
 // The timestamp is used by guard 4 (staleness bound) in ApplySetpoint.
+//
+// Residual risk: lastReadTime is device-global, not bound to the specific
+// ReadState call that feeds control computation. If any goroutine other than
+// the tick loop calls ReadState (for example, a telemetry reporter), it
+// advances the staleness clock and can mask stale state on the control write
+// path. The single-caller invariant (only the tick loop calls both ReadState
+// and ApplySetpoint on this guardedDevice) is structural and must be upheld
+// by callers. It is not enforced by this type.
 func (g *guardedDevice) ReadState(ctx context.Context) (StateReading, error) {
 	reading, err := g.inner.ReadState(ctx)
 	if err == nil {
@@ -164,34 +172,49 @@ func (g *guardedDevice) ReadState(ctx context.Context) (StateReading, error) {
 
 // ApplySetpoint runs all five guards in order before delegating to inner,
 // and applies the fail-safe recovery if the inner write fails.
+//
+// Ordering rationale: cheapest no-mutation rejects run first (guard 5
+// NaN/inf, guard 2 scale bounds), then guard 1 clamp (mutates controls),
+// then guard 4 staleness (reads shared state, no resource cost), then guard 3
+// rate limiter (consumes a budget token). Staleness runs before the rate
+// limiter so a stale setpoint is rejected without burning rate-limit budget.
 func (g *guardedDevice) ApplySetpoint(ctx context.Context, controls inverter.ControlOutputs) (inverter.InverterState, error) {
 	// Guard 5 (reject): refuse malformed / NaN / infinite values outright.
 	// NaN or infinite inputs are never clamped; they indicate a caller bug.
+	// Package function: reads only the controls argument, no receiver state.
 	if err := rejectMalformed(controls); err != nil {
 		return inverter.InverterState{}, err
 	}
 
 	// Guard 2 (scale): reject values whose magnitude implies a mis-applied
 	// unit conversion upstream. Fails closed when scale bounds are unset.
+	// Receiver method: reads g.scaleMaxW and g.scaleMaxVAr from receiver state.
 	if err := g.validateUnitsAndScale(controls); err != nil {
 		return inverter.InverterState{}, err
 	}
 
 	// Guard 1 (clamp): clamp to nameplate before write.
+	// Package function: reads only controls and nameplate, no shared state.
 	controls = clampToNameplate(controls, g.nameplate)
 
-	// Guard 3 (rate limit): reject, do not block.
-	if !g.limiter.allow() {
-		return inverter.InverterState{}, ErrRateLimitExceeded
-	}
-
 	// Guard 4 (staleness): reject if device state has not been refreshed
-	// recently enough to trust the setpoint.
+	// recently enough to trust the setpoint. Runs before guard 3 (rate limit)
+	// so a stale setpoint does not consume a rate-limit token.
+	// Receiver method: reads g.lastReadTime and g.maxStateAge from receiver state.
 	if err := g.checkStaleness(); err != nil {
 		return inverter.InverterState{}, err
 	}
 
-	// Delegate to inner backend.
+	// Guard 3 (rate limit): reject, do not block. Placed after guard 4 so
+	// stale-setpoint rejections do not consume budget.
+	if !g.limiter.allow() {
+		return inverter.InverterState{}, ErrRateLimitExceeded
+	}
+
+	// INVARIANT: only the tick loop reaches this line. guardedDevice is not
+	// safe for concurrent callers; the tick loop enforces single-caller
+	// discipline. See the ReadState comment on the device-global freshness
+	// residual risk.
 	state, err := g.inner.ApplySetpoint(ctx, controls)
 
 	// Fail-safe recovery: on write error, return the last-known-good state
