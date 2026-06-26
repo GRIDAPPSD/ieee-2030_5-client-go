@@ -2,8 +2,6 @@
 # Three runners are visible to arista/ieee-2030_5/: 3834 (forge-dind),
 # 3835 (forge-gpu), and 3836 (forge). All have run_untagged: false.
 # The default tag is [forge]. Jobs MUST carry tags: [forge] to be claimed.
-# See .claude/rules/gitlab-instances.md in the knowledge workspace for the
-# full per-instance runner inventory and posture.
 
 stages: [verify]
 
@@ -11,6 +9,9 @@ verify:
   stage: verify
   image: golang:1.26
   tags: [forge]
+  # coverage regex: matches the single "total:" line emitted by go tool cover -func,
+  # giving the true project-wide statement coverage percentage.
+  coverage: '/total:\s+\(statements\)\s+(\d+\.\d+)%/'
   # B-F window: clone core to the path the go.mod replace directive expects.
   # Uses CI_JOB_TOKEN (auto-provisioned, ephemeral, masked) so no personal PAT
   # is stored in the runner .git/config or leaked via git error output.
@@ -23,5 +24,6 @@ verify:
   script:
     - go vet ./...
     - go build ./...
-    - go test ./...
+    - go test ./... -coverprofile=coverage.out
+    - go tool cover -func coverage.out
     - go test -race ./...
