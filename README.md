@@ -1,9 +1,9 @@
 # ieee-2030_5-client
 
-[![pipeline status](https://gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/badges/main/pipeline.svg)](https://gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/-/commits/main)
-[![coverage report](https://gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/badges/main/coverage.svg)](https://gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/-/commits/main)
+[![Pipeline](https://gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/badges/main/pipeline.svg)](https://gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/-/commits/main)
+[![Coverage](https://gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/badges/main/coverage.svg)](https://gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/-/commits/main)
 [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
-[![License: BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue.svg)](LICENSE)
+[![License: Battelle BSD](https://img.shields.io/badge/License-Battelle_BSD-blue.svg)](LICENSE)
 
 IEEE 2030.5 (SEP2) Go client and inverter simulator.
 
@@ -108,4 +108,4 @@ removed when core publishes its first versioned release.
 
 ## License
 
-BSD-2-Clause. Copyright Battelle Memorial Institute. See LICENSE and NOTICE.
+Battelle BSD (3-clause). Copyright Battelle Memorial Institute. See LICENSE and NOTICE.
