@@ -11,6 +11,9 @@ verify:
   stage: verify
   image: golang:1.26
   tags: [forge]
+  # coverage regex: matches "coverage: 87.5% of statements" emitted by go test -cover.
+  # GitLab captures the last match from the job log and drives the coverage badge.
+  coverage: '/coverage: \d+\.?\d*%/'
   # B-F window: clone core to the path the go.mod replace directive expects.
   # Uses CI_JOB_TOKEN (auto-provisioned, ephemeral, masked) so no personal PAT
   # is stored in the runner .git/config or leaked via git error output.
@@ -23,5 +26,5 @@ verify:
   script:
     - go vet ./...
     - go build ./...
-    - go test ./...
+    - go test -cover ./...
     - go test -race ./...
