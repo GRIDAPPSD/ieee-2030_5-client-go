@@ -3,15 +3,15 @@ package device
 import (
 	"context"
 
-	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 )
 
 // GridLABDConfig holds the federate configuration for the GridLAB-D backend.
 // The HELICS federate exchange is not implemented yet; this struct captures
 // the intended shape so the plumbing can land before the transport.
 type GridLABDConfig struct {
-	BrokerAddr   string // HELICS broker address (e.g. "localhost:23404")
-	FederateName string // name this federate registers under
+	BrokerAddr   string  // HELICS broker address (e.g. "localhost:23404")
+	FederateName string  // name this federate registers under
 	TimeDelta    float64 // HELICS time delta in seconds
 }
 

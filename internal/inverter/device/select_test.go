@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 )
 
 func baseConfig() inverter.SimConfig {

@@ -9,7 +9,7 @@ import (
 	"context"
 	"errors"
 
-	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 )
 
 // ErrBackendNotImplemented is returned by stub backends that are not yet

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	certs "gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2cert"
-	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
+	certs "github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2cert"
 )
 
 // TestNewSEP2Client_CertLoadErrors covers the cert-load failure modes for

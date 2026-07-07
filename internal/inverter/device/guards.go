@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 )
 
 // Nameplate carries the DER capability limits used by guard 1 (range-clamp)
@@ -104,15 +104,15 @@ func (tb *tokenBucket) allow() bool {
 // It does NOT protect the inner blocking call in ApplySetpoint. The real-
 // device tick loop must enforce single-caller discipline.
 type guardedDevice struct {
-	inner       DERDevice
-	nameplate   Nameplate
-	scaleMaxW   float64       // guard 2: max plausible |ActivePowerW| (W)
-	scaleMaxVAr float64       // guard 2: max plausible |ReactivePowerVAr| (VAr)
-	maxStateAge time.Duration // guard 4: zero disables the staleness check
-	limiter     *tokenBucket
-	mu          sync.Mutex
-	lastGood    inverter.InverterState
-	hasGood     bool      // true once at least one successful ApplySetpoint has been recorded
+	inner        DERDevice
+	nameplate    Nameplate
+	scaleMaxW    float64       // guard 2: max plausible |ActivePowerW| (W)
+	scaleMaxVAr  float64       // guard 2: max plausible |ReactivePowerVAr| (VAr)
+	maxStateAge  time.Duration // guard 4: zero disables the staleness check
+	limiter      *tokenBucket
+	mu           sync.Mutex
+	lastGood     inverter.InverterState
+	hasGood      bool      // true once at least one successful ApplySetpoint has been recorded
 	lastReadTime time.Time // guard 4: time of most recent successful ReadState
 }
 

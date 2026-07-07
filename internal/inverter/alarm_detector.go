@@ -36,7 +36,7 @@ import (
 	"log"
 	"time"
 
-	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
+	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
 // LogEventEmitter is the seam consumed by AlarmDetector for outbound

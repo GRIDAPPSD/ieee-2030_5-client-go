@@ -15,7 +15,7 @@ package main
 import (
 	"log"
 
-	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 )
 
 // startNotifyReceiver builds and starts the IEEE-049 inbound Notification

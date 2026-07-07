@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core/pkg/sep2"
+	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
 // DERControl event state machine (IEEE-040 / Phase 5 ticket 3 of 5) ===========

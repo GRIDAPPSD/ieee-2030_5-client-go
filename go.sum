@@ -1,3 +1,5 @@
+github.com/GRIDAPPSD/ieee-2030_5-core-go v0.6.0 h1:9RZlmLL7ZXK34zwZl8I7z5NF+6zxM4gsR9SPtSwzC0w=
+github.com/GRIDAPPSD/ieee-2030_5-core-go v0.6.0/go.mod h1:dP7sIUCVceNoLz5cP1fMWzSc7y/888RpdPx9CU010Dw=
 golang.org/x/crypto v0.53.0 h1:QZ4Muo8THX6CizN2vPPd5fBGHyogrdK9fG4wLPFUsto=
 golang.org/x/crypto v0.53.0/go.mod h1:DNLU434OwVakk9PzuwV8w62mAJpRJL3vsgcfp4Qnsio=
 golang.org/x/sys v0.46.0 h1:noSf2Fq6F8DBgS+LysIkx7rIExoNHJsxOAtPp4rthXw=
