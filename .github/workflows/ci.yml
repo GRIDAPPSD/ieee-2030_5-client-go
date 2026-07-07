@@ -1,0 +1,103 @@
+# IEEESIM-012 — CI workflow scaffold, private-core CI token wiring.
+# Mirrors the pattern shipped for the server (IEEE-105/IEEESRV-018): a
+# GitHub App installation token mints short-lived, org-scoped access so
+# `go build`/`go vet`/`go test` can resolve the private
+# github.com/GRIDAPPSD/ieee-2030_5-core-go module.
+#
+# Standard Go signal only at this stage: build, vet, test. No lint step
+# is included because this repo carries no .golangci.yml/.golangci.yaml
+# yet; add one (and a matching golangci-lint-action step) when that
+# config lands, per the server's pattern.
+#
+# Runner: ubuntu-latest. This is a documented exception to the
+# workspace `runs-on: self-hosted` policy — see .claude/rules/devops.md.
+# Rationale: third-party-org repo (GRIDAPPSD), test-only CI (no deploy,
+# no secrets exposed to build steps beyond the App token, no docker push).
+# Self-hosted is reserved for projects with deploy-bearing CI.
+
+name: ci
+
+on:
+  # paths-ignore: doc-only changes do not affect build artifacts in this
+  # repo. See .claude/rules/devops.md "Documentation-only changes should
+  # not trigger a full CI rebuild" — invert this list if docs ever
+  # become part of the build.
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+      - '.gitignore'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+      - '.gitignore'
+      - 'LICENSE'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual run (e.g. "re-attestation against SHA xyz")'
+        required: false
+        default: 'manual'
+
+# Cancel in-flight runs for the same ref when a new push arrives.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: build / vet / test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Required so `go` resolves github.com/GRIDAPPSD/* over the
+      # token-authenticated git insteadOf rewrite below, instead of
+      # trying (and failing) an anonymous proxy/checksum-db lookup.
+      GOPRIVATE: github.com/GRIDAPPSD/*
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Mint GitHub App installation token
+        # IEEESIM-012 — private-core CI token wiring. Mints a short-lived
+        # installation token for the GRIDAPPSD App (referenced by App ID
+        # via secret, not by slug) so `go build`/`go vet`/`go test` below
+        # can resolve the private github.com/GRIDAPPSD/ieee-2030_5-core-go
+        # module. Pinned to v3 (current stable major as of 2026-07-07).
+        # The action masks the token in logs; it is never echoed.
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.GRIDAPPSD_CI_APP_ID }}
+          private-key: ${{ secrets.GRIDAPPSD_CI_APP_PRIVATE_KEY }}
+          owner: GRIDAPPSD
+
+      - name: Configure private module access
+        # Rewrites HTTPS clones/fetches of github.com/GRIDAPPSD/* to carry
+        # the minted installation token, scoped to this org only. Runs
+        # before Setup Go so `go build`'s module resolution can see it.
+        run: git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/GRIDAPPSD/".insteadOf "https://github.com/GRIDAPPSD/"
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...
