@@ -45,6 +45,26 @@ name: "CodeQL"
 # more narrowly than ci.yml's existing step (repositories: and
 # permission-contents: read added), matching the tighter pattern used
 # in the sibling gridappsd-ieee-2030_5-go repo.
+#
+# GATED ON REPOSITORY VISIBILITY (2026-08-02): confirmed via
+# `gh api -X PATCH repos/GRIDAPPSD/ieee-2030_5-core-go
+# -f security_and_analysis[advanced_security][status]=enabled` that the
+# blocker above is not a setting, it is a purchase: the response was
+# 422 "Advanced security has not been purchased," with admin:true
+# already held on the repo. The org is on GitHub Free; GHAS (private-
+# repo code scanning) is an Enterprise product and is free only for
+# PUBLIC repos. Craig's call: these repos go public eventually, at
+# which point CodeQL works for free with no further changes needed
+# here. Until then, the check-visibility job below resolves this
+# repo's actual visibility via the API (works identically on every
+# trigger, including `schedule`, where
+# `github.event.repository.visibility` does not exist) and the
+# analyze job is gated on it being "public". This is a SKIP, not
+# `continue-on-error`: a skipped job costs nothing and reports
+# honestly; a job that ran and quietly failed to upload would report a
+# misleading green. Do not delete this job as dead config: it
+# self-activates the day this repo's visibility flips, with no
+# further edits required.
 
 on:
   pull_request:
@@ -61,8 +81,49 @@ permissions:
   security-events: write
 
 jobs:
+  check-visibility:
+    name: Check repository visibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      is_public: ${{ steps.visibility.outputs.is_public }}
+    steps:
+      - name: Resolve repository visibility
+        # Queries the API directly rather than reading
+        # github.event.repository.visibility: that field exists on
+        # pull_request and push payloads but not on schedule, and this
+        # workflow's weekly cron run has no repository payload to read
+        # it from at all. The API call works identically on every
+        # trigger. github.token (the default GITHUB_TOKEN) can always
+        # read this repository's own visibility; no elevated
+        # permission or App token is needed for this one read.
+        id: visibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          visibility=$(gh api "repos/${{ github.repository }}" --jq .visibility)
+          echo "Repository visibility: $visibility"
+          if [ "$visibility" = "public" ]; then
+            echo "is_public=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_public=false" >> "$GITHUB_OUTPUT"
+          fi
+
   analyze:
     name: Analyze (Go)
+    needs: check-visibility
+    # Skip, not continue-on-error: GHAS code scanning is free only for
+    # public repos (see the header comment above). A skipped job costs
+    # no runner minutes and reports honestly in the checks list; a job
+    # that ran anyway would fail late on the SARIF upload, or with
+    # continue-on-error would report a green check for an analysis
+    # that uploaded nothing, either of which is worse than an honest
+    # skip. Nothing else here needs editing when this repo goes
+    # public: this condition alone starts running the job again.
+    if: needs.check-visibility.outputs.is_public == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
