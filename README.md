@@ -1,9 +1,13 @@
 # ieee-2030_5-client
 
-[![Pipeline](https://gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/badges/main/pipeline.svg)](https://gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/-/commits/main)
-[![Coverage](https://gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/badges/main/coverage.svg)](https://gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-client/-/commits/main)
-[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev/)
+[![ci](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/codeql.yml)
+[![Go 1.26.3](https://img.shields.io/badge/Go-1.26.3-00ADD8?logo=go)](https://go.dev/)
 [![License: Battelle BSD](https://img.shields.io/badge/License-Battelle_BSD-blue.svg)](LICENSE)
+
+This repo is private: the workflow badges above render for viewers with
+repository access and show nothing for anonymous visitors. No release
+badge yet; this repo has not cut a tagged release.
 
 IEEE 2030.5 (SEP2) Go client and inverter simulator.
 
