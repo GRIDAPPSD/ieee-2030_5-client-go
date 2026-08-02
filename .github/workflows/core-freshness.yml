@@ -1,0 +1,151 @@
+name: "Core freshness"
+
+# Two independent watchdogs against github.com/GRIDAPPSD/ieee-2030_5-core-go,
+# the private wire-format module this client depends on. Neither gates
+# a pull_request: core moves on its own schedule, independent of what a
+# given client PR touches, so failing an unrelated PR because core
+# advanced would be noise, not signal. Both run on a daily schedule
+# plus workflow_dispatch instead.
+#
+# Background (2026-08-02): the sibling gridappsd-ieee-2030_5-go bridge
+# and ieee-2030_5-server-go repos both discovered they were building
+# and testing against a stale core pin, with silent wire-format
+# breakage in one case and a straight build failure in the other. This
+# client imports the same private core module and has the same class
+# of exposure, so it gets the same watchdog even though no incident has
+# surfaced here yet.
+#
+# staleness-check answers "is our pin behind core main, and by what
+# commits" cheaply (no test run). conformance-vs-core-main answers the
+# more important question: "does this client still build and pass its
+# own tests against core main."
+#
+# GitHub-hosted runners are appropriate: both jobs are read-only
+# (a git clone/rev-list comparison, and a `go get` plus test run that
+# is never committed or pushed back). See .claude/rules/devops.md
+# "GitHub Actions" for the posture this follows.
+
+on:
+  schedule:
+    # Daily, 07:00 UTC.
+    - cron: '0 7 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  staleness-check:
+    name: Core pin staleness check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOPRIVATE: github.com/GRIDAPPSD/*
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.GRIDAPPSD_CI_APP_ID }}
+          private-key: ${{ secrets.GRIDAPPSD_CI_APP_PRIVATE_KEY }}
+          owner: GRIDAPPSD
+          repositories: |
+            ieee-2030_5-core-go
+          permission-contents: read
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Compare pinned core version against core main
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          git clone --quiet \
+            "https://x-access-token:${APP_TOKEN}@github.com/GRIDAPPSD/ieee-2030_5-core-go.git" \
+            /tmp/core-freshness-check
+          CORE_MAIN_SHA=$(git -C /tmp/core-freshness-check rev-parse origin/main)
+          echo "core origin/main: $CORE_MAIN_SHA"
+
+          PIN_VERSION=$(go list -m -f '{{.Version}}' github.com/GRIDAPPSD/ieee-2030_5-core-go)
+          echo "Pinned version: $PIN_VERSION"
+
+          # A Go pseudo-version ends in a 14-digit timestamp and a
+          # 12-hex-digit abbreviated commit hash; pull the hash straight
+          # out of the version string. A plain semver tag (this repo's
+          # current case: v0.6.0) has no such suffix and is resolved to
+          # a commit via the tag ref in the clone instead.
+          if echo "$PIN_VERSION" | grep -qE -- '[0-9]{14}-[0-9a-f]{12}$'; then
+            PIN_SHA=$(echo "$PIN_VERSION" | grep -oE '[0-9a-f]{12}$')
+          else
+            PIN_SHA=$(git -C /tmp/core-freshness-check rev-list -n1 "refs/tags/${PIN_VERSION}")
+          fi
+          echo "Pinned commit: $PIN_SHA"
+
+          BEHIND=$(git -C /tmp/core-freshness-check rev-list --count "${PIN_SHA}..origin/main")
+          echo "Commits behind core main: $BEHIND"
+
+          if [ "$BEHIND" -gt 0 ]; then
+            echo "::error::Pinned github.com/GRIDAPPSD/ieee-2030_5-core-go ($PIN_VERSION) is $BEHIND commit(s) behind core main ($CORE_MAIN_SHA)."
+            echo "Commits since the pin:"
+            git -C /tmp/core-freshness-check log --oneline "${PIN_SHA}..origin/main"
+            exit 1
+          fi
+          echo "Pin is current with core main."
+
+  conformance-vs-core-main:
+    name: Conformance test against core main
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOPRIVATE: github.com/GRIDAPPSD/*
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.GRIDAPPSD_CI_APP_ID }}
+          private-key: ${{ secrets.GRIDAPPSD_CI_APP_PRIVATE_KEY }}
+          owner: GRIDAPPSD
+          repositories: |
+            ieee-2030_5-core-go
+          permission-contents: read
+
+      - name: Configure private module access
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${APP_TOKEN}@github.com/GRIDAPPSD/".insteadOf \
+            "https://github.com/GRIDAPPSD/"
+
+      - name: Disable git background maintenance
+        run: |
+          git config --global maintenance.auto false
+          git config --global gc.auto 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Bump core to latest main (in-memory only, never committed)
+        run: go get github.com/GRIDAPPSD/ieee-2030_5-core-go@main
+
+      - name: Report resolved core version
+        run: go list -m github.com/GRIDAPPSD/ieee-2030_5-core-go
+
+      - name: Build against core main
+        run: go build ./...
+
+      - name: Test against core main
+        run: go test ./...

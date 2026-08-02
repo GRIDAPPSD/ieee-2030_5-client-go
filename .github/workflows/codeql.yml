@@ -1,0 +1,94 @@
+name: "CodeQL"
+
+# Static analysis for Go, additive to ci.yml's build/vet/test/gofmt
+# gate. Runs on pull_request (so findings gate merge review) and on a
+# weekly schedule (so a newly-published CodeQL query pack catches
+# something in code that has not itself changed). Deliberately NOT on
+# every push to every branch: PRs into main are already gated, and a
+# push-triggered run on top of the PR run would double the analysis
+# cost for no additional signal. See .claude/rules/devops.md "GitHub
+# Actions" for the GitHub-hosted-runner posture this follows; this is
+# read-only static analysis with no deploy reach.
+#
+# Requires GitHub Advanced Security to be enabled for this repository:
+# Settings > Code security and analysis > "GitHub Advanced Security".
+# This repo is private, so code scanning does not run without it — the
+# analyze step's SARIF upload fails closed with "Advanced Security must
+# be enabled for this repository to use code scanning" if it is off.
+#
+# This module depends on the private
+# github.com/GRIDAPPSD/ieee-2030_5-core-go module, so CodeQL's
+# Autobuild step needs the same GitHub App installation token wiring
+# ci.yml already carries to resolve it. The token minted here is scoped
+# more narrowly than ci.yml's existing step (repositories: and
+# permission-contents: read added), matching the tighter pattern used
+# in the sibling gridappsd-ieee-2030_5-go repo.
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    # Mondays 06:00 UTC. Catches newly-published CodeQL query-pack
+    # findings against code that has not itself changed.
+    - cron: '0 6 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (Go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      GOPRIVATE: github.com/GRIDAPPSD/*
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.GRIDAPPSD_CI_APP_ID }}
+          private-key: ${{ secrets.GRIDAPPSD_CI_APP_PRIVATE_KEY }}
+          owner: GRIDAPPSD
+          repositories: |
+            ieee-2030_5-core-go
+          permission-contents: read
+
+      - name: Configure private module access
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${APP_TOKEN}@github.com/GRIDAPPSD/".insteadOf \
+            "https://github.com/GRIDAPPSD/"
+
+      - name: Disable git background maintenance
+        run: |
+          git config --global maintenance.auto false
+          git config --global gc.auto 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: go
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v4
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:go"
