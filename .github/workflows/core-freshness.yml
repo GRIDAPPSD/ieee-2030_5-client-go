@@ -1,0 +1,304 @@
+name: "Core freshness"
+
+# Two independent watchdogs against github.com/GRIDAPPSD/ieee-2030_5-core-go,
+# the private wire-format module this client depends on. Neither gates
+# a pull_request: core moves on its own schedule, independent of what a
+# given client PR touches, so failing an unrelated PR because core
+# advanced would be noise, not signal. Both run on a daily schedule
+# plus workflow_dispatch instead.
+#
+# Background (2026-08-02): the sibling gridappsd-ieee-2030_5-go bridge
+# and ieee-2030_5-server-go repos both discovered they were building
+# and testing against a stale core pin, with silent wire-format
+# breakage in one case and a straight build failure in the other. This
+# client imports the same private core module and has the same class
+# of exposure, so it gets the same watchdog even though no incident has
+# surfaced here yet.
+#
+# staleness-check answers "is our pin behind core main, and by what
+# commits" cheaply (no test run), keeps failing red on drift so the
+# signal stays visible in the checks list, AND opens or updates a
+# single reusable pull request (branch chore/bump-core) carrying the
+# evidence: pinned version, target, commit count, and the intervening
+# commit subjects. The failing check and the PR are deliberately both
+# kept: the check is the signal that shows up without anyone opening a
+# PR list, the PR is the actionable artifact with a diff and a
+# reviewer assignment surface. conformance-vs-core-main answers the
+# more important question: "does this client still build and pass its
+# own tests against core main."
+#
+# The bump PR is expected to open RED while core is ahead of what this
+# client has been verified against: that is the point, converting
+# invisible drift into a red PR someone has to look at. The fix for a
+# red bump PR belongs in this client (or, if core made an unintentional
+# breaking change, in core), never by reverting the bump.
+#
+# GitHub-hosted runners are appropriate: staleness-check reads (clone,
+# rev-list) plus one force-push to a bot branch and a PR API call,
+# never anything a human owns; conformance-vs-core-main never commits
+# or pushes what it builds. See .claude/rules/devops.md "GitHub
+# Actions" for the posture this follows.
+
+on:
+  schedule:
+    # Daily, 07:00 UTC.
+    - cron: '0 7 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  staleness-check:
+    name: Core pin staleness check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOPRIVATE: github.com/GRIDAPPSD/*
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Mint read-only GitHub App installation token
+        id: read-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.GRIDAPPSD_CI_APP_ID }}
+          private-key: ${{ secrets.GRIDAPPSD_CI_APP_PRIVATE_KEY }}
+          owner: GRIDAPPSD
+          repositories: |
+            ieee-2030_5-core-go
+          permission-contents: read
+
+      - name: Mint write-scoped GitHub App installation token
+        # Separate token, separate purpose: pushing the chore/bump-core
+        # branch and opening/updating its PR on THIS repo only. Scoped
+        # to exactly this repo, never to core, so a leaked token cannot
+        # write to the dependency. Kept as two tokens rather than one
+        # broader one because create-github-app-token applies a single
+        # permission set across every repo listed in `repositories:`;
+        # folding read (on core) and write (on this repo) into one
+        # mint would grant write on core too.
+        id: write-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.GRIDAPPSD_CI_APP_ID }}
+          private-key: ${{ secrets.GRIDAPPSD_CI_APP_PRIVATE_KEY }}
+          owner: GRIDAPPSD
+          repositories: |
+            ieee-2030_5-client-go
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Compare pinned core version against core main
+        # To switch the comparison target from core's origin/main to
+        # its latest release tag once Kit's plain vX.Y.Z tags are
+        # flowing: change only the TARGET_SHA/TARGET_LABEL resolution
+        # below (e.g. `git -C /tmp/core-freshness-check describe --tags
+        # --abbrev=0` on a ref-match limited to vX.Y.Z, then rev-parse
+        # that tag), and drop the `origin/main` label in the PR/error
+        # text for the tag name. Nothing downstream (the bump branch,
+        # the PR body, the exit-on-drift step) needs to change: they
+        # all consume TARGET_SHA/TARGET_LABEL/BEHIND/COMMITS as
+        # already-resolved values, not "main" directly.
+        id: compare
+        env:
+          APP_TOKEN: ${{ steps.read-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          git clone --quiet \
+            "https://x-access-token:${APP_TOKEN}@github.com/GRIDAPPSD/ieee-2030_5-core-go.git" \
+            /tmp/core-freshness-check
+          TARGET_SHA=$(git -C /tmp/core-freshness-check rev-parse origin/main)
+          TARGET_LABEL="core main ($TARGET_SHA)"
+          echo "core origin/main: $TARGET_SHA"
+
+          PIN_VERSION=$(go list -m -f '{{.Version}}' github.com/GRIDAPPSD/ieee-2030_5-core-go)
+          echo "Pinned version: $PIN_VERSION"
+
+          # A Go pseudo-version ends in a 14-digit timestamp and a
+          # 12-hex-digit abbreviated commit hash; pull the hash straight
+          # out of the version string. A plain semver tag has no such
+          # suffix and is resolved to a commit via the tag ref in the
+          # clone instead.
+          if echo "$PIN_VERSION" | grep -qE -- '[0-9]{14}-[0-9a-f]{12}$'; then
+            PIN_SHA=$(echo "$PIN_VERSION" | grep -oE '[0-9a-f]{12}$')
+          else
+            PIN_SHA=$(git -C /tmp/core-freshness-check rev-list -n1 "refs/tags/${PIN_VERSION}")
+          fi
+          echo "Pinned commit: $PIN_SHA"
+
+          BEHIND=$(git -C /tmp/core-freshness-check rev-list --count "${PIN_SHA}..${TARGET_SHA}")
+          echo "Commits behind target: $BEHIND"
+
+          {
+            echo "commits<<COMMITS_EOF"
+            git -C /tmp/core-freshness-check log --oneline "${PIN_SHA}..${TARGET_SHA}"
+            echo "COMMITS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+          echo "pin_version=$PIN_VERSION" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+          echo "target_label=$TARGET_LABEL" >> "$GITHUB_OUTPUT"
+
+      - name: Bump core pin on chore/bump-core (only when behind)
+        if: steps.compare.outputs.behind != '0'
+        env:
+          # Passed via env: rather than interpolated directly into the
+          # commit message text below, so a value with shell
+          # metacharacters is never expanded before execution. See
+          # .claude/rules/secure-coding.md "trust the boundary, not the
+          # caller"; the same pattern release.yml already uses for
+          # VERSION.
+          APP_TOKEN: ${{ steps.read-token.outputs.token }}
+          TARGET_LABEL: ${{ steps.compare.outputs.target_label }}
+        run: |
+          set -euo pipefail
+          git config --global \
+            url."https://x-access-token:${APP_TOKEN}@github.com/GRIDAPPSD/".insteadOf \
+            "https://github.com/GRIDAPPSD/"
+          git config --global maintenance.auto false
+          git config --global gc.auto 0
+          git config --global user.name "gridappsd-ieee-20305-ci[bot]"
+          git config --global user.email "gridappsd-ieee-20305-ci[bot]@users.noreply.github.com"
+
+          git checkout -B chore/bump-core
+          go get github.com/GRIDAPPSD/ieee-2030_5-core-go@main
+          go mod tidy
+          git add go.mod go.sum
+
+          # Every line of this heredoc must stay indented at least to
+          # this run: block's own indentation; a less-indented line
+          # would look like the end of the YAML literal block to the
+          # workflow parser, not to bash.
+          MSG="chore(deps): bump ieee-2030_5-core-go to ${TARGET_LABEL}
+
+          Automated by .github/workflows/core-freshness.yml. This
+          branch is force-updated on every scheduled run, not appended
+          to; see the open PR for the current evidence.
+
+          Ref: CI-SETUP"
+          git commit -m "$MSG"
+
+      - name: Push chore/bump-core (only when behind)
+        if: steps.compare.outputs.behind != '0'
+        env:
+          WRITE_TOKEN: ${{ steps.write-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          git push --force \
+            "https://x-access-token:${WRITE_TOKEN}@github.com/GRIDAPPSD/ieee-2030_5-client-go.git" \
+            HEAD:refs/heads/chore/bump-core
+
+      - name: Open or update the bump PR (only when behind)
+        if: steps.compare.outputs.behind != '0'
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          PIN_VERSION: ${{ steps.compare.outputs.pin_version }}
+          TARGET_LABEL: ${{ steps.compare.outputs.target_label }}
+          BEHIND: ${{ steps.compare.outputs.behind }}
+          COMMITS: ${{ steps.compare.outputs.commits }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "Automated by \`.github/workflows/core-freshness.yml\` (staleness-check job). This branch is force-updated on every scheduled run rather than accumulating one PR per day; review the latest push, not the PR history."
+            echo
+            echo "Pinned version: \`${PIN_VERSION}\`"
+            echo "Target: ${TARGET_LABEL}"
+            echo "Commits behind: ${BEHIND}"
+            echo
+            echo "Commits between the current pin and the target:"
+            echo '```'
+            echo "${COMMITS}"
+            echo '```'
+            echo
+            echo "**A red build on this PR is expected while this repo lags core, not a sign the bump itself is wrong.** The staleness-check job that opened this PR also fails on its own scheduled run, independent of this PR, so the drift is visible even before anyone looks here. If CI fails on this PR, the fix belongs in this repo (or, if core made an unintended breaking change, in core), never by closing or reverting this PR."
+          } > /tmp/bump-core-pr-body.md
+
+          existing=$(gh pr list -R GRIDAPPSD/ieee-2030_5-client-go --head chore/bump-core --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" -R GRIDAPPSD/ieee-2030_5-client-go \
+              --title "chore(deps): bump ieee-2030_5-core-go (${BEHIND} commit(s) behind)" \
+              --body-file /tmp/bump-core-pr-body.md
+            echo "Updated existing PR #$existing"
+          else
+            gh pr create -R GRIDAPPSD/ieee-2030_5-client-go \
+              --head chore/bump-core \
+              --base main \
+              --title "chore(deps): bump ieee-2030_5-core-go (${BEHIND} commit(s) behind)" \
+              --body-file /tmp/bump-core-pr-body.md
+            echo "Opened new PR"
+          fi
+
+      - name: Fail when the pin is behind
+        # Runs last, after the bump/push/PR steps above, so the PR is
+        # always opened or updated before this job's own status turns
+        # red. Keeps the drift visible in the checks list even for
+        # someone who never opens the PR list.
+        if: steps.compare.outputs.behind != '0'
+        env:
+          PIN_VERSION: ${{ steps.compare.outputs.pin_version }}
+          BEHIND: ${{ steps.compare.outputs.behind }}
+          TARGET_LABEL: ${{ steps.compare.outputs.target_label }}
+        run: |
+          echo "::error::Pinned github.com/GRIDAPPSD/ieee-2030_5-core-go (${PIN_VERSION}) is ${BEHIND} commit(s) behind ${TARGET_LABEL}. See the chore/bump-core PR for the commit list."
+          exit 1
+
+  conformance-vs-core-main:
+    name: Conformance test against core main
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOPRIVATE: github.com/GRIDAPPSD/*
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.GRIDAPPSD_CI_APP_ID }}
+          private-key: ${{ secrets.GRIDAPPSD_CI_APP_PRIVATE_KEY }}
+          owner: GRIDAPPSD
+          repositories: |
+            ieee-2030_5-core-go
+          permission-contents: read
+
+      - name: Configure private module access
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${APP_TOKEN}@github.com/GRIDAPPSD/".insteadOf \
+            "https://github.com/GRIDAPPSD/"
+
+      - name: Disable git background maintenance
+        run: |
+          git config --global maintenance.auto false
+          git config --global gc.auto 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Bump core to latest main (in-memory only, never committed)
+        run: go get github.com/GRIDAPPSD/ieee-2030_5-core-go@main
+
+      - name: Report resolved core version
+        run: go list -m github.com/GRIDAPPSD/ieee-2030_5-core-go
+
+      - name: Build against core main
+        run: go build ./...
+
+      - name: Test against core main
+        run: go test ./...
