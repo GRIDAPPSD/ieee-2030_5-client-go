@@ -1,22 +1,20 @@
-// Package inverter_test backfills coverage for IEEE-043 : the
+// Package inverter_test covers the
 // (*SEP2Client).PostResponse method that wires the client side of the
-// IEEE 2030.5 Response Function Set (CSIP V1.2 CORE-022). The test suite
-// asserts the nine behaviors called out in the IEEE-043 ticket body:
+// IEEE 2030.5 Response Function Set (CSIP V1.2 CORE-022):
 //
-//  1. 201 Created → returns nil; XML body well-formed; Location captured.
-//  2. 204 No Content → returns nil.
+//  1. 201 Created -> returns nil; XML body well-formed; Location captured.
+//  2. 204 No Content -> returns nil.
 //  3. Relative replyToHref resolves under c.baseURL.
 //  4. Absolute replyToHref bypasses c.baseURL (no double-prefix).
-//  5. 4xx → wrapped error; response body NOT logged verbatim.
-//  6. Transient 5xx + happy retry → first attempt 500, second 201 → nil.
-//  7. Persistent 5xx → both attempts 500 → wrapped ErrResponseTransient.
-//  8. Context cancellation mid-request → ctx error propagates.
+//  5. 4xx -> wrapped error; response body NOT logged verbatim.
+//  6. Transient 5xx + happy retry -> first attempt 500, second 201 -> nil.
+//  7. Persistent 5xx -> both attempts 500 -> wrapped ErrResponseTransient.
+//  8. Context cancellation mid-request -> ctx error propagates.
 //  9. Content-Type header is `application/sep+xml` on the wire.
 //
 // Fixture pattern matches the rest of the inverter package: gotls-backed
 // HTTPS listener via ccmTestEnv + startIdleListener, per-test mux, atomic
-// hit counters, t.Parallel() where safe. plan-1 deferred-tests override
-// LIFTED : tests live in the same PR as the implementation.
+// hit counters, t.Parallel() where safe.
 package inverter_test
 
 import (
@@ -42,14 +40,14 @@ import (
 // log.Default()'s output writer, which is a single global slot : two
 // t.Parallel() tests calling captureLogs would otherwise interleave their
 // SetOutput calls AND their Printf writes, producing intermittent -race
-// failures (Pike Y3 / Pike DD trail; IEEE-081). Holding the mutex for the
+// failures (Pike Y3 / Pike DD trail). Holding the mutex for the
 // duration of fn keeps the global swap atomic from the test's perspective
 // without changing the production log path or the inverter package API.
 var captureLogsMu sync.Mutex
 
 // sampleDERControlResponse returns a populated DERControlResponse the test
 // server will see on the wire. Status=2 (Started) per IEEE 2030.5-2023
-// §10.10 Table 31 (post-IEEE-044a enum alignment), with a Subject mRID
+// §10.10 Table 31, with a Subject mRID
 // that identifies which event the Response acknowledges.
 func sampleDERControlResponse() sep2.DERControlResponse {
 	status := sep2.ResponseStatusEventStarted
@@ -69,7 +67,7 @@ func sampleDERControlResponse() sep2.DERControlResponse {
 // the 4xx redacted warning; capturing here is the only way to assert body
 // redaction without rebuilding the logger seam.
 //
-// IEEE-081 contract: callers MUST be serial (no t.Parallel()).
+// Contract: callers MUST be serial (no t.Parallel()).
 // log.Default() is process-global : any other t.Parallel() test running
 // concurrently with a captureLogs caller will log.Printf into the captured
 // buffer (because we've SetOutput'd it) AND race buf.String(). Go's test
@@ -81,7 +79,7 @@ func sampleDERControlResponse() sep2.DERControlResponse {
 // comment).
 //
 // Refactoring production log.Printf to an injectable logger would lift
-// this constraint but is out of scope for IEEE-081.
+// this constraint but is out of scope here.
 func captureLogs(t *testing.T, fn func()) string {
 	t.Helper()
 	captureLogsMu.Lock()
@@ -109,11 +107,11 @@ func readBodyBytes(t *testing.T, r *http.Request) []byte {
 }
 
 // =============================================================================
-// IEEE-043 case 1: 201 Created happy path (XML body + Location header)
+// Case 1: 201 Created happy path (XML body + Location header)
 // =============================================================================
 
 func TestPostResponse_201CreatedHappyPath(t *testing.T) {
-	// IEEE-081: captureLogs callers must be serial : log.Default() is
+	// captureLogs callers must be serial : log.Default() is
 	// process-global. See response_post_test.go captureLogs godoc.
 	env := newCCMTestEnv(t)
 
@@ -171,7 +169,7 @@ func TestPostResponse_201CreatedHappyPath(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-043 case 2: 204 No Content happy path
+// Case 2: 204 No Content happy path
 // =============================================================================
 
 func TestPostResponse_204NoContentHappyPath(t *testing.T) {
@@ -201,7 +199,7 @@ func TestPostResponse_204NoContentHappyPath(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-043 case 3: relative replyToHref resolves under c.baseURL
+// Case 3: relative replyToHref resolves under c.baseURL
 // =============================================================================
 
 func TestPostResponse_RelativeHrefResolvesAgainstBaseURL(t *testing.T) {
@@ -232,7 +230,7 @@ func TestPostResponse_RelativeHrefResolvesAgainstBaseURL(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-043 case 4: absolute replyToHref does NOT double-prefix c.baseURL
+// Case 4: absolute replyToHref does NOT double-prefix c.baseURL
 // =============================================================================
 
 func TestPostResponse_AbsoluteHrefBypassesBaseURL(t *testing.T) {
@@ -283,11 +281,11 @@ func TestPostResponse_AbsoluteHrefBypassesBaseURL(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-043 case 5: 400 Bad Request → wrapped error, body NOT logged verbatim
+// Case 5: 400 Bad Request -> wrapped error, body NOT logged verbatim
 // =============================================================================
 
 func TestPostResponse_400BadRequestRedactsBody(t *testing.T) {
-	// IEEE-081: captureLogs callers must be serial : log.Default() is
+	// captureLogs callers must be serial : log.Default() is
 	// process-global. See response_post_test.go captureLogs godoc.
 	env := newCCMTestEnv(t)
 
@@ -330,7 +328,7 @@ func TestPostResponse_400BadRequestRedactsBody(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-043 case 6: transient 500 then 201 → success after one retry
+// Case 6: transient 500 then 201 -> success after one retry
 // =============================================================================
 
 func TestPostResponse_500ThenSuccessUsesRetry(t *testing.T) {
@@ -364,7 +362,7 @@ func TestPostResponse_500ThenSuccessUsesRetry(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-043 case 7: persistent 5xx → ErrResponseTransient surfaces
+// Case 7: persistent 5xx -> ErrResponseTransient surfaces
 // =============================================================================
 
 func TestPostResponse_500PersistentReturnsTransient(t *testing.T) {
@@ -393,14 +391,14 @@ func TestPostResponse_500PersistentReturnsTransient(t *testing.T) {
 		t.Errorf("err = %v; want errors.Is(err, ErrResponseTransient) to succeed", err)
 	}
 	// Exactly one initial + one retry; the in-call retry is intentionally
-	// surgical (IEEE-045 owns broader policy).
+	// surgical (full retry/dead-letter policy is out of scope here).
 	if got := attempts.Load(); got != 2 {
 		t.Errorf("attempts = %d, want exactly 2 (no extra retries)", got)
 	}
 }
 
 // =============================================================================
-// IEEE-043 case 8: cancelled context surfaces context.Canceled
+// Case 8: cancelled context surfaces context.Canceled
 // =============================================================================
 
 func TestPostResponse_ContextCancelledPropagates(t *testing.T) {
@@ -438,7 +436,7 @@ func TestPostResponse_ContextCancelledPropagates(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v; want errors.Is(err, context.Canceled) to succeed", err)
 	}
-	// Cancellation MUST NOT mask as a transient : IEEE-045's policy is
+	// Cancellation MUST NOT mask as a transient : the retry policy is
 	// keyed on ErrResponseTransient and ctx errors are the caller's
 	// stop-the-world signal, not retry signal.
 	if errors.Is(err, inverter.ErrResponseTransient) {
@@ -447,7 +445,7 @@ func TestPostResponse_ContextCancelledPropagates(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-043 case 9: Content-Type header is application/sep+xml on the wire
+// Case 9: Content-Type header is application/sep+xml on the wire
 // (already partially covered by case 1; this is the explicit assertion +
 // a hostile-server check to make sure the production path does not drop
 // the header on retry)
