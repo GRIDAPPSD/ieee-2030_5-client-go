@@ -2,10 +2,9 @@ package main
 
 // Phase 1b: server-time sync.
 //
-// Extracted from main() by IEEE-048 so the previously-fatal `log.Fatalf` call
+// Extracted from main() so the previously-fatal `log.Fatalf` call
 // site on `SyncServerTime` failure can be replaced with graceful bypass and
-// driven by a test against a stub server. Phase 7 exit criterion (1) in
-// `plans/plan-1-csip-client-conformance/phase-7-http-semantics.md` requires
+// driven by a test against a stub server. Phase 7 exit criterion (1) requires
 // the inverter to log a clear warning and continue when the server returns
 // 404/501 on an optional function-set link : the Time resource is optional
 // (the inline `else` branch already degrades to the local clock when
@@ -13,7 +12,7 @@ package main
 // the "TimeLink absent" path with the "TimeLink fetch failed" path: both
 // degrade to the local clock and let Phase 2 proceed.
 //
-// Behavior contract (preserves IEEE-031 happy path byte-for-byte):
+// Behavior contract (preserves the happy path byte-for-byte):
 //
 //   - dcap.TimeLink == nil: log the same "no TimeLink; using local clock"
 //     line the inline form emitted, return nil. No goroutine started.
@@ -36,7 +35,7 @@ package main
 //     running.
 //
 // log.Fatalf intentionally does NOT appear in this helper. The whole point
-// of IEEE-048 is to replace the fatal-on-Time-failure call site. Tests in
+// of this extraction is to replace the fatal-on-Time-failure call site. Tests in
 // phase1b_timesync_test.go drive each branch via a stub gotls listener so
 // the regression guard fires if anyone re-adds a Fatalf here.
 

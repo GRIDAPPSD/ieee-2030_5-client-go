@@ -1,11 +1,10 @@
 package main
 
-// IEEE-048 tests: Phase 1b time-sync graceful bypass.
+// Tests: Phase 1b time-sync graceful bypass.
 //
 // Verifies that runPhase1bTimeSync (a) does not call log.Fatalf on any HTTP
-// or transport error class, and (b) preserves the IEEE-031 happy path
-// byte-for-byte. Phase 7 exit criterion 1 in
-// `plans/plan-1-csip-client-conformance/phase-7-http-semantics.md`.
+// or transport error class, and (b) preserves the happy path
+// byte-for-byte. Phase 7 exit criterion 1.
 //
 // Tests are driven against the timeSyncClient interface defined in
 // phase1b_timesync.go so the test surface stays narrow (no httptest server,
@@ -53,7 +52,7 @@ func (f *fakeTimeSyncClient) RunTimeSync(ctx context.Context, _ string, _ time.D
 	f.lastRunCtx = ctx
 	// Block until ctx fires so the spawned-goroutine leak detector in
 	// `go test -race` has a real lifetime to inspect. Mirrors the
-	// IEEE-031 production loop's ctx.Done() exit path.
+	// production loop's ctx.Done() exit path.
 	<-ctx.Done()
 }
 
