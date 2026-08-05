@@ -1,13 +1,13 @@
 package main
 
-// Backfill of the 5 deferred Phase 2c FSAList integration cases from IEEE-072
-// PR #95. IEEE-075 extracted the Phase 2c FSAList discovery block out of
+// Backfill of the 5 deferred Phase 2c FSAList integration cases. The Phase
+// 2c FSAList discovery block was extracted out of
 // main() into runPhase2cFSAList (cmd/inverterclient/phase2c_fsalist.go) so
 // these cases : previously blocked by inline-in-main + log.Fatalf : can be
-// driven directly. Same structural template as IEEE-074's Phase 2b backfill
+// driven directly. Same structural template as the Phase 2b backfill
 // (phase2b_test.go).
 //
-// Reuses the main-package test bedrock established by IEEE-073:
+// Reuses the main-package test bedrock:
 //   - derWalkTestEnv / newDERWalkTestEnv      (TLS fixture + device cert)
 //   - startDERWalkListener                    (gotls HTTPS server)
 //   - newDERWalkClient                        (production SEP2Client)
@@ -18,31 +18,30 @@ package main
 // across two files would invent more complexity than it removes : the symbol
 // already exists at package scope).
 //
-// Cases shipped (from IEEE-072 PR #95 deferred block + the IEEE-075 backlog
-// spec):
+// Cases covered:
 //
 //   1. TestRunPhase2cFSAList_HappyPathReturnsList
-//        IEEE-072 case (5th deferred, structural baseline): non-empty
-//        FSAList GET → return list immediately, no idle, no fatal. Verifies
+//        Structural baseline: non-empty
+//        FSAList GET -> return list immediately, no idle, no fatal. Verifies
 //        the happy path that the extracted function preserves the original
 //        cache-and-break behavior.
 //   2. TestRunPhase2cFSAList_EmptyListIdleThenAppears
-//        IEEE-072 #5: empty list under --csip strict idles on
+//        Empty list under --csip strict idles on
 //        phase2cFSAListPollInterval (shrunk to 10ms), then a non-empty list
 //        appears on the next GET and the function returns it.
 //   3. TestRunPhase2cFSAList_EmptyListAllowUnregisteredProceeds
-//        IEEE-072 #6: empty list under cfg.AllowUnregistered → log + return
+//        Empty list under cfg.AllowUnregistered -> log + return
 //        empty list, no idle, no fatal.
 //   4. TestRunPhase2cFSAList_MissingLinkCSIPStrictReturnsFatal
-//        IEEE-072 #7: edev.FunctionSetAssignmentsListLink == nil under
-//        --csip strict → *fsaListFatal whose Error() contains "CSIP V1.2
+//        edev.FunctionSetAssignmentsListLink == nil under
+//        --csip strict -> *fsaListFatal whose Error() contains "CSIP V1.2
 //        CORE-012 step 1". No GETs.
 //   5. TestRunPhase2cFSAList_MissingLinkAllowUnregisteredBypasses
-//        IEEE-072 #8: edev.FunctionSetAssignmentsListLink == nil under
-//        cfg.AllowUnregistered → log + return empty list, nil error. No GETs.
+//        edev.FunctionSetAssignmentsListLink == nil under
+//        cfg.AllowUnregistered -> log + return empty list, nil error. No GETs.
 //   6. TestRunPhase2cFSAList_CtxCancelDuringEmptyListIdle
-//        IEEE-072 #9: server keeps returning an empty list; ctx-cancel during
-//        the idle loop → return ctx.Err() (context.Canceled in chain). Race-
+//        Server keeps returning an empty list; ctx-cancel during
+//        the idle loop -> return ctx.Err() (context.Canceled in chain). Race-
 //        clean.
 
 import (
@@ -162,7 +161,7 @@ func TestRunPhase2cFSAList_HappyPathReturnsList(t *testing.T) {
 	}
 }
 
-// TestRunPhase2cFSAList_EmptyListIdleThenAppears : IEEE-072 #5.
+// TestRunPhase2cFSAList_EmptyListIdleThenAppears : case 5.
 //
 // CSIP-strict + first GET returns empty FSAList. runPhase2cFSAList idles on
 // phase2cFSAListPollInterval (shrunk to 10ms), then a second GET returns a
@@ -219,7 +218,7 @@ func TestRunPhase2cFSAList_EmptyListIdleThenAppears(t *testing.T) {
 	}
 }
 
-// TestRunPhase2cFSAList_EmptyListAllowUnregisteredProceeds : IEEE-072 #6.
+// TestRunPhase2cFSAList_EmptyListAllowUnregisteredProceeds : case 6.
 //
 // cfg.AllowUnregistered=true + GET returns empty list. runPhase2cFSAList
 // must log the proceed marker, return the empty list, nil error. No idle,
@@ -264,7 +263,7 @@ func TestRunPhase2cFSAList_EmptyListAllowUnregisteredProceeds(t *testing.T) {
 	}
 }
 
-// TestRunPhase2cFSAList_MissingLinkCSIPStrictReturnsFatal : IEEE-072 #7.
+// TestRunPhase2cFSAList_MissingLinkCSIPStrictReturnsFatal : case 7.
 //
 // edev.FunctionSetAssignmentsListLink == nil under --csip strict.
 // runPhase2cFSAList must return *fsaListFatal whose Error() contains literal
@@ -308,11 +307,11 @@ func TestRunPhase2cFSAList_MissingLinkCSIPStrictReturnsFatal(t *testing.T) {
 	}
 }
 
-// TestRunPhase2cFSAList_MissingLinkAllowUnregisteredBypasses : IEEE-072 #8.
+// TestRunPhase2cFSAList_MissingLinkAllowUnregisteredBypasses : case 8.
 //
 // edev.FunctionSetAssignmentsListLink == nil + cfg.AllowUnregistered=true:
 // log the bypass and return an empty FSAList with nil error. No GETs. This
-// is the dev/test escape hatch and the symmetric counterpart to IEEE-072 #7.
+// is the dev/test escape hatch and the symmetric counterpart to case 7.
 func TestRunPhase2cFSAList_MissingLinkAllowUnregisteredBypasses(t *testing.T) {
 	buf := captureLog(t)
 
@@ -347,14 +346,14 @@ func TestRunPhase2cFSAList_MissingLinkAllowUnregisteredBypasses(t *testing.T) {
 	}
 }
 
-// TestRunPhase2cFSAList_CtxCancelDuringEmptyListIdle : IEEE-072 #9.
+// TestRunPhase2cFSAList_CtxCancelDuringEmptyListIdle : case 9.
 //
 // Server keeps returning an empty FSAList (never provisions). runPhase2cFSAList
 // is parked in the empty-list idle loop on a 10ms cadence. Cancelling ctx must
-// unwind the function promptly. Two acceptable outcomes (mirror IEEE-074's
+// unwind the function promptly. Two acceptable outcomes (mirrors the Phase 2b
 // ctx-cancel case):
 //
-//   - Cancel fires while the loop is blocked in the idle select →
+//   - Cancel fires while the loop is blocked in the idle select ->
 //     ctx.Err() returned directly. Cleanest path.
 //   - Cancel fires while a GetFSAList is in flight → SEP2Client wraps the
 //     ctx-cancel error from net/http; runPhase2cFSAList wraps THAT in
