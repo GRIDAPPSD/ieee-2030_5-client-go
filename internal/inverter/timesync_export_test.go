@@ -9,10 +9,10 @@ import (
 // at sub-second cadence without faking time. The returned func restores
 // the previous floor.
 //
-// IEEE-081: the floor is stored as an atomic.Int64 (nanoseconds) so this
+// The floor is stored as an atomic.Int64 (nanoseconds) so this
 // write is race-safe against a concurrent RunTimeSync read in another
 // goroutine. Test seams that drive a goroutine-spawning production loop
-// MUST go through the atomic accessor : see Pike's IEEE-081 audit.
+// MUST go through the atomic accessor : see Pike's concurrency audit.
 //
 // Only available via _test.go suffix; never linked into the production
 // binary. Mirrors SetPollDurationForTesting.

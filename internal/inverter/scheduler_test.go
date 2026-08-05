@@ -1,4 +1,4 @@
-// Tests for IEEE-039 : event scheduler with randomization (Phase 5 ticket 2 of 5).
+// Tests for the event scheduler with randomization (Phase 5 ticket 2 of 5).
 //
 // The scheduler is a pure data structure: no goroutine, no I/O, no real
 // time.Now(). Every test injects a fixed-time nowFunc and a seeded *rand.Rand
@@ -449,7 +449,7 @@ func TestScheduler_UpdateIsNoOp(t *testing.T) {
 	original := inverter.EventFireAtForTesting(s)
 
 	// OnEventsUpdated with the same mRID but a different start MUST NOT
-	// re-queue (per IEEE-039 scope : IEEE-040 owns state-machine semantics).
+	// re-queue (out of scope here : the state machine owns that decision).
 	s.OnEventsUpdated([]sep2.DERControl{
 		makeControl("A", 5*time.Minute, 60, nil, nil),
 	})
