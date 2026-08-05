@@ -1,10 +1,10 @@
-// Package inverter : IEEE-045 (Phase 6 closer):
+// Package inverter (Phase 6 closer):
 // `PostResponseWithRetry` layers a multi-attempt exponential-backoff retry
-// plus a dead-letter log on top of IEEE-043's one-shot `PostResponse`.
+// plus a dead-letter log on top of the one-shot `PostResponse`.
 //
 // CSIP V1.2 CORE-022 conformance requires the inverter to keep applying
 // controls regardless of Response delivery : the dead letter is
-// informational, not blocking. Callers (IEEE-044's state-machine hook)
+// informational, not blocking. Callers (the state-machine hook)
 // receive a wrapped error on terminal failure but MUST NOT short-circuit
 // the state machine on it.
 //
@@ -168,7 +168,7 @@ func (realRetryClock) wait(ctx context.Context, d time.Duration) error {
 //     failure so callers preserve `errors.Is(err, ErrResponseTransient)`.
 //
 // The helper does NOT mutate `resp`; the same payload (including its
-// idempotent Href hint, see IEEE-044 deriveResponseHref) is replayed on
+// idempotent Href hint, see deriveResponseHref) is replayed on
 // every attempt so a server that honors the suggested href dedupes
 // across retries server-side.
 func PostResponseWithRetry(
