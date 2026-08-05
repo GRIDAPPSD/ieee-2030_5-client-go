@@ -734,7 +734,7 @@ func main() {
 	// filters on evt.ReplyTo + evt.ResponseRequired + Table 31 status
 	// mapping internally; here we just register it. lfdi is the inverter's
 	// LFDI hex (set in Phase 2 via SEP2Client.LFDI()).
-	// See GRIDAPPSD/ieee-2030_5-server-go#109.
+	// See GRIDAPPSD/ieee-2030_5-server-go#112.
 	if selected {
 		stateMachine.AddTransitionHook(responsePOSTHook(client, client.LFDI(), client.Now))
 		log.Println("Phase 6: response POST hook installed")

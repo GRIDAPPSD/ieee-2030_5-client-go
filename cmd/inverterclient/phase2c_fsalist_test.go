@@ -1,8 +1,10 @@
 package main
 
-// Backfill of the 5 deferred Phase 2c FSAList integration cases. The Phase
+// Backfill of the 5 deferred Phase 2c FSAList integration cases
+// (GRIDAPPSD/ieee-2030_5-server-go#93). The Phase
 // 2c FSAList discovery block was extracted out of
-// main() into runPhase2cFSAList (cmd/inverterclient/phase2c_fsalist.go) so
+// main() into runPhase2cFSAList (cmd/inverterclient/phase2c_fsalist.go,
+// GRIDAPPSD/ieee-2030_5-server-go#94) so
 // these cases : previously blocked by inline-in-main + log.Fatalf : can be
 // driven directly. Same structural template as the Phase 2b backfill
 // (phase2b_test.go).

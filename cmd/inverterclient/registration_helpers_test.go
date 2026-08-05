@@ -1,6 +1,7 @@
 package main
 
-// Package main covers two helper functions:
+// Package main covers two helper functions
+// (GRIDAPPSD/ieee-2030_5-server-go#44):
 //
 // - redactPIN: masks all but the last 2 digits of a PIN
 //     producing "***NN". IEEE 2030.5 §8.2.1 makes the last digit a check

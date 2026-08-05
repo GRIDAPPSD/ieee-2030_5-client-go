@@ -1,9 +1,10 @@
 package main
 
-// Backfill of the 8 deferred Phase 2b integration cases. Phase 2b was
-// extracted out of main() into runPhase2bRegistration so these cases :
-// previously blocked by inline-in-main + log.Fatalf : can be driven
-// directly.
+// Backfill of the 8 deferred Phase 2b integration cases
+// (GRIDAPPSD/ieee-2030_5-server-go#89). Phase 2b was
+// extracted out of main() into runPhase2bRegistration
+// (GRIDAPPSD/ieee-2030_5-server-go#103) so these cases : previously
+// blocked by inline-in-main + log.Fatalf : can be driven directly.
 //
 // Reuses the main-package test bedrock:
 //   - derWalkTestEnv / newDERWalkTestEnv      (TLS fixture + device cert)

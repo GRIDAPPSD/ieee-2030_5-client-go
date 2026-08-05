@@ -15,7 +15,8 @@ package main
 // resource (PIN-not-yet-provisioned). It does not touch the upstream
 // EndDeviceList lookup / Register POST path: those still live in main().
 //
-// Behavior contract (frozen; verified identical):
+// Behavior contract (frozen; verified identical
+// against GRIDAPPSD/ieee-2030_5-server-go#46):
 //
 //   - edev.RegistrationLink == nil && (!cfg.CSIP || cfg.AllowUnregistered):
 //     log "skipping Phase 2b" once, return edev unchanged.

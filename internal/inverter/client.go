@@ -854,7 +854,7 @@ func isTransientResponseStatus(code int) bool {
 //
 // Failure handling is split by status class so the state
 // machine hook and the retry/dead-letter policy can pattern-match
-// without re-parsing (GRIDAPPSD/ieee-2030_5-server-go#109):
+// without re-parsing (GRIDAPPSD/ieee-2030_5-server-go#112):
 //
 //   - 4xx: wrapped error containing the status code and URL. The response
 //     body is NOT logged verbatim : it may echo XML that triggered the

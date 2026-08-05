@@ -1,5 +1,6 @@
 # CI workflow scaffold, private-core CI token wiring.
-# Mirrors the pattern shipped for the server: a GitHub App installation
+# Mirrors the pattern shipped for the server (GRIDAPPSD/ieee-2030_5-server-go#191):
+# a GitHub App installation
 # token mints short-lived, org-scoped access so
 # `go build`/`go vet`/`go test` can resolve the private
 # github.com/GRIDAPPSD/ieee-2030_5-core-go module.

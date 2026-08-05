@@ -10,7 +10,7 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
-// DERControl event scheduler (Phase 5) ===============
+// DERControl event scheduler (Phase 5, GRIDAPPSD/ieee-2030_5-server-go#88) ===============
 //
 // The polling cache (DERControlCache.Snapshot / Diff) produces deltas; this
 // file consumes them to build a randomization-aware event scheduler:

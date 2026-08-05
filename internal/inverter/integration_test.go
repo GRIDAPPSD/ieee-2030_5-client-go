@@ -42,7 +42,7 @@ type deviceIdentity struct {
 //     with 403 Forbidden.
 //   - Identity reads the pair back from context (ok=false when absent).
 //   - SFDIPrefix returns the first 8 characters of the SFDI, matching the
-//     auth.ExtractSFDIPrefix rule.
+//     auth.ExtractSFDIPrefix rule (GRIDAPPSD/ieee-2030_5-server-go#13).
 func buildTestAuthPolicy() assembly.AuthPolicy {
 	return assembly.AuthPolicy{
 		Wrap: func(next http.Handler) http.Handler {

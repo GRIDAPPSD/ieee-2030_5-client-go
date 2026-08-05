@@ -32,8 +32,8 @@ import (
 // Without a peer-cert verify hook, stdlib's x509.Verify lists the SAN OID in
 // UnhandledCriticalExtensions and the handshake fails with
 // `x509: unhandled critical extension`. This surfaced against a real
-// strict-CSIP server; an earlier fixture used SAN-less server certs and
-// missed it.
+// strict-CSIP server; an earlier fixture (GRIDAPPSD/ieee-2030_5-server-go#21)
+// used SAN-less server certs and missed it.
 //
 // RED before this fix: client errors with
 // `unhandled critical extension`. GREEN once VerifyPeerCertificate is wired

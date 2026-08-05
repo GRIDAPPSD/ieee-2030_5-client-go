@@ -1,9 +1,10 @@
 package main
 
 // Backfill of the 2 deferred Phase 2c DERProgram-walk outer-loop integration
-// cases. The Phase 2c DERProgram-walk
+// cases (GRIDAPPSD/ieee-2030_5-server-go#97). The Phase 2c DERProgram-walk
 // outer for-loop was extracted out of main() into runPhase2cDERProgramWalk
-// (cmd/inverterclient/phase2c_derprogram.go) so these cases : previously
+// (cmd/inverterclient/phase2c_derprogram.go, GRIDAPPSD/ieee-2030_5-server-go#100)
+// so these cases : previously
 // blocked by inline-in-main + log.Fatalf : can be driven directly. Same
 // structural template as the Phase 2b backfill (phase2b_test.go) and
 // the Phase 2c FSAList backfill (phase2c_fsalist_test.go).

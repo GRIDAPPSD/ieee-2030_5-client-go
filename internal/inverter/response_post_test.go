@@ -47,8 +47,8 @@ var captureLogsMu sync.Mutex
 
 // sampleDERControlResponse returns a populated DERControlResponse the test
 // server will see on the wire. Status=2 (Started) per IEEE 2030.5-2023
-// §10.10 Table 31, with a Subject mRID
-// that identifies which event the Response acknowledges.
+// §10.10 Table 31 (enum alignment: GRIDAPPSD/ieee-2030_5-server-go#109),
+// with a Subject mRID that identifies which event the Response acknowledges.
 func sampleDERControlResponse() sep2.DERControlResponse {
 	status := sep2.ResponseStatusEventStarted
 	return sep2.DERControlResponse{
