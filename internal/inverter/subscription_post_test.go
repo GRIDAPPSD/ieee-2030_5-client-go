@@ -1,9 +1,9 @@
-// IEEE-050 PostSubscription unit tests.
+// PostSubscription unit tests.
 //
-// Covers the 9-case matrix from the backlog ticket: 201 happy path,
+// Covers the 9-case matrix: 201 happy path,
 // 405 polling-fallback errors.Is contract, 500/400 wrapped-not-fatal,
 // empty-arg validation, body shape verification, 301 follow (reusing
-// IEEE-047), and context cancellation.
+// the client's follow-once wrapper), and context cancellation.
 
 package inverter
 
@@ -26,8 +26,8 @@ import (
 // servers. The test server uses stdlib TLS (or plaintext on httptest.Server
 // when callers want it), so this helper installs a permissive RootCAs +
 // InsecureSkipVerify combo. The HardwareModuleName-SAN verify hook is
-// bypassed here : IEEE-050 cares about HTTP status flow, not TLS posture
-// (which IEEE-019 / IEEE-027 already exercise). For plaintext httptest
+// bypassed here : this file cares about HTTP status flow, not TLS posture
+// (which the TLS-focused tests already exercise). For plaintext httptest
 // servers we use a stdlib http.Client wired into the SEP2Client struct
 // directly.
 func newTestSEP2Client(t *testing.T, baseURL string, transport http.RoundTripper) *SEP2Client {
@@ -209,7 +209,7 @@ func TestPostSubscription_BodyParsesAsSubscription(t *testing.T) {
 	}
 }
 
-// TestPostSubscription_301Follow verifies the IEEE-047 single-hop follow
+// TestPostSubscription_301Follow verifies the single-hop follow
 // path is inherited from (*SEP2Client).Post: a 301 on the subscription-list
 // href is followed exactly once, and the eventual 201's Location is
 // surfaced to the caller.
@@ -277,7 +277,7 @@ func TestPostSubscription_ContextCancel(t *testing.T) {
 }
 
 // Compile-time guard: keep the SubscriptionListLink field on EndDevice
-// present so IEEE-050 main.go wiring doesn't rot if someone refactors
+// present so main.go wiring doesn't rot if someone refactors
 // pkg/sep2/enddevice.go. Compile-time only; no runtime cost.
 var _ = func() *sep2.ListLink {
 	var e sep2.EndDevice
