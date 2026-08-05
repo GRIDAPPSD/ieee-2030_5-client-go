@@ -1,6 +1,6 @@
 package main
 
-// Backfill of the IEEE-034 + IEEE-033 helper-function tests:
+// Package main covers two helper functions:
 //
 // - redactPIN: masks all but the last 2 digits of a PIN
 //     producing "***NN". IEEE 2030.5 §8.2.1 makes the last digit a check
@@ -12,53 +12,29 @@ package main
 //     idle loops (server-PIN-not-provisioned and missing-RegistrationLink-
 //     in-CSIP-strict) and the Phase 2c FSAList / DERProgram-walk idle loops.
 //
-// Origin tickets MERGED at 833ae73 and 4965474.
-// Plan-3 csip-test-debt-sweep Phase 3, IEEE-071.
+// Cases covered:
 //
-// Cases shipped:
-//
-//  1. TestRedactPIN_MatchesRedactionRegex   : IEEE-034 case 7: every output
+//  1. TestRedactPIN_MatchesRedactionRegex   : every output
 //                                              matches ^\*\*\*\d{2}$.
 //                                              Asserted with a compiled
 //                                              regex, not substring.
-//  2. TestRedactPIN_Boundaries              : IEEE-034 case 7 (boundary):
+//  2. TestRedactPIN_Boundaries              : boundary
 //                                              table-driven coverage of
 //                                              p=0, p=5, p=99, p=100,
 //                                              p=111115 (the CSIP V1.2
 //                                              BASIC-001 step 5 reference
 //                                              value), p=222222.
-//  3. TestPinPollInterval_PassThrough       : IEEE-033 case 6: pollRate=120
+//  3. TestPinPollInterval_PassThrough       : pollRate=120
 //                                              -> 120 seconds.
-//  4. TestPinPollInterval_FloorApplied      : IEEE-033 case 7: pollRate=10
+//  4. TestPinPollInterval_FloorApplied      : pollRate=10
 //                                              -> 60 seconds (floor).
-//  5. TestPinPollInterval_ZeroDefaults      : derived from IEEE-033 cases
-//                                              6/7: pollRate=0 -> 30
+//  5. TestPinPollInterval_ZeroDefaults      : pollRate=0 -> 30
 //                                              minutes (default-on-zero).
 //
-// SUPERSESSION + Phase 2b DEFERRAL:
-//
-// IEEE-032 cases 5-6, IEEE-033 cases 1-5+8, and IEEE-034 cases 1-6+8 all
-// live inside `cmd/inverterclient/main.go`'s `main()` body : the Phase 2b
-// block straddling lines 281-376 of the production file. Two structural
-// problems block direct integration tests:
-//
-//   1. log.Fatalf on the fatal-mismatch path (line 373) tears down the
-//      test process and cannot be intercepted without subprocess-spawning
-//      patterns (`os/exec` re-invocation), which the IEEE-028 / IEEE-031
-//      / IEEE-038 / IEEE-070 sweep precedents have NOT used.
-//   2. Phase 2b is plain straight-line code inside main(), not a function;
-//      there is no seam through which a test can drive the
-//      ExpectedPIN / rg.PIN / RegistrationLink / AllowUnregistered state
-//      space.
-//
-// Both are fixable, but only by extracting Phase 2b into a function. Per
-// Pike's hard rule (no production refactor in a tests-only ticket beyond
-// a minimum-surgical seam) and the supplementary IEEE-071 brief, that
-// extraction is deferred to a follow-up ticket. The IEEE-032 #1-#4
-// unit cases (registration_test.go) plus the helper unit cases here cover
-// the testable surface of the IEEE-032/033/034 frozen behavior; the
-// Phase 2b cases blocked by the absent seam are catalogued in the PR
-// body so the follow-up ticket inherits a complete list.
+// The Phase 2b integration cases (PIN-match branches, missing-Registration
+// Link branches, idle-loop policy) live in phase2b_test.go, which drives
+// runPhase2bRegistration directly. This file covers only the two pure
+// helper functions above.
 
 import (
 	"regexp"
@@ -66,14 +42,14 @@ import (
 	"time"
 )
 
-// pinRedactionRegex is the IEEE-034 case 7 contract: every log line that
+// pinRedactionRegex is the contract: every log line that
 // surfaces a PIN goes through redactPIN, and redactPIN must always emit
 // exactly three '*' followed by exactly two digits. Anything else is a
 // regression that re-introduces cleartext PIN disclosure (low-severity
 // but real per IEEE 2030.5 §8.2.1).
 var pinRedactionRegex = regexp.MustCompile(`^\*\*\*\d{2}$`)
 
-// TestRedactPIN_MatchesRedactionRegex : IEEE-034 case 7.
+// TestRedactPIN_MatchesRedactionRegex verifies the contract above.
 //
 // Spans the realistic PIN range plus the CSIP V1.2 BASIC-001 step 5
 // reference value (111115) and a worst-case mismatch sample (222222).
@@ -92,7 +68,7 @@ func TestRedactPIN_MatchesRedactionRegex(t *testing.T) {
 	}
 }
 
-// TestRedactPIN_Boundaries : IEEE-034 case 7 (boundary table).
+// TestRedactPIN_Boundaries : boundary table.
 //
 // Pins the exact masked output for representative inputs. The two-arm
 // implementation (p < 100 vs p >= 100) creates a discontinuity at 100;
@@ -126,7 +102,7 @@ func TestRedactPIN_Boundaries(t *testing.T) {
 	}
 }
 
-// TestPinPollInterval_PassThrough : IEEE-033 case 6.
+// TestPinPollInterval_PassThrough : pollRate above the floor.
 //
 // pollRate of 120 seconds is above the 60s floor and a non-zero value, so
 // pinPollInterval returns exactly 120s.
@@ -140,7 +116,7 @@ func TestPinPollInterval_PassThrough(t *testing.T) {
 	}
 }
 
-// TestPinPollInterval_FloorApplied : IEEE-033 case 7.
+// TestPinPollInterval_FloorApplied : pollRate below the floor.
 //
 // pollRate of 10 seconds is below the 60s floor; pinPollInterval clamps
 // to the floor, NOT to the 30-minute default.
@@ -154,7 +130,7 @@ func TestPinPollInterval_FloorApplied(t *testing.T) {
 	}
 }
 
-// TestPinPollInterval_ZeroDefaults : derived from IEEE-033 cases 6/7.
+// TestPinPollInterval_ZeroDefaults : pollRate=0 default-on-zero behavior.
 //
 // pollRate of 0 hits the default-on-zero branch (30 minutes). The floor
 // check runs AFTER the default branch, so the returned value is the full

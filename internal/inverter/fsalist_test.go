@@ -1,44 +1,40 @@
 package inverter_test
 
-// Backfill of the IEEE-035 deferred unit tests for
-// (*SEP2Client).GetFSAList. Origin ticket merged at 6a163e6 (PR #49);
-// behavior frozen. Plan-3 csip-test-debt-sweep Phase 4, IEEE-072.
+// Package inverter_test covers
+// (*SEP2Client).GetFSAList. This behavior is frozen.
 //
-// Reuses the IEEE-069 / IEEE-070 / IEEE-071 bedrock: ccmTestEnv from
+// Reuses the ccmTestEnv from
 // client_ccm_test.go and startIdleListener from idle_test.go. The test does
-// not need TLS-cipher negotiation coverage (IEEE-067 owns that); it needs
+// not need TLS-cipher negotiation coverage (that lives elsewhere); it needs
 // FSAList XML parsing, empty-href sentinel error, 404 / malformed-XML
 // wrapping, and the `?l=255` paging-hint contract.
 //
-// Cases shipped (verbatim subset of the IEEE-035 / IEEE-072 deferred-tests
-// block : backlog.md IEEE-072 cases 1-4 + a paging-hint sanity test):
+// Cases covered:
 //
-//  1. TestGetFSAList_HappyPath          : IEEE-072 case 1: stub returns
+//  1. TestGetFSAList_HappyPath          : stub returns
 //                                          FSAList with 3 entries; method
 //                                          returns the parsed value.
-//  2. TestGetFSAList_EmptyHref          : IEEE-072 case 2: empty href returns
+//  2. TestGetFSAList_EmptyHref          : empty href returns
 //                                          error matching "FSAList href
 //                                          required", no GET attempted.
-//  3. TestGetFSAList_NotFound           : IEEE-072 case 3: server 404
+//  3. TestGetFSAList_NotFound           : server 404
 //                                          produces a wrapped error (path +
 //                                          status surfaced), no panic.
-//  4. TestGetFSAList_MalformedXML       : IEEE-072 case 4: server emits
+//  4. TestGetFSAList_MalformedXML       : server emits
 //                                          non-XML body; GetFSAList returns
 //                                          an unwrappable xml.SyntaxError
 //                                          (via %w from c.Get).
-//  5. TestGetFSAList_AppendsPagingHint  : IEEE-035 doc-comment contract:
+//  5. TestGetFSAList_AppendsPagingHint  : doc-comment contract:
 //                                          method appends `?l=255` on a
 //                                          query-less href and `&l=255` on
 //                                          a query-bearing href.
 //
-// IEEE-072 cases 5-9 (Phase 2c block behavior : empty-list idle, missing-link
-// fatal, --allow-unregistered bypass, ctx-cancel cleanliness) live inside
-// `cmd/inverterclient/main.go`'s `main()` body where they are not addressable
+// Phase 2c block behavior (empty-list idle, missing-link
+// fatal, --allow-unregistered bypass, ctx-cancel cleanliness) lives inside
+// `cmd/inverterclient/main.go`'s `main()` body where it is not addressable
 // from a test binary (the fatal-link path calls `log.Fatalf` and there is no
 // function seam through which a test can drive the FunctionSetAssignmentsListLink
-// / cfg.CSIP / cfg.AllowUnregistered state space). Deferred to a follow-up
-// ticket matching the IEEE-074 (Phase 2b extraction) shape Pike H established
-// in PR #91. See PR body for the extraction proposal.
+// / cfg.CSIP / cfg.AllowUnregistered state space).
 
 import (
 	"context"
@@ -94,7 +90,7 @@ func newFSAListTestClient(t *testing.T, handler http.Handler) (*inverter.SEP2Cli
 	return client, ctx
 }
 
-// TestGetFSAList_HappyPath : IEEE-072 case 1.
+// TestGetFSAList_HappyPath : case 1.
 //
 // Stub returns FunctionSetAssignmentsList with 3 FSA entries : each with a
 // distinct mRID + description + DERProgramListLink : and a non-zero All
@@ -167,7 +163,7 @@ func TestGetFSAList_HappyPath(t *testing.T) {
 	}
 }
 
-// TestGetFSAList_EmptyHref : IEEE-072 case 2.
+// TestGetFSAList_EmptyHref : case 2.
 //
 // An empty href is rejected at the call site without an HTTP round trip.
 // The sentinel error string is contractual: the Phase 2c block in main()
@@ -196,13 +192,13 @@ func TestGetFSAList_EmptyHref(t *testing.T) {
 	}
 }
 
-// TestGetFSAList_NotFound : IEEE-072 case 3.
+// TestGetFSAList_NotFound : case 3.
 //
 // Server returns 404 with a small body. GetFSAList must return a non-nil
 // error that surfaces both the path and the status code. The outer wrap
 // added by GetFSAList is `GET FSAList: %w`; the inner wrap from c.Get is
 // `GET %s: %d %s` (not %w on the status : see registration_test.go's
-// matching IEEE-032 case for context). Assert on "wrapped error, no panic":
+// matching case for context). Assert on "wrapped error, no panic":
 // the path AND outer wrap are present and the test binary survives.
 func TestGetFSAList_NotFound(t *testing.T) {
 	t.Parallel()
@@ -233,7 +229,7 @@ func TestGetFSAList_NotFound(t *testing.T) {
 	}
 }
 
-// TestGetFSAList_MalformedXML : IEEE-072 case 4.
+// TestGetFSAList_MalformedXML : case 4.
 //
 // Server returns 200 OK with non-XML body. GetFSAList must wrap the
 // xml.SyntaxError via the chain
@@ -270,7 +266,7 @@ func TestGetFSAList_MalformedXML(t *testing.T) {
 }
 
 // TestGetFSAList_AppendsPagingHint locks in the `?l=255` paging-hint contract
-// from the IEEE-035 doc comment ("First-cut paging: appends `?l=255` to fetch
+// from the GetFSAList doc comment ("First-cut paging: appends `?l=255` to fetch
 // the first page; cursor walking for lists larger than 255 entries is
 // deferred to a follow-up"). Two cases via subtests:
 //
