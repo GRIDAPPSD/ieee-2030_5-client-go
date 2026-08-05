@@ -1,9 +1,9 @@
-// Tests for IEEE-044 : StateMachine.AddTransitionHook multiplex (Phase 6
+// Tests for StateMachine.AddTransitionHook multiplex (Phase 6
 // ticket 2 of 3).
 //
-// AddTransitionHook is the append-only hook surface added in IEEE-044 so
-// multiple independent concerns (IEEE-042 curve refresh + IEEE-044
-// Response POST) can compose on the same state machine without one
+// AddTransitionHook is the append-only hook surface so
+// multiple independent concerns (curve refresh + Response POST) can
+// compose on the same state machine without one
 // stomping the other (which the replace-only OnTransition would do).
 //
 // Coverage:
@@ -24,8 +24,8 @@ import (
 
 // TestStateMachine_AddTransitionHookMultiplex registers two hooks via
 // AddTransitionHook and asserts both fire on a single transition, in the
-// order they were registered. This is the IEEE-044 contract that lets
-// IEEE-042 curve refresh and IEEE-044 Response POST coexist on the same
+// order they were registered. This is the contract that lets
+// curve refresh and Response POST coexist on the same
 // state machine.
 func TestStateMachine_AddTransitionHookMultiplex(t *testing.T) {
 	t.Parallel()
@@ -97,10 +97,9 @@ func TestStateMachine_AddTransitionHookNilIgnored(t *testing.T) {
 // TestStateMachine_OnTransitionAndAddTransitionHookCompose verifies that
 // the OnTransition slot AND AddTransitionHook entries fire on the same
 // transition in the documented order (OnTransition first, then appended
-// hooks in registration order). This is the IEEE-044 wire-up contract:
-// IEEE-042 (curve refresh) lives in AddTransitionHook and IEEE-044
-// (Response POST) lives in AddTransitionHook; OnTransition stays as the
-// test-swap slot.
+// hooks in registration order). This is the wire-up contract: curve
+// refresh and Response POST both live in AddTransitionHook; OnTransition
+// stays as the test-swap slot.
 func TestStateMachine_OnTransitionAndAddTransitionHookCompose(t *testing.T) {
 	t.Parallel()
 	now, _ := newClock(fixedNow)

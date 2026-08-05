@@ -1,14 +1,14 @@
-// IEEE-052 Phase 8 ticket 4 of 4 (final): mutex-guarded registry wrapping
-// the subscriptionsByResource map produced by IEEE-050's registerSubscriptions.
+// Phase 8 ticket 4 of 4 (final): mutex-guarded registry wrapping
+// the subscriptionsByResource map produced by registerSubscriptions.
 //
 // Lives in its own file so the test file (subscription_registry_test.go)
 // has a clear unit-test target and so main.go stays close to its previous
-// size. The registry is the seam IEEE-052 needs to remove subscription
+// size. The registry is the seam needed to remove subscription
 // entries from the inverter's local tracking when the server cancels a
 // subscription via Notification status=1 (CORE-019 step 13).
 //
 // Concurrency: notifications arrive on independent net/http goroutines
-// (the IEEE-049 NotifyReceiver fires Dispatch from its handler). The
+// (the NotifyReceiver fires Dispatch from its handler). The
 // underlying map MUST therefore be guarded : a bare Go map raced from
 // the dispatcher would crash the inverter.
 
@@ -19,9 +19,9 @@ import (
 	"sync"
 )
 
-// subscriptionRegistry is the IEEE-052 mutex-guarded wrapper around
-// the subscribedResource→serverSubscriptionHref map produced by
-// IEEE-050's registerSubscriptions. Methods are safe for concurrent
+// subscriptionRegistry is the mutex-guarded wrapper around
+// the subscribedResource->serverSubscriptionHref map produced by
+// registerSubscriptions. Methods are safe for concurrent
 // use; the dispatcher's CancelHook calls Cancel from a net/http
 // goroutine while main() reads via Snapshot.
 //
@@ -62,7 +62,7 @@ func (r *subscriptionRegistry) Add(subscribedHref, serverSubHref string) {
 // subscription href that was removed (or "" if nothing was tracked) so
 // callers can log it.
 //
-// Bound as the IEEE-052 cancel hook on the dispatcher (SimulatorDispatcher
+// Bound as the cancel hook on the dispatcher (SimulatorDispatcher
 // or ProductionDispatcher) via the CancelHookFunc adapter: registry.Cancel
 // has signature `func(string) string`; CancelHook expects `func(string)`.
 func (r *subscriptionRegistry) Cancel(subscribedHref string) string {

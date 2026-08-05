@@ -1,17 +1,17 @@
-// Tests for IEEE-038 : periodic DERControlList polling honoring pollRate.
+// Tests for periodic DERControlList polling honoring pollRate.
 //
 // Two layers:
 //
 //  1. Pure DERControlCache tests (Snapshot / Diff / Refresh). No server,
 //     no goroutines, fast. Cover the cache contract end to end.
 //  2. End-to-end PollDERControlList tests against a gotls-backed HTTPS
-//     listener (the same ccmTestEnv pattern IEEE-028 and IEEE-069 use).
+//     listener (the same ccmTestEnv pattern used elsewhere).
 //     These drive the goroutine loop, the tight-cadence test seam, and the
 //     ctx-cancel exit.
 //
 // Test seam: SetDERControlPollDurationForTesting swaps the package-level
 // derControlPollDuration mapper so tests run in tens of ms instead of
-// minutes. Mirrors SetPollDurationForTesting from IEEE-028.
+// minutes. Mirrors SetPollDurationForTesting used elsewhere in this package.
 package inverter_test
 
 import (
@@ -95,7 +95,7 @@ func TestDERControlCache_RefreshSkipsEmptyMRID(t *testing.T) {
 }
 
 // TestDERControlCache_Diff exercises the four meaningful diff transitions
-// the IEEE-039+ scheduler / state machine needs:
+// the scheduler / state machine needs:
 //
 //   - added: mRID newly seen.
 //   - updated: known mRID whose currentStatus changed (and is not cancelled).
@@ -185,7 +185,7 @@ func TestDERControlCache_Diff(t *testing.T) {
 		{
 			name: "cancelled wins over also-new",
 			// Cache empty, next contains a cancelled event. The current
-			// implementation reports it in the cancelled bucket so the IEEE-039+
+			// implementation reports it in the cancelled bucket so the
 			// state machine sees the cancellation as the dominant transition.
 			seeded: nil,
 			next: []sep2.DERControl{
@@ -419,7 +419,7 @@ func TestPollDERControlList_ContextCancel(t *testing.T) {
 
 // TestPollDERControlList_DiffNewAndCancelled cases 4 + 5: across two ticks
 // the cache surfaces an added event (C) and a cancelled event (B) through
-// the public Diff method that the IEEE-039+ scheduler will consume.
+// the public Diff method that the scheduler will consume.
 func TestPollDERControlList_DiffNewAndCancelled(t *testing.T) {
 	env := newCCMTestEnv(t)
 	const href = "/derp/0/derc"
@@ -464,7 +464,7 @@ func TestPollDERControlList_DiffNewAndCancelled(t *testing.T) {
 
 	// Capture diff against the *current* state, then flip the server and
 	// wait for the second tick. We assert the diff via the public Diff
-	// surface, which is what IEEE-039+ will consume.
+	// surface, which is what the scheduler will consume.
 	phase.Store(1)
 	next := []sep2.DERControl{
 		makeDERControl("A", sep2.EventStatusScheduled),
