@@ -1,8 +1,8 @@
-# CI workflow scaffold, private-core CI token wiring.
+# CI workflow scaffold, GRIDAPPSD-module CI token wiring.
 # Mirrors the pattern shipped for the server (GRIDAPPSD/ieee-2030_5-server-go#191):
 # a GitHub App installation
 # token mints short-lived, org-scoped access so
-# `go build`/`go vet`/`go test` can resolve the private
+# `go build`/`go vet`/`go test` can resolve the
 # github.com/GRIDAPPSD/ieee-2030_5-core-go module.
 #
 # Standard Go signal only at this stage: build, vet, test. No lint step
@@ -72,7 +72,7 @@ jobs:
         # Mints a short-lived installation token for the GRIDAPPSD App
         # (referenced by App ID via secret, not by slug) so
         # `go build`/`go vet`/`go test` below
-        # can resolve the private github.com/GRIDAPPSD/ieee-2030_5-core-go
+        # can resolve the github.com/GRIDAPPSD/ieee-2030_5-core-go
         # module. Pinned to v3 (current stable major as of 2026-07-07).
         # The action masks the token in logs; it is never echoed.
         id: app-token
@@ -82,7 +82,7 @@ jobs:
           private-key: ${{ secrets.GRIDAPPSD_CI_APP_PRIVATE_KEY }}
           owner: GRIDAPPSD
 
-      - name: Configure private module access
+      - name: Configure module access
         # Rewrites HTTPS clones/fetches of github.com/GRIDAPPSD/* to carry
         # the minted installation token, scoped to this org only. Runs
         # before Setup Go so `go build`'s module resolution can see it.
