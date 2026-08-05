@@ -1,4 +1,4 @@
-// Tests for IEEE-045 : `PostResponseWithRetry` (Phase 6 closer).
+// Tests for `PostResponseWithRetry` (Phase 6 closer).
 //
 // Coverage (one assertion concept per test where the input space allows):
 //
@@ -397,7 +397,7 @@ func TestPostResponseWithRetry_BackoffCappedByMaxDelay(t *testing.T) {
 
 func TestPostResponseWithRetry_DeadLetterLog(t *testing.T) {
 	// Deliberately serial : captureLogs swaps log.Default()'s writer,
-	// which is global state. Even with the IEEE-081 mutex guarding
+	// which is global state. Even with the mutex guarding
 	// concurrent captureLogs callers, any OTHER t.Parallel() test in
 	// this package that emits log.Printf lines while this test holds
 	// the capture buffer will write into that buffer (the global
@@ -406,7 +406,7 @@ func TestPostResponseWithRetry_DeadLetterLog(t *testing.T) {
 	// (before parallel tests resume) : Go's testing runtime
 	// guarantees serial tests complete before parallel tests start.
 	// Refactoring production log.Printf to an injectable logger is
-	// out of scope for IEEE-081 (would change package API).
+	// out of scope here (would change package API).
 	cfg := tightCfg()
 	poster := &fakePoster{errs: []error{
 		transientErr("a1"), transientErr("a2"), transientErr("a3"),

@@ -1,17 +1,14 @@
-// Package inverter_test backfills the deferred test coverage for IEEE-031
-// (server time sync subsystem): the four new methods on *SEP2Client (Now,
-// GetServerTime, SyncServerTime, RunTimeSync), the atomic offset field, and
-// the two outbound-timestamp call-site replacements (DERSettings.UpdatedTime
-// and MirrorMeterReading.MRID).
+// Package inverter_test covers the server time sync subsystem: the four
+// methods on *SEP2Client (Now, GetServerTime, SyncServerTime, RunTimeSync),
+// the atomic offset field, and the two outbound-timestamp call-site
+// replacements (DERSettings.UpdatedTime and MirrorMeterReading.MRID).
+// See GRIDAPPSD/ieee-2030_5-server-go#85.
 //
-// The deferred-tests Craig override (2026-05-12) was lifted later the same
-// day; this file is the plan-3-csip-test-debt-sweep Phase 2 deliverable
-// (IEEE-070). Origin ticket IEEE-031 is MERGED : behavior is frozen. These
-// tests assert frozen behavior; they do not exercise unmerged future
+// These tests assert frozen behavior; they do not exercise unmerged future
 // changes. If a test reveals a defect, the project policy is to file a
 // separate MEDIUM ticket : do not fix inline.
 //
-// Fixture pattern mirrors IEEE-028's idle_test.go and IEEE-069's
+// Fixture pattern mirrors idle_test.go and
 // client_test.go: each test stands up a gotls-backed HTTPS server via the
 // shared ccmTestEnv from client_ccm_test.go and routes requests with a
 // per-test http.ServeMux. HTTP-method-keyed atomic counters detect
@@ -68,10 +65,10 @@ func newTimeSyncClient(t *testing.T, env *ccmTestEnv, serverURL string) *inverte
 }
 
 // =============================================================================
-// IEEE-070 case 1: GetServerTime happy path
+// Case 1: GetServerTime happy path
 // =============================================================================
 
-// TestGetServerTime_HappyPath exercises IEEE-070 case 1: httptest server
+// TestGetServerTime_HappyPath exercises case 1: httptest server
 // returns a Time XML payload and GetServerTime parses every consumed
 // field correctly (CurrentTime, Quality, TzOffset, the Resource Href).
 //
@@ -133,7 +130,7 @@ func TestGetServerTime_HappyPath(t *testing.T) {
 	}
 
 	// Empty href short-circuits before any HTTP : same defensive guard
-	// pattern IEEE-030 added across all href-taking methods.
+	// pattern used across all href-taking methods.
 	if _, err := client.GetServerTime(ctx, ""); err == nil {
 		t.Error("GetServerTime(ctx, \"\") returned nil error; want failure")
 	} else if !strings.Contains(err.Error(), "time href required") {
@@ -146,8 +143,8 @@ func TestGetServerTime_HappyPath(t *testing.T) {
 
 // TestGetServerTime_ServerErrorIsWrapped covers the GET-error branch in
 // GetServerTime : a 500 surfaces as a wrapped error containing the "get
-// server time" context. Lifts GetServerTime coverage over the ≥80% gate
-// without adding new IEEE-070 cases.
+// server time" context. Lifts GetServerTime coverage over the >=80% gate
+// without adding new numbered cases.
 func TestGetServerTime_ServerErrorIsWrapped(t *testing.T) {
 	t.Parallel()
 	env := newCCMTestEnv(t)
@@ -174,10 +171,10 @@ func TestGetServerTime_ServerErrorIsWrapped(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-070 case 2: RunTimeSync goroutine exits cleanly on ctx cancel
+// Case 2: RunTimeSync goroutine exits cleanly on ctx cancel
 // =============================================================================
 
-// TestRunTimeSync_GoroutineExitsOnCtxCancel exercises IEEE-070 case 2:
+// TestRunTimeSync_GoroutineExitsOnCtxCancel exercises case 2:
 // spawning RunTimeSync as `go client.RunTimeSync(ctx, "/tm", pollRate)`
 // and cancelling ctx must let the goroutine return cleanly. Verified by
 // closing a done channel from inside a wrapper goroutine and asserting
@@ -241,8 +238,8 @@ func TestRunTimeSync_GoroutineExitsOnCtxCancel(t *testing.T) {
 // select and the SyncServerTime call that updates the offset. The
 // production minTimeSyncPollRate floor (60s) makes this untestable at
 // the natural cadence, so the test uses SetMinTimeSyncPollRateForTesting
-// (an _export_test.go-only hook, mirroring IEEE-028's
-// SetPollDurationForTesting) to drop the floor to 5ms. The hook is
+// (an _export_test.go-only hook, mirroring the
+// SetPollDurationForTesting pattern) to drop the floor to 5ms. The hook is
 // linked only when the test binary is built.
 //
 // Verifies: (a) the loop iterates at least once, (b) the iteration
@@ -387,8 +384,8 @@ func TestRunTimeSync_PollRateClamps(t *testing.T) {
 }
 
 // TestRunTimeSync_EmptyHrefReturnsImmediately covers the
-// empty-timeHref early-return branch in RunTimeSync. Not in the IEEE-070
-// case list, but lifts RunTimeSync coverage over the ≥80% gate and
+// empty-timeHref early-return branch in RunTimeSync. Not in the numbered
+// case list above, but lifts RunTimeSync coverage over the >=80% gate and
 // asserts the contract: no goroutine churn, no panic when called with
 // the same input the Phase 1b skip path generates upstream.
 func TestRunTimeSync_EmptyHrefReturnsImmediately(t *testing.T) {
@@ -427,10 +424,10 @@ func TestRunTimeSync_EmptyHrefReturnsImmediately(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-070 case 3: Now() returns offset-adjusted time
+// Case 3: Now() returns offset-adjusted time
 // =============================================================================
 
-// TestNow_ReturnsOffsetAdjusted exercises IEEE-070 case 3: with a server
+// TestNow_ReturnsOffsetAdjusted exercises case 3: with a server
 // reporting CurrentTime = local + 42s, SyncServerTime stores the offset
 // atomically and client.Now() reports ~42s ahead of time.Now().
 //
@@ -514,10 +511,10 @@ func TestNow_ReturnsOffsetAdjusted(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-070 case 4: Phase 1b skip-on-absent-TimeLink
+// Case 4: Phase 1b skip-on-absent-TimeLink
 // =============================================================================
 
-// TestPhase1bSkipsWhenTimeLinkAbsent exercises IEEE-070 case 4: when the
+// TestPhase1bSkipsWhenTimeLinkAbsent exercises case 4: when the
 // caller observes dcap.TimeLink == nil, no /tm GET is fired and Now()
 // continues to return local time (no offset stored).
 //
@@ -526,7 +523,7 @@ func TestNow_ReturnsOffsetAdjusted(t *testing.T) {
 // Pike's "stay in scope" rule blocks extracting a helper from main.go,
 // so the test asserts the inverter-package contract that defends the
 // Phase 1b gate: no time-sync HTTP traffic is generated unless the
-// caller passes a non-empty href through. Mirrors IEEE-069's
+// caller passes a non-empty href through. Mirrors the
 // TestPhase3SkipsWhenDERListLinkAbsent / TestPhase4SkipsWhenMUPListLinkAbsent
 // pattern.
 func TestPhase1bSkipsWhenTimeLinkAbsent(t *testing.T) {
@@ -598,10 +595,10 @@ func TestPhase1bSkipsWhenTimeLinkAbsent(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-070 case 5: Reporter outbound MRID derives from client.Now()
+// Case 5: Reporter outbound MRID derives from client.Now()
 // =============================================================================
 
-// TestReporterMRID_DerivesFromClientNow exercises IEEE-070 case 5: with
+// TestReporterMRID_DerivesFromClientNow exercises case 5: with
 // the client's offset slewed forward by +42s (via SyncServerTime against
 // a stub Time endpoint), the MirrorMeterReading.MRID emitted by
 // Reporter.ReportMetering carries a timestamp suffix that matches

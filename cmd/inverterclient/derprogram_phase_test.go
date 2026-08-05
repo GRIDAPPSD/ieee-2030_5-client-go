@@ -1,71 +1,54 @@
 package main
 
-// Backfill of the IEEE-036 deferred Phase 2c continuation tests for
-// `walkDERProgramTree`, the package-level helper that drives the
-// FSAList -> DERProgramList -> DERProgram subtree walk inside main()
-// at cmd/inverterclient/main.go. Plan-3 csip-test-debt-sweep Phase 5,
-// IEEE-073. Origin ticket IEEE-036 is MERGED at 7733cf1 (PR #78);
-// behavior frozen.
-//
-// `walkDERProgramTree` is a package-level function (extracted by IEEE-036
-// itself when the per-FSA loop body grew past a comfortable inline size).
-// Direct integration testing through the production SEP2 client is
+// Test coverage for walkDERProgramTree, the FSAList -> DERProgramList ->
+// DERProgram subtree walk in main() at cmd/inverterclient/main.go. Direct
+// integration testing through the production SEP2 client is
 // straightforward: spin a gotls listener, build a real *inverter.SEP2Client
 // pointed at it, drive the walker, assert on the cache shape and per-FSA
 // behavior.
 //
-// Cases shipped (IEEE-073 mandatory cases 1, 2, 3, 5, 7 : see backlog.md
-// IEEE-073 and plans/plan-3-csip-test-debt-sweep/phase-5-derprogram-walk-and-cache.md):
+// Cases covered:
 //
-//  1. TestWalkDERProgramTree_ThreeFSAEnumeration
-//      : IEEE-073 case 1: httptest server returns a 3-FSA list, each with
-//        a distinct DERProgramListLink; walker traverses all three.
+//  1. TestWalkDERProgramTree_ThreeFSAEnumeration: httptest server returns a
+//     3-FSA list, each with a distinct DERProgramListLink; walker traverses
+//     all three.
 //
-//  2. TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs
-//      : IEEE-073 case 2: each FSA returns 2 DERPrograms; walker walks
-//        all 6, fetches DefaultDERControl + DERControlList + DERCurveList
-//        per program.
-//      : IEEE-073 case 3: cache-shape assertion : `len(out) ==
-//        sum(DERPrograms per FSA)`. The walker preserves all enumerated
-//        programs unfiltered (IEEE-037 selection happens downstream).
+//  2. TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs: each FSA
+//     returns 2 DERPrograms; walker walks all 6, fetches
+//     DefaultDERControl + DERControlList + DERCurveList per program.
+//     Cache-shape assertion: `len(out) == sum(DERPrograms per FSA)`. The
+//     walker preserves all enumerated programs unfiltered (selection
+//     happens downstream).
 //
-//  3. TestWalkDERProgramTree_AbsentDERProgramListLinkSkipsFSA
-//      : IEEE-073 case 5: one FSA has a nil DERProgramListLink; walker
-//        skips that FSA and walks the other two.
+//  3. TestWalkDERProgramTree_AbsentDERProgramListLinkSkipsFSA: one FSA has
+//     a nil DERProgramListLink; walker skips that FSA and walks the other
+//     two.
 //
-//  4. TestWalkDERProgramTree_DeepFSATopologyFlattens
-//      : IEEE-073 case 7: CSIP V1.2 CORE-010 7-level topology. The walker
-//        does NOT model topology depth : it walks the FSAs the server
-//        presents. Verify a deep-level FSA flattened into a single
-//        FSAList is walked correctly with all DERPrograms cached.
+//  4. TestWalkDERProgramTree_DeepFSATopologyFlattens: CSIP V1.2 CORE-010
+//     7-level topology. The walker does NOT model topology depth: it
+//     walks the FSAs the server presents. Verify a deep-level FSA
+//     flattened into a single FSAList is walked correctly with all
+//     DERPrograms cached.
 //
-//  5. TestWalkDERProgramTree_MissingSubtreeLinksTolerated
-//      : Phase 5 phase-doc invariant: DERProgram with absent
-//        DefaultDERControlLink / DERControlListLink / DERCurveListLink:
-//        walker skips that GET, still records the program in the cache.
-//        (Mentioned in IEEE-036 source-comment lines 460-461 and Phase 5
-//        phase-doc; not numbered in the 7-case origin block but exercises
-//        the same continue-on-nil branching the FSA-list case 5 exercises
-//        at a different level.)
+//  5. TestWalkDERProgramTree_MissingSubtreeLinksTolerated: DERProgram with
+//     absent DefaultDERControlLink / DERControlListLink / DERCurveListLink:
+//     walker skips that GET, still records the program in the cache. Same
+//     continue-on-nil branching as case 3, at a different level.
 //
-//  6. TestWalkDERProgramTree_GetProgramListErrorWraps
-//      : Per-FSA transport-error wrapping: when GetDERProgramList fails
-//        (404 from the server), walkDERProgramTree returns a non-nil
-//        error wrapped with `FSA mRID=%s DERProgramList: %w`. The
-//        outer-loop in main() converts this to log.Fatalf : exercising
-//        the walker directly lets us assert on the wrap shape without
-//        terminating the test process. Sibling DefaultDERControl /
-//        DERControlList / DERCurveList wraps are not exercised
-//        individually because the walker bails on the first error per
-//        IEEE-036 design (fail-fast).
+//  6. TestWalkDERProgramTree_GetProgramListErrorWraps: per-FSA
+//     transport-error wrapping: when GetDERProgramList fails (404 from
+//     the server), walkDERProgramTree returns a non-nil error wrapped
+//     with `FSA mRID=%s DERProgramList: %w`. The outer loop in main()
+//     converts this to log.Fatalf; exercising the walker directly lets us
+//     assert on the wrap shape without terminating the test process.
+//     Sibling DefaultDERControl / DERControlList / DERCurveList wraps are
+//     not exercised individually because the walker bails on the first
+//     error (fail-fast).
 //
-// IEEE-073 mandatory cases 4 (empty-FSAList idle-loop) and 6 (pollRate
-// throttling on empty enumerated DERProgram set) live in the Phase 2c
-// outer for-loop inside main() at lines ~502-527. That outer loop has
-// the same structural problem as Phase 2b / Phase 2c-FSAList-discovery
-// (log.Fatalf on walk error, no function seam to drive cfg.CSIP /
-// cfg.AllowUnregistered / dcap.PollRate state space). Both are deferred
-// to IEEE-076 : see PR body.
+// The empty-FSAList idle-loop and pollRate-throttling-on-empty-set cases
+// live in the Phase 2c outer for-loop inside main(), not here: that loop
+// has no function seam yet to drive cfg.CSIP / cfg.AllowUnregistered /
+// dcap.PollRate state space directly.
 
 import (
 	"context"
@@ -325,8 +308,7 @@ func registerHandler(t *testing.T, mux *http.ServeMux, hitsByPath map[string]*at
 
 // buildFSAList constructs a sep2.FunctionSetAssignmentsList from the
 // fixture descriptors. Used by tests to feed walkDERProgramTree directly
-// (bypassing the FSAList GET : that path is covered by IEEE-072's
-// fsalist_test.go).
+// (bypassing the FSAList GET: that path is covered by fsalist_test.go).
 func buildFSAList(fsas []fsaFixture) sep2.FunctionSetAssignmentsList {
 	out := sep2.FunctionSetAssignmentsList{
 		ListResource: sep2.ListResource{
@@ -359,9 +341,9 @@ func drive(t *testing.T, fsaList sep2.FunctionSetAssignmentsList, mux *http.Serv
 	return out, err
 }
 
-// ----- IEEE-073 case 1: 3-FSA enumeration -----------------------------------
+// ----- Case 1: 3-FSA enumeration -----------------------------------
 
-// TestWalkDERProgramTree_ThreeFSAEnumeration : IEEE-073 case 1.
+// TestWalkDERProgramTree_ThreeFSAEnumeration : case 1.
 //
 // httptest server returns a 3-FSA list, each with a DERProgramListLink to
 // a distinct path. Each FSA's DERProgramList contains a single DERProgram
@@ -419,9 +401,9 @@ func TestWalkDERProgramTree_ThreeFSAEnumeration(t *testing.T) {
 	}
 }
 
-// ----- IEEE-073 cases 2 + 3: six DERPrograms + cache-shape invariant -------
+// ----- Cases 2 + 3: six DERPrograms + cache-shape invariant -------
 
-// TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs : IEEE-073 cases 2
+// TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs : cases 2
 // and 3.
 //
 // Each of three FSAs returns 2 DERPrograms (6 total). Every DERProgram
@@ -432,7 +414,7 @@ func TestWalkDERProgramTree_ThreeFSAEnumeration(t *testing.T) {
 //   - case 2 (subtree fetch): 6 DefaultDERControl GETs, 6 DERControlList
 //     GETs, 6 DERCurveList GETs.
 //   - case 3 (cache shape): len(out) == 6 : unfiltered, preserves all
-//     enumerated programs so IEEE-037 Primacy + mRID selection can run on
+//     enumerated programs so Primacy + mRID selection can run on
 //     a complete set. mRID uniqueness across all 6 programs is the
 //     fixture invariant; if a future edit accidentally reuses an mRID
 //     the cache will silently collapse and this test will fail.
@@ -515,9 +497,9 @@ func TestWalkDERProgramTree_SixDERProgramsAcrossThreeFSAs(t *testing.T) {
 	}
 }
 
-// ----- IEEE-073 case 5: absent DERProgramListLink branches -----------------
+// ----- Case 5: absent DERProgramListLink branches -----------------
 
-// TestWalkDERProgramTree_AbsentDERProgramListLinkSkipsFSA : IEEE-073 case 5.
+// TestWalkDERProgramTree_AbsentDERProgramListLinkSkipsFSA : case 5.
 //
 // Three FSAs, but the middle FSA's DERProgramListLink is nil (the FSA-
 // list-builder leaves the field nil when derProgramListPath == ""). The
@@ -579,9 +561,9 @@ func TestWalkDERProgramTree_AbsentDERProgramListLinkSkipsFSA(t *testing.T) {
 	}
 }
 
-// ----- IEEE-073 case 7: deep-topology FSA flattens -------------------------
+// ----- Case 7: deep-topology FSA flattens -------------------------
 
-// TestWalkDERProgramTree_DeepFSATopologyFlattens : IEEE-073 case 7.
+// TestWalkDERProgramTree_DeepFSATopologyFlattens : case 7.
 //
 // CSIP V1.2 CORE-010 7-level FSA topology is a server-side concept : the
 // walker does not model topology depth (per Phase 5 phase-doc risk note,

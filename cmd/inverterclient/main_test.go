@@ -7,7 +7,6 @@ import (
 
 // TestServerFlagDefault pins the default value of `-server` so the
 // `make run-inverter` Makefile recipe and the binary agree out of the box.
-// See IEEE-026.
 func TestServerFlagDefault(t *testing.T) {
 	const want = "https://localhost:8443"
 

@@ -1,8 +1,8 @@
-// Package inverter_test ships the IEEE-030 case 6 (optional) endpoint
+// Package inverter_test ships an optional endpoint
 // constant scan: a build-tag-less unit test that fails on reintroduction
 // of the old hardcoded endpoint path literals in internal/inverter/client.go.
 //
-// Why this exists: IEEE-030 replaced four method signatures (Register,
+// Why this exists: a prior change replaced four method signatures (Register,
 // PutDERCapability and the DER PUT family, CreateMirrorUsagePoint,
 // PostMeterReading) that previously baked in `/edev`, `/edev/.../dercap`,
 // `/mup`, and `/mup/.../mr` strings. Per IEEE 2030.5 §10.3 / CSIP §6.6
@@ -21,8 +21,8 @@ import (
 )
 
 // forbiddenLiterals are path strings that MUST NOT appear as Go string
-// literals inside internal/inverter/client.go. They were removed by
-// IEEE-030 and any reintroduction means a callsite is hardcoding a path
+// literals inside internal/inverter/client.go. They were removed
+// and any reintroduction means a callsite is hardcoding a path
 // the spec requires to come from the link graph.
 //
 // Care: these are exact-match substrings. Literals like "/edev" alone
@@ -38,11 +38,11 @@ var forbiddenLiterals = []string{
 }
 
 // TestNoHardcodedEndpointConstants scans internal/inverter/client.go for
-// the IEEE-030-removed path literals. The check is line-based and skips
+// the removed path literals. The check is line-based and skips
 // lines that are entirely inside Go block/line comments : comments
 // referencing the old paths are documentation, not regressions.
 //
-// Optional IEEE-030 case 6 per the IEEE-069 ticket body.
+// Optional case.
 func TestNoHardcodedEndpointConstants(t *testing.T) {
 	t.Parallel()
 
@@ -101,7 +101,7 @@ func TestNoHardcodedEndpointConstants(t *testing.T) {
 
 		for _, bad := range forbiddenLiterals {
 			if strings.Contains(codePart, bad) {
-				t.Errorf("client.go:%d: forbidden hardcoded endpoint literal %q (IEEE-030 requires hrefs come from the link graph): %s",
+				t.Errorf("client.go:%d: forbidden hardcoded endpoint literal %q (hrefs must come from the link graph): %s",
 					i+1, bad, strings.TrimSpace(line))
 			}
 		}

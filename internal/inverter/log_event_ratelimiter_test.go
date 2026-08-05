@@ -1,4 +1,4 @@
-// IEEE-054 PerCodeLogEventLimiter unit tests.
+// PerCodeLogEventLimiter unit tests.
 //
 // Covers the contract documented on PerCodeLogEventLimiter:
 //  1. First Allow per code → true (no prior emit).

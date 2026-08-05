@@ -21,7 +21,7 @@ import (
 // HardwareModuleName SAN tolerant verify hook is in play. Returns the listen
 // URL and a stop func.
 //
-// Used by IEEE-028 idle-poll tests to count and sequence /dcap responses.
+// Used by idle-poll tests to count and sequence /dcap responses.
 func startIdleListener(t *testing.T, env *ccmTestEnv, handler http.Handler) (serverURL string, stop func()) {
 	t.Helper()
 
@@ -66,7 +66,7 @@ func writeDcap(t *testing.T, w http.ResponseWriter, d sep2.DeviceCapability) {
 // forever and never falls through to /edev (or any other phase-2+ path).
 // Context cancel exits the loop cleanly.
 //
-// IEEE-028 RED: without the wait helper, today's main.go fires Phase 2
+// Without the wait helper, main.go would fire Phase 2
 // immediately; with the helper, the loop owns the polling cadence.
 func TestEmptyDcapIdlesAndNeverRegisters(t *testing.T) {
 	env := newCCMTestEnv(t)
@@ -78,7 +78,7 @@ func TestEmptyDcapIdlesAndNeverRegisters(t *testing.T) {
 		dcapHits.Add(1)
 		writeDcap(t, w, sep2.DeviceCapability{PollRate: 1})
 	})
-	// Any of these getting hit is a correctness failure for IEEE-028.
+	// Any of these getting hit is a correctness failure.
 	for _, p := range []string{"/edev", "/mup", "/sdev", "/tm"} {
 		mux.HandleFunc(p, func(_ http.ResponseWriter, _ *http.Request) {
 			phase2Hits.Add(1)
@@ -153,7 +153,7 @@ func TestEmptyDcapIdlesAndNeverRegisters(t *testing.T) {
 // empty on the first two calls and populated on the third, the inverter
 // polls /dcap exactly three times then proceeds to POST /edev exactly once.
 //
-// IEEE-028 RED: today's main.go would POST /edev after the first Discover,
+// Without the wait helper, main.go would POST /edev after the first Discover,
 // regardless of advertised links.
 func TestDcapBecomesPopulated_ProceedsToPhase2(t *testing.T) {
 	env := newCCMTestEnv(t)
@@ -217,7 +217,7 @@ func TestDcapBecomesPopulated_ProceedsToPhase2(t *testing.T) {
 	}
 
 	// Now simulate Phase 2 : this is what main.go would do next. Pass the
-	// advertised EndDeviceListLink href per IEEE-030 (no hardcoded "/edev").
+	// advertised EndDeviceListLink href (no hardcoded "/edev").
 	if _, _, err := client.Register(ctx, final.EndDeviceListLink.Href); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

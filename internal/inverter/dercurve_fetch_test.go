@@ -1,4 +1,4 @@
-// Tests for IEEE-042 : DERCurve retrieval and curve-typed control
+// Tests for DERCurve retrieval and curve-typed control
 // application (Phase 5 closer).
 //
 // Three layers:
@@ -399,8 +399,8 @@ func TestApplyControlsWithCurves_EmptyCacheFallsBackToDefault(t *testing.T) {
 //
 // The controller's pre-existing quirk is that OpModVoltVar drives BOTH the
 // V/V reactive-power branch AND the V/W active-power-limit branch (the V/W
-// branch is gated on OpModVoltVar in controller.go : flagged in IEEE-041,
-// untouched in IEEE-042). The multi-mode test exploits this: a single
+// branch is gated on OpModVoltVar in controller.go : a known quirk,
+// untouched here). The multi-mode test exploits this: a single
 // non-nil OpModVoltVar lights both code paths so we can pin both curves.
 func TestApplyControlsWithCurves_MultiModeDispatch(t *testing.T) {
 	t.Parallel()

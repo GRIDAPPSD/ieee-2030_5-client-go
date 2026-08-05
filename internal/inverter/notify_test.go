@@ -375,7 +375,7 @@ func TestNotifyHandler_StatusCodes(t *testing.T) {
 
 // TestNotifyHandler_DispatcherInvoked asserts the dispatcher receives a
 // faithful copy of the parsed Notification on the happy path. This is the
-// IEEE-049 -> IEEE-051 seam: IEEE-051 will register the real dispatcher
+// This is the seam where the real dispatcher registers
 // against this same hook.
 func TestNotifyHandler_DispatcherInvoked(t *testing.T) {
 	t.Parallel()
@@ -585,7 +585,7 @@ func TestNotifyReceiver_RejectsUnsignedClient(t *testing.T) {
 
 // TestHMI_NotifyAddrRoundTrip asserts Set/Get symmetry on the HMI's new
 // notifyAddr field. The HMI is the operator-visible surface that exposes
-// the IEEE-049 listener bind address; correctness here is what lets the
+// the notify listener bind address; correctness here is what lets the
 // operator point a server-side subscription at the right port.
 func TestHMI_NotifyAddrRoundTrip(t *testing.T) {
 	t.Parallel()

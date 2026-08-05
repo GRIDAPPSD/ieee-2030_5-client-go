@@ -1,14 +1,13 @@
-// Package inverter_test integration tests for IEEE-046 : Centralized HTTP
+// Package inverter_test covers the centralized HTTP
 // response code router. These exercise (*SEP2Client).Get / Post / Put end-
-// to-end through the gotls listener fixture (shared with the IEEE-029 / -030
-// suite) and assert that each HTTP status code surfaces as the appropriate
+// to-end through the gotls listener fixture and assert that each HTTP
+// status code surfaces as the appropriate
 // typed error (ErrBadRequest, ErrNotFound, ErrMethodNotAllowed,
-// ErrNotImplemented, ErrResponseTransient, or *MovedError) per the plan-1
-// Phase 7 entry contract.
+// ErrNotImplemented, ErrResponseTransient, or *MovedError).
 //
-// Cases 1-9 cover the new router behavior. Case 10 pins the IEEE-029
+// Cases 1-9 cover the router behavior. Case 10 pins the
 // semantic sentinel (ErrEndDeviceNotFound) to be sure it has NOT been
-// unified with the new HTTP ErrNotFound : they are different concepts.
+// unified with the HTTP ErrNotFound : they are different concepts.
 package inverter_test
 
 import (
@@ -24,7 +23,7 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
-// IEEE-046 case 1: 200 OK GET returns the parsed body with no error.
+// Case 1: 200 OK GET returns the parsed body with no error.
 func TestRouter_GetReturnsParsedBody(t *testing.T) {
 	t.Parallel()
 	env := newCCMTestEnv(t)
@@ -47,9 +46,9 @@ func TestRouter_GetReturnsParsedBody(t *testing.T) {
 	}
 }
 
-// IEEE-046 case 2: 201 Created POST returns nil error and surfaces the
+// Case 2: 201 Created POST returns nil error and surfaces the
 // Location header. Register's first step is a POST to the EndDeviceList href;
-// the test server returns 201 + Location → client must return that URL.
+// the test server returns 201 + Location -> client must return that URL.
 func TestRouter_PostReturnsLocationOn201(t *testing.T) {
 	t.Parallel()
 	env := newCCMTestEnv(t)
@@ -81,7 +80,7 @@ func TestRouter_PostReturnsLocationOn201(t *testing.T) {
 	}
 }
 
-// IEEE-046 case 3: 204 No Content PUT returns nil error and no body.
+// Case 3: 204 No Content PUT returns nil error and no body.
 // PutDERStatus is the inverter-side helper exercised by the reporter.
 func TestRouter_PutReturnsNilOn204(t *testing.T) {
 	t.Parallel()
@@ -107,7 +106,7 @@ func TestRouter_PutReturnsNilOn204(t *testing.T) {
 	}
 }
 
-// IEEE-046 case 4: 400 Bad Request surfaces as ErrBadRequest via errors.Is.
+// Case 4: 400 Bad Request surfaces as ErrBadRequest via errors.Is.
 func TestRouter_GetMaps400ToErrBadRequest(t *testing.T) {
 	t.Parallel()
 	env := newCCMTestEnv(t)
@@ -124,7 +123,7 @@ func TestRouter_GetMaps400ToErrBadRequest(t *testing.T) {
 	}
 }
 
-// IEEE-046 case 5: 404 Not Found surfaces as ErrNotFound via errors.Is.
+// Case 5: 404 Not Found surfaces as ErrNotFound via errors.Is.
 func TestRouter_GetMaps404ToErrNotFound(t *testing.T) {
 	t.Parallel()
 	env := newCCMTestEnv(t)
@@ -141,7 +140,7 @@ func TestRouter_GetMaps404ToErrNotFound(t *testing.T) {
 	}
 }
 
-// IEEE-046 case 6: 405 Method Not Allowed surfaces as ErrMethodNotAllowed.
+// Case 6: 405 Method Not Allowed surfaces as ErrMethodNotAllowed.
 // Exercised via PUT (a method the server explicitly rejects).
 func TestRouter_PutMaps405ToErrMethodNotAllowed(t *testing.T) {
 	t.Parallel()
@@ -160,7 +159,7 @@ func TestRouter_PutMaps405ToErrMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// IEEE-046 case 7: 501 Not Implemented surfaces as ErrNotImplemented.
+// Case 7: 501 Not Implemented surfaces as ErrNotImplemented.
 // Exercised via POST (CreateMirrorUsagePoint).
 func TestRouter_PostMaps501ToErrNotImplemented(t *testing.T) {
 	t.Parallel()
@@ -178,7 +177,7 @@ func TestRouter_PostMaps501ToErrNotImplemented(t *testing.T) {
 	}
 }
 
-// IEEE-046 case 8 (revised by IEEE-047): stdlib auto-follow remains
+// Case 8: stdlib auto-follow remains
 // disabled : CheckRedirect must still return ErrUseLastResponse so 301s
 // reach classifyResponse rather than being silently swallowed by the
 // stdlib client. Surfacing as *MovedError is now visible at the
@@ -188,7 +187,7 @@ func TestRouter_PostMaps501ToErrNotImplemented(t *testing.T) {
 // the followed request through our own handler and counting hits : a
 // stdlib auto-follow would issue a second request without our 301-aware
 // wrapper running, so the followHits counter would be 1 even if our
-// IEEE-047 wrapper never fired. We assert that the wrapper *did* fire
+// wrapper never fired. We assert that the wrapper *did* fire
 // (one follow, body returned, no error), proving our path is in play
 // while stdlib's is not.
 func TestRouter_Get301FollowedOnceAndStdlibAutoFollowDisabled(t *testing.T) {
@@ -212,7 +211,7 @@ func TestRouter_Get301FollowedOnceAndStdlibAutoFollowDisabled(t *testing.T) {
 
 	dcap, err := client.Discover(testCtx(t))
 	if err != nil {
-		t.Fatalf("Discover: %v, want nil (IEEE-047 follows 301 once)", err)
+		t.Fatalf("Discover: %v, want nil (follows 301 once)", err)
 	}
 	if dcap.PollRate != 99 {
 		t.Errorf("dcap.PollRate = %d, want 99 (followed body returned)", dcap.PollRate)
@@ -221,11 +220,11 @@ func TestRouter_Get301FollowedOnceAndStdlibAutoFollowDisabled(t *testing.T) {
 		t.Errorf("redirectHits = %d, want 1 (one 301 issued)", redirectHits.Load())
 	}
 	if followHits.Load() != 1 {
-		t.Errorf("followHits = %d, want 1 (IEEE-047 follow-once fired exactly once)", followHits.Load())
+		t.Errorf("followHits = %d, want 1 (follow-once fired exactly once)", followHits.Load())
 	}
 }
 
-// IEEE-046 case 9: 5xx still maps to ErrResponseTransient : IEEE-043's
+// Case 9: 5xx still maps to ErrResponseTransient : this
 // pre-existing sentinel must survive the refactor so PostResponseWithRetry
 // and other callers keep working.
 func TestRouter_GetMaps5xxToErrResponseTransient(t *testing.T) {
@@ -244,10 +243,10 @@ func TestRouter_GetMaps5xxToErrResponseTransient(t *testing.T) {
 	}
 }
 
-// IEEE-046 case 10: ErrEndDeviceNotFound (IEEE-029, semantic) MUST stay
+// Case 10: ErrEndDeviceNotFound (semantic) MUST stay
 // distinct from ErrNotFound (HTTP). LookupOwnEndDevice against a /edev list
 // that returns 200 OK with our LFDI absent returns ErrEndDeviceNotFound :
-// NOT ErrNotFound. Pinning behavior so the IEEE-046 refactor cannot
+// NOT ErrNotFound. Pinning behavior so a router refactor cannot
 // accidentally collapse the two.
 func TestRouter_LookupOwnEndDeviceSemanticSentinel(t *testing.T) {
 	t.Parallel()

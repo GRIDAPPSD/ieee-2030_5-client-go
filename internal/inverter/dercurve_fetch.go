@@ -8,7 +8,7 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
-// DERCurve retrieval (IEEE-042 / Phase 5 closer) ===============================
+// DERCurve retrieval (Phase 5 closer) ===============================
 //
 // CSIP V1.2 CORE-012 step 6 ("apply the active event") requires the DER Client
 // to honor curve-based controls when the active DERControl runs a curve-typed
@@ -25,12 +25,12 @@ import (
 //   - MapCurveData: pure converter from []sep2.CurveData (int32 XY tuples)
 //     to []CurvePoint (float64). EvaluateCurve consumes the latter.
 //   - FetchProgramCurves: one-shot fetch + cache-population helper. Wraps
-//     SEP2Client.GetDERCurveList (added in IEEE-036) and routes each curve
+//     SEP2Client.GetDERCurveList and routes each curve
 //     into the cache by CurveType. Errors are wrapped with %w so the caller
 //     can errors.Is against context.Canceled / DeadlineExceeded.
 //
-// Out of scope for IEEE-042:
-//   - DefaultDERControl curves : only active-event curves in this ticket;
+// Out of scope for this file:
+//   - DefaultDERControl curves : only active-event curves are covered here;
 //     a follow-up can reuse the same cache + helper if it bites.
 //   - Adding new inverter modes (dedicated Volt/Watt, Watt/PF). controller.go
 //     already routes V/V via the OpModVoltVar guard; new mode files are

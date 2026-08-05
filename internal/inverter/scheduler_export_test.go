@@ -6,8 +6,8 @@ import (
 )
 
 // Test-binary-only constructor and accessors for the scheduler. Linked into
-// the _test binary only (file ends in _test.go). Pattern mirrors IEEE-038's
-// dercontrol_poll_export_test.go and IEEE-028's poll_export_test.go.
+// the _test binary only (file ends in _test.go). Pattern mirrors
+// dercontrol_poll_export_test.go and poll_export_test.go.
 //
 // The production NewScheduler signature accepts a *rand.Rand directly, so
 // no separate "production" vs "test" seam is strictly required to drive

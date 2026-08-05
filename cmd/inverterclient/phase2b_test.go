@@ -1,11 +1,12 @@
 package main
 
-// Backfill of the 8 deferred Phase 2b integration cases from IEEE-071 PR #91.
-// IEEE-074 extracted Phase 2b out of main() into runPhase2bRegistration so
-// these cases : previously blocked by inline-in-main + log.Fatalf : can be
-// driven directly.
+// Backfill of the 8 deferred Phase 2b integration cases
+// (GRIDAPPSD/ieee-2030_5-server-go#89). Phase 2b was
+// extracted out of main() into runPhase2bRegistration
+// (GRIDAPPSD/ieee-2030_5-server-go#103) so these cases : previously
+// blocked by inline-in-main + log.Fatalf : can be driven directly.
 //
-// Reuses the main-package test bedrock established by IEEE-073:
+// Reuses the main-package test bedrock:
 //   - derWalkTestEnv / newDERWalkTestEnv      (TLS fixture + device cert)
 //   - startDERWalkListener                    (gotls HTTPS server)
 //   - newDERWalkClient                        (production SEP2Client)
@@ -14,34 +15,34 @@ package main
 // test files. Renaming them here would invent test-scaffolding duplication
 // Pike's HARD RULE 2 forbids; the existing helpers are perfectly serviceable.
 //
-// Cases shipped (from IEEE-071 PR #91 "Cases deferred (8)" table):
+// Cases covered:
 //
 //   1. TestRunPhase2b_ExpectedPINZero_SkipsMatchCheck
-//        IEEE-033 #1: cfg.ExpectedPIN == 0 → log "skipping match check",
+//        cfg.ExpectedPIN == 0: log "skipping match check",
 //        no idle, return nil.
 //   2. TestRunPhase2b_PINMatchesProceed
-//        IEEE-034 #3: cfg.ExpectedPIN == rg.PIN → log "matches expected;
+//        cfg.ExpectedPIN == rg.PIN: log "matches expected;
 //        proceeding", return nil.
 //   3. TestRunPhase2b_GetRegistration500ReturnsFatal
-//        IEEE-033 #5: GET Registration 500 → *phase2bFatal containing
+//        GET Registration 500: *phase2bFatal containing
 //        "GET Registration".
 //   4. TestRunPhase2b_NonZeroMismatchReturnsFatal
-//        IEEE-034 #2: rg.PIN != 0 && rg.PIN != cfg.ExpectedPIN →
+//        rg.PIN != 0 && rg.PIN != cfg.ExpectedPIN:
 //        *phase2bFatal containing "PIN mismatch" + "CSIP V1.2 BASIC-001
 //        step 5" + redacted-PIN regex.
 //   5. TestRunPhase2b_ServerPINZeroIdleThenMatch
-//        IEEE-034 #1: rg.PIN == 0 idle, then rg.PIN provisions to
-//        ExpectedPIN → match + proceed.
+//        rg.PIN == 0 idle, then rg.PIN provisions to
+//        ExpectedPIN: match + proceed.
 //   6. TestRunPhase2b_MissingRegistrationLinkIdleThenAppears
-//        IEEE-034 #4: edev.RegistrationLink == nil + CSIP-strict → idle on
+//        edev.RegistrationLink == nil + CSIP-strict: idle on
 //        LookupOwnEndDevice, then RegistrationLink appears, GET fires once,
 //        return nil.
 //   7. TestRunPhase2b_AllowUnregisteredBypassesMissingLink
-//        IEEE-034 #5: edev.RegistrationLink == nil + cfg.AllowUnregistered
-//        → log skip, return immediately, zero GETs.
+//        edev.RegistrationLink == nil + cfg.AllowUnregistered:
+//        log skip, return immediately, zero GETs.
 //   8. TestRunPhase2b_CtxCancelDuringServerPINZeroIdle
-//        IEEE-033 #8 / IEEE-034 #8: ctx-cancel during the rg.PIN==0 idle
-//        loop → return ctx.Err(), clean shutdown under -race.
+//        ctx-cancel during the rg.PIN==0 idle
+//        loop: return ctx.Err(), clean shutdown under -race.
 
 import (
 	"bytes"
@@ -63,7 +64,7 @@ import (
 // inside one test don't race on the global-writer swap. The bigger
 // constraint : callers MUST NOT be t.Parallel() because any sibling
 // parallel test emitting log.Printf lines will land in the captured
-// buffer : is documented on captureLog below (IEEE-081).
+// buffer: is documented on captureLog below.
 var captureLogMu sync.Mutex
 
 // captureLog redirects the default logger's output to a bytes.Buffer for
@@ -71,7 +72,7 @@ var captureLogMu sync.Mutex
 // t.Cleanup; callers may call .String() on the returned buffer to assert
 // on emitted lines.
 //
-// IEEE-081 contract: Tests that capture the log MUST NOT use t.Parallel().
+// Contract: Tests that capture the log MUST NOT use t.Parallel().
 // log.Default() is process-global state and any t.Parallel() sibling test
 // that emits log.Printf lines will write into the captured buffer AND
 // race buf.String(). Go's testing runtime runs serial tests in a single
@@ -101,7 +102,7 @@ func captureLog(t *testing.T) *bytes.Buffer {
 
 // shrinkPhase2bPoll compresses the package-level poll floor/default for the
 // duration of the test so idle-loop tests run at sub-second cadence without
-// faking time. Mirrors SetMinTimeSyncPollRateForTesting (IEEE-070).
+// faking time. Mirrors SetMinTimeSyncPollRateForTesting.
 //
 // Tests that shrink the floor MUST NOT use t.Parallel(): the vars are
 // process-global state. The same constraint applies to captureLog above,
@@ -153,7 +154,7 @@ func buildEdevListWithLFDI(lfdi string, regLink *sep2.Link) sep2.EndDeviceList {
 	}
 }
 
-// TestRunPhase2b_ExpectedPINZero_SkipsMatchCheck : IEEE-033 #1.
+// TestRunPhase2b_ExpectedPINZero_SkipsMatchCheck : case 1.
 //
 // cfg.ExpectedPIN == 0 means the operator opted out of the match check.
 // Phase 2b reads the Registration resource once, logs the redacted
@@ -203,7 +204,7 @@ func TestRunPhase2b_ExpectedPINZero_SkipsMatchCheck(t *testing.T) {
 	}
 }
 
-// TestRunPhase2b_PINMatchesProceed : IEEE-034 #3.
+// TestRunPhase2b_PINMatchesProceed : case 3.
 //
 // cfg.ExpectedPIN == rg.PIN: log the CSIP commissioning signal
 // ("matches expected; proceeding") and return nil. This exact substring is
@@ -247,7 +248,7 @@ func TestRunPhase2b_PINMatchesProceed(t *testing.T) {
 	}
 }
 
-// TestRunPhase2b_GetRegistration500ReturnsFatal : IEEE-033 #5.
+// TestRunPhase2b_GetRegistration500ReturnsFatal : case 5.
 //
 // GET Registration returns 500. runPhase2bRegistration must return
 // *phase2bFatal wrapping "GET Registration"; no log.Fatalf, no panic.
@@ -290,13 +291,13 @@ func TestRunPhase2b_GetRegistration500ReturnsFatal(t *testing.T) {
 	}
 }
 
-// TestRunPhase2b_NonZeroMismatchReturnsFatal : IEEE-034 #2.
+// TestRunPhase2b_NonZeroMismatchReturnsFatal : case 2.
 //
 // rg.PIN != 0 && rg.PIN != cfg.ExpectedPIN: wrong-device/server pair.
 // runPhase2bRegistration returns *phase2bFatal whose Error() contains
 // "PIN mismatch", "CSIP V1.2 BASIC-001 step 5", and BOTH PINs in the
 // redacted ***NN form. The cleartext PINs must NOT appear anywhere in
-// the message (IEEE 2030.5 §8.2.1 / IEEE-034 case 7 invariant).
+// the message (IEEE 2030.5 §8.2.1 invariant).
 func TestRunPhase2b_NonZeroMismatchReturnsFatal(t *testing.T) {
 	_ = captureLog(t)
 
@@ -357,7 +358,7 @@ func TestRunPhase2b_NonZeroMismatchReturnsFatal(t *testing.T) {
 	}
 }
 
-// TestRunPhase2b_ServerPINZeroIdleThenMatch : IEEE-034 #1.
+// TestRunPhase2b_ServerPINZeroIdleThenMatch : case 1.
 //
 // Server hasn't provisioned us yet: first Registration GET returns PIN=0.
 // runPhase2bRegistration idles on registration.PollRate (shrunk to 10ms),
@@ -408,7 +409,7 @@ func TestRunPhase2b_ServerPINZeroIdleThenMatch(t *testing.T) {
 	}
 }
 
-// TestRunPhase2b_MissingRegistrationLinkIdleThenAppears : IEEE-034 #4.
+// TestRunPhase2b_MissingRegistrationLinkIdleThenAppears : case 4.
 //
 // CSIP-strict + edev.RegistrationLink == nil: idle re-fetching the
 // EndDevice via LookupOwnEndDevice on dcap.PollRate. First lookup returns
@@ -475,7 +476,7 @@ func TestRunPhase2b_MissingRegistrationLinkIdleThenAppears(t *testing.T) {
 	}
 }
 
-// TestRunPhase2b_AllowUnregisteredBypassesMissingLink : IEEE-034 #5.
+// TestRunPhase2b_AllowUnregisteredBypassesMissingLink : case 5.
 //
 // edev.RegistrationLink == nil + cfg.AllowUnregistered=true: log the
 // bypass and return nil immediately. No EndDeviceList GET, no Registration
@@ -514,18 +515,18 @@ func TestRunPhase2b_AllowUnregisteredBypassesMissingLink(t *testing.T) {
 	}
 }
 
-// TestRunPhase2b_CtxCancelDuringServerPINZeroIdle : IEEE-033 #8 / IEEE-034 #8.
+// TestRunPhase2b_CtxCancelDuringServerPINZeroIdle : case 8.
 //
 // Server keeps returning rg.PIN=0 (never provisions). runPhase2bRegistration
 // is parked in the PIN-zero idle loop on a 10ms cadence. Cancelling ctx
 // must unwind the function promptly. Two acceptable outcomes:
 //
-//   - Cancel fires while the loop is blocked in the idle select →
+//   - Cancel fires while the loop is blocked in the idle select ->
 //     ctx.Err() returned directly. Cleanest path.
-//   - Cancel fires while a Registration GET is in flight → SEP2Client
+//   - Cancel fires while a Registration GET is in flight -> SEP2Client
 //     wraps the ctx-cancel error from net/http; runPhase2bRegistration
-//     wraps THAT in *phase2bFatal (because the production behavior frozen
-//     at IEEE-034 calls log.Fatalf unconditionally on GetRegistration
+//     wraps THAT in *phase2bFatal (because the frozen production behavior
+//     calls log.Fatalf unconditionally on GetRegistration
 //     errors, including ctx-cancel). errors.Is(err, context.Canceled) is
 //     still true through the chain.
 //

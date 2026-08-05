@@ -1,4 +1,4 @@
-// Test-binary-only seam for IEEE-045's `PostResponseWithRetry`.
+// Test-binary-only seam for `PostResponseWithRetry`.
 //
 // The production helper relies on the unexported `retryClock` interface
 // for its sleep-vs-cancel seam. Tests need to substitute a deterministic

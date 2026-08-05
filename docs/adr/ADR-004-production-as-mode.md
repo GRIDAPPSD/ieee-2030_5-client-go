@@ -2,7 +2,7 @@
 
 Date: 2026-06-23
 Status: Accepted
-Extends: ADR-003 (type-level role separation), IEEESIM-004
+Extends: ADR-003 (type-level role separation)
 
 ## Context
 
@@ -10,14 +10,13 @@ The IEEE 2030.5 inverter client has two axes of variation:
 
 1. The **device backend**: what source of physical state the tick loop reads and
    writes (Synthetic scenario harness, GridLAB-D co-simulation, or real
-   SunSpec/Modbus hardware). This seam landed in IEEESIM-003.
+   SunSpec/Modbus hardware).
 
 2. The **consumer-policy role**: what the notification dispatcher does with a
    decoded notification (the simulator refreshes the DERControlCache so the
    Phase 5 state machine picks up the change on its next tick; a production
    deployment may additionally emit audit records, take an urgent fast path, or
-   revert a physical setpoint on subscription cancellation). This seam lands in
-   IEEESIM-004.
+   revert a physical setpoint on subscription cancellation).
 
 These are independent axes. The production deployment path is:
 
@@ -31,7 +30,7 @@ The simulator deployment path is the existing default:
 inverterclient  (or --role simulator --backend synthetic)
 ```
 
-A dry-run commissioning path is also valid (Fork C decision, IEEESIM-004):
+A dry-run commissioning path is also valid (Fork C decision):
 
 ```
 inverterclient --role production --backend synthetic
@@ -99,7 +98,7 @@ Section 7) verbatim. The two must not drift.
 ## Consequences
 
 - The simulator path is UNCHANGED. Default `--role simulator` is identical to
-  the pre-IEEESIM-004 behavior at the byte level.
+  the previous behavior at the byte level.
 - The `PhaseStateDispatcher` type is relocated from `package inverter` to
   `package dispatch` (renamed `SimulatorDispatcher`) for topology symmetry with
   the device seam. Behavior is unchanged; only the package path changes.

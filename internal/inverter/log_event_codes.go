@@ -1,14 +1,13 @@
 // Package inverter : IEEE 2030.5 Table 34 LogEvent code constants (PEN 0
-// general category), consumed by the IEEE-054 alarm detectors.
+// general category), consumed by the alarm detectors.
 //
 // CSIP V1.2 BASIC-027 requires the DER Client to POST a LogEvent on each
 // alarm-class state transition (LVRT trip, HVRT trip, freq-watt curtailment,
 // inverter offline, manufacturer-specific faults). Each LogEvent carries a
 // logEventCode whose meaning is namespaced by logEventPEN: when PEN == 0
 // the codes are interpreted per IEEE 2030.5-2018 §9.5 Table 34 ("general"
-// category). The mapping below comes from the Phase 9 doc
-// (plans/plan-1-csip-client-conformance/phase-9-logevent-reporting.md)
-// and is the same set the IEEE-053 emitter unit tests treat as the
+// category). The mapping below is
+// the same set the emitter unit tests treat as the
 // reference (code 1 → LVRT, code 5 → Volt/Var curtailment, etc).
 //
 // Future Pike: if the production deployment registers a PEN with IANA and

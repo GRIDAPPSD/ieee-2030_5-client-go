@@ -35,7 +35,7 @@ func NewHMI() *HMI {
 	}
 }
 
-// SetNotifyAddr records the bound address of the IEEE-049 Notification
+// SetNotifyAddr records the bound address of the Notification
 // receiver so the dashboard can surface it to the operator. Empty string
 // signals "no listener bound." Safe to call concurrently with reads.
 func (h *HMI) SetNotifyAddr(addr string) {
@@ -80,7 +80,7 @@ func (h *HMI) Handler() http.Handler {
 	return mux
 }
 
-// handleNotifyAddr returns the IEEE-049 Notification receiver address as
+// handleNotifyAddr returns the Notification receiver address as
 // plain text. Returns the literal "disabled" when no address is recorded.
 // Useful for operator scripts that want to know where to point a server-
 // side subscription POST.

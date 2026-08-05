@@ -1,10 +1,10 @@
-// IEEE-050 Phase 8 ticket 2 of 4: register Subscriptions with the SEP2
-// server so it can POST Notifications to the IEEE-049 /notify listener.
+// Phase 8 ticket 2 of 4: register Subscriptions with the SEP2
+// server so it can POST Notifications to the /notify listener.
 //
 // Extracted into its own file so the helper has a function seam for the
 // unit tests in subscription_register_test.go, and so main.go stays close
 // to its previous size. Pattern mirrors notify_receiver.go's graceful-
-// bypass philosophy (IEEE-048): a failed subscription registration is a
+// bypass philosophy: a failed subscription registration is a
 // degrade-to-polling event, never a crash.
 
 package main
@@ -64,7 +64,7 @@ type subscriptionPoster interface {
 
 // registerSubscriptions POSTs Subscriptions on behalf of the inverter for
 // each resource it cares about. Called after Phase 2b registration completes
-// and the IEEE-049 NotifyReceiver is up.
+// and the NotifyReceiver is up.
 //
 // Bypass policy (all log + continue, never fatal):
 //   - notifyURL == "" (no receiver up) → log "disabled" and return empty map.
@@ -78,9 +78,9 @@ type subscriptionPoster interface {
 //   - PostSubscription returns any other error → log warning, continue with
 //     the next resource. Future resources may still succeed.
 //
-// Returns a *subscriptionRegistry (IEEE-052) : a mutex-guarded wrapper
+// Returns a *subscriptionRegistry: a mutex-guarded wrapper
 // around the subscribed-resource-href → server-assigned-subscription-href
-// map. IEEE-052 wires registry.CancelHookFunc() as the dispatcher's
+// map. The caller wires registry.CancelHookFunc() as the dispatcher's
 // CancelHook so status=1 notifications free the inverter-side entry.
 // Always returns a non-nil registry so callers can wire it
 // unconditionally; an empty registry is a no-op for the cancel hook.
@@ -128,7 +128,7 @@ func registerSubscriptions(
 		subHref, err := client.PostSubscription(ctx, listHref, t.href, notifyURL)
 		if err != nil {
 			if errors.Is(err, inverter.ErrMethodNotAllowed) {
-				log.Printf("Subscription register: server returned 405 on %s; subscriptions not supported, polling-only fallback (IEEE-050)", t.label)
+				log.Printf("Subscription register: server returned 405 on %s; subscriptions not supported, polling-only fallback ", t.label)
 				return out
 			}
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

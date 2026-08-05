@@ -2,11 +2,10 @@ package main
 
 // Phase 3: DER Setup : GET the DERList advertised by EndDevice.DERListLink.
 //
-// Extracted from main() by IEEE-048 so the previously-fatal `log.Fatalf` call
+// Extracted from main() so the previously-fatal `log.Fatalf` call
 // site on `client.Get(ctx, edev.DERListLink.Href, &derList)` failure can be
 // replaced with graceful bypass and driven by a test against a stub server.
-// Phase 7 exit criterion (1) in
-// `plans/plan-1-csip-client-conformance/phase-7-http-semantics.md` requires
+// Phase 7 exit criterion (1) requires
 // the inverter to log a clear warning and continue when the server returns
 // 404/501 on an optional function-set link. The DER setup PUTs that follow
 // the list fetch (DERCapability, DERSettings, DERStatus discovery) are
@@ -15,7 +14,7 @@ package main
 // : Phase 5 status reporting is gated separately on `derStatusHref` which
 // stays empty and produces its own "status reporting disabled" log line.
 //
-// Behavior contract (preserves IEEE-047 happy path byte-for-byte):
+// Behavior contract (preserves the happy path byte-for-byte):
 //
 //   - GET succeeds: return (list, true, "", nil). Caller proceeds with the
 //     existing inline Phase 3 setup loop.
@@ -30,12 +29,12 @@ package main
 //     return (zero, false, "", nil). The previous inline form called
 //     log.Fatalf here; the Phase 7 graceful-bypass policy is that the DER
 //     setup is non-essential and the inverter must keep running.
-//   - IEEE-047 newHref is surfaced unchanged to the caller (one-shot in
+//   - newHref is surfaced unchanged to the caller (one-shot in
 //     Phase 3 : the inverter does not cache the DER list href, but main()
 //     logs the redirect for diagnostics).
 //
 // log.Fatalf intentionally does NOT appear in this helper. The whole point
-// of IEEE-048 is to replace the fatal-on-DER-list-failure call site. Tests
+// of this extraction is to replace the fatal-on-DER-list-failure call site. Tests
 // in phase3_derlist_test.go drive each branch via a stub gotls listener so
 // the regression guard fires if anyone re-adds a Fatalf here.
 

@@ -1,8 +1,8 @@
-// IEEE-053 PostLogEvent unit tests.
+// PostLogEvent unit tests.
 //
-// Covers the matrix declared in backlog IEEE-053 plus the rate-limit /
-// time-source seams the ticket calls out: 201 happy path, empty href →
-// ErrLogEventLinkAbsent (no HTTP), rate-limit deny → ErrRateLimited (no
+// Covers the rate-limit /
+// time-source seams: 201 happy path, empty href ->
+// ErrLogEventLinkAbsent (no HTTP), rate-limit deny -> ErrRateLimited (no
 // HTTP), 405 graceful-bypass, 500 wrapped 5xx, 400 wrapped 4xx, body
 // shape (PEN + LogEventCode + createdDateTime round-trip), createdDateTime
 // derived from c.Now() not time.Now() (testable time source),

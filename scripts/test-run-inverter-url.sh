@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# IEEE-026: verify `make run-inverter` honors a SERVER_URL env override.
+# Verify `make run-inverter` honors a SERVER_URL env override.
 #
 # Uses `make -n` to get the recipe expansion without actually building or
 # starting the simulator. Greps the expansion for the override value.

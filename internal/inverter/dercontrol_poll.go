@@ -12,7 +12,7 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
-// DERControl polling (IEEE-038 / Phase 5 entry) ===============================
+// DERControl polling (Phase 5 entry) ===============================
 //
 // CSIP V1.2 CORE-012 procedure step 6 requires the DER Client to periodically
 // poll its associated DERControl resource and observe Status changes. This
@@ -23,16 +23,16 @@ import (
 //     at the supplied href via the existing SEP2Client.GetDERControlList
 //     (paged with ?l=255 already), and refreshes the supplied cache.
 //   - DERControlCache stores the latest snapshot keyed by mRID and exposes a
-//     pure Diff method so later Phase 5 tickets (IEEE-039 scheduler,
-//     IEEE-040 state machine) can react to added / updated / cancelled
+//     pure Diff method so later Phase 5 consumers (the scheduler,
+//     the state machine) can react to added / updated / cancelled
 //     events without touching the cache internals.
 //
-// Out of scope for IEEE-038:
-//   - Event scheduling and randomization (IEEE-039).
-//   - DEFAULT/EVENT_RECEIVED/EVENT_STARTED state machine (IEEE-040).
-//   - Replacing ApplyControls(nil, ...) at main.go:667 (IEEE-041).
-//   - DERCurve retrieval (IEEE-042).
-//   - Response POSTs on status transitions (Phase 6 / IEEE-043+).
+// Out of scope for this file:
+// - Event scheduling and randomization.
+// - DEFAULT/EVENT_RECEIVED/EVENT_STARTED state machine.
+// - Replacing ApplyControls(nil,...) at main.go:667.
+// - DERCurve retrieval.
+//   - Response POSTs on status transitions (Phase 6).
 
 // defaultDERControlPollDuration maps an IEEE 2030.5 pollRate (seconds,
 // uint32) to a time.Duration with the project's standard floor (60s) and
@@ -54,8 +54,9 @@ func defaultDERControlPollDuration(pollRateSec uint32) time.Duration {
 // derControlPollDurationPtr holds the current mapper. Stored in an
 // atomic.Pointer so tests can swap in a tight cadence
 // (SetDERControlPollDurationForTesting) while
-// (*SEP2Client).PollDERControlList reads on its own goroutine : no race
-// (IEEE-081). Pattern mirrors IEEE-028's pollDuration.
+// (*SEP2Client).PollDERControlList reads on its own goroutine : no race.
+// Mirrors the pollDuration testability seam pattern used elsewhere in
+// this package.
 var derControlPollDurationPtr atomic.Pointer[pollDurationFunc]
 
 func init() {
@@ -73,8 +74,8 @@ func derControlPollDuration(pollRateSec uint32) time.Duration {
 // mRID. The zero value is NOT ready for use : callers must construct via
 // NewDERControlCache so the underlying map is non-nil.
 //
-// Concurrency: an RWMutex guards the map. IEEE-039+ will read frequently
-// (via Snapshot) and write only on each pollRate tick, so RW is the right
+// Concurrency: an RWMutex guards the map. The scheduler reads frequently
+// (via Snapshot) and writes only on each pollRate tick, so RW is the right
 // shape from day one. The mutex is held only briefly: never across an HTTP
 // call, only while swapping or copying map entries.
 type DERControlCache struct {
@@ -109,7 +110,7 @@ func (c *DERControlCache) Len() int {
 }
 
 // Diff compares `next` (a freshly polled DERControlList contents) against the
-// current cache state and returns the changes a consumer (IEEE-039+ scheduler
+// current cache state and returns the changes a consumer (the scheduler
 // / state machine) needs to act on:
 //
 //   - added:     mRIDs present in `next` but not in the cache.
@@ -187,13 +188,14 @@ func derControlCurrentStatus(c sep2.DERControl) uint8 {
 //
 //	go client.PollDERControlList(ctx, href, dcap.PollRate, cache)
 //
-// matching the precedent set by RunTimeSync (IEEE-031).
+// matching the precedent set by RunTimeSync.
 //
 // On each tick the loop GETs the list (reusing GetDERControlList's paging),
 // calls cache.Refresh, and logs the delta counts derived from cache.Diff
 // (computed before Refresh so the diff reflects new vs prior state). The
-// diff is logged at INFO; future tickets (IEEE-039+) consume the diff via
-// their own Diff calls against a shared cache snapshot.
+// diff is logged at INFO; downstream consumers (the scheduler, the state
+// machine) consume the diff via their own Diff calls against a shared cache
+// snapshot.
 //
 // pollRate is clamped to a 60s floor and a 30min default-on-zero by
 // derControlPollDuration : same convention pinPollInterval applies in
@@ -224,7 +226,7 @@ func (c *SEP2Client) PollDERControlList(
 	log.Printf("DERControlList poll: starting href=%s interval=%s", href, interval)
 
 	// Initial tick fires immediately so the cache populates without waiting
-	// a full interval : IEEE-039+ schedulers need a snapshot at startup.
+	// a full interval : the scheduler needs a snapshot at startup.
 	if newHref, err := c.pollDERControlListOnce(ctx, href, cache); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
@@ -263,7 +265,7 @@ func (c *SEP2Client) PollDERControlList(
 // the loop body stays small and tests can drive the I/O path directly. The
 // mutex is held only inside Diff/Refresh, never across the GET.
 //
-// IEEE-047: when the GET follows a 301, the new href (with paging query
+// When the GET follows a 301, the new href (with paging query
 // stripped) is returned so the calling loop can update its local cached
 // href and stop paying a redirect on every subsequent tick. Empty newHref
 // means no follow happened.

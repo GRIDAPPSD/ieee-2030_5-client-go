@@ -2,7 +2,7 @@ package main
 
 // Phase 2b: Registration resource read + PIN match check + commissioning gate.
 //
-// Extracted from main() by IEEE-074 to give the deferred IEEE-071 integration
+// Extracted from main() to give the deferred integration
 // cases a function seam to test against. The previous inline form lived
 // straight inside main() and called log.Fatalf on the fatal paths (missing-
 // link-lost mid-poll, GET error, non-zero PIN mismatch), which tears down
@@ -15,7 +15,8 @@ package main
 // resource (PIN-not-yet-provisioned). It does not touch the upstream
 // EndDeviceList lookup / Register POST path: those still live in main().
 //
-// Behavior contract (frozen at IEEE-034 / 4965474; verified identical):
+// Behavior contract (frozen; verified identical
+// against GRIDAPPSD/ieee-2030_5-server-go#46):
 //
 //   - edev.RegistrationLink == nil && (!cfg.CSIP || cfg.AllowUnregistered):
 //     log "skipping Phase 2b" once, return edev unchanged.
@@ -38,18 +39,18 @@ package main
 //         the literal "PIN mismatch" + "CSIP V1.2 BASIC-001 step 5" + both
 //         PINs redacted via redactPIN.
 //
-// All redactPIN calls preserved (IEEE-034 §8.2.1).
+// All redactPIN calls preserved (IEEE 2030.5 §8.2.1).
 //
 // log.Fatalf stays in main() for two reasons:
 //   1. Exit-code preservation: log.Fatalf calls os.Exit(1); pushing the call
 //      down here would shrink testability gains we just made.
-//   2. Pattern symmetry with walkDERProgramTree (IEEE-036), which also
+// 2. Pattern symmetry with walkDERProgramTree, which also
 //      returns wrapped errors and lets the outer main() owner log.Fatalf.
 //
 // Test seam: phase2bPollMin and phase2bPollDefault are vars (not consts) so
 // phase2b_test.go can shrink the floor below 60s without faking time. The
 // production pinPollInterval() helper is unchanged : these vars shadow its
-// policy only inside runPhase2bRegistration. Mirrors IEEE-070's
+// policy only inside runPhase2bRegistration. Mirrors the
 // minTimeSyncPollRate pattern. The production binary never writes to these.
 
 import (
@@ -84,7 +85,7 @@ func (e *phase2bFatal) Error() string { return e.reason }
 func (e *phase2bFatal) Unwrap() error { return e.inner }
 
 // phase2bPollMin and phase2bPollDefault mirror the floor/default applied by
-// pinPollInterval. Declared as vars so the IEEE-074 tests can shrink the
+// pinPollInterval. Declared as vars so the tests can shrink the
 // floor without faking time; see phase2b_test.go. Production behavior is
 // identical to the previous inline form (60s floor, 30min default-on-zero).
 var (
@@ -146,7 +147,7 @@ func runPhase2bRegistration(
 			if edevListHref == "" {
 				return edev, &phase2bFatal{reason: "EndDeviceListLink lost between polls; cannot re-lookup own EndDevice"}
 			}
-			// IEEE-047: on 301 LookupOwnEndDevice surfaces the new edev-list
+			// On 301 LookupOwnEndDevice surfaces the new edev-list
 			// base href; update our local copy so the next idle iteration
 			// hits the new URL directly. The follow has already happened
 			// inside LookupOwnEndDevice : newEdev is the live response.

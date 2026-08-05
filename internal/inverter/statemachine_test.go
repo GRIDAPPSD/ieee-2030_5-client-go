@@ -1,4 +1,4 @@
-// Tests for IEEE-040 : DERControl event state machine (Phase 5 ticket 3 of 5).
+// Tests for the DERControl event state machine (Phase 5 ticket 3 of 5).
 //
 // The state machine is a pure data structure: no goroutine, no I/O, no real
 // time.Now(). Every test injects a fixed-time clock via the helpers and
@@ -105,7 +105,7 @@ func recordingHook() (hook inverter.TransitionHook, drain func() []transitionRec
 }
 
 // cancelledControl returns a DERControl with EventStatus.CurrentStatus=2
-// matching IEEE-038's cancellation surface. The caller's mRID and start
+// matching the cache's cancellation surface. The caller's mRID and start
 // fields are copied so the cancelled slice shape mirrors what
 // DERControlCache.Diff produces.
 func cancelledControl(src sep2.DERControl) sep2.DERControl {

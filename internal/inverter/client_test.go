@@ -1,16 +1,13 @@
-// Package inverter_test backfills the deferred test coverage for IEEE-029
-// (LookupOwnEndDevice, ErrEndDeviceNotFound, --csip flag plumbing) and
-// IEEE-030 (four href-taking method signatures replacing string-formatted
-// paths). The deferred-tests Craig override (2026-05-12) was lifted later
-// the same day; this file is the first plan-3-csip-test-debt-sweep
-// deliverable (Phase 1 / IEEE-069).
+// Package inverter_test covers LookupOwnEndDevice, ErrEndDeviceNotFound,
+// --csip flag plumbing, and the four href-taking method signatures that
+// replaced string-formatted paths. See GRIDAPPSD/ieee-2030_5-server-go#82.
 //
-// Origin tickets are MERGED : behavior is frozen. These tests assert frozen
+// This behavior is frozen. These tests assert frozen
 // behavior; they do not exercise unmerged future changes. If a test reveals
 // a defect, the project policy is to file a separate MEDIUM ticket : do not
 // fix inline.
 //
-// Fixture pattern mirrors internal/inverter/idle_test.go (IEEE-028): each
+// Fixture pattern mirrors internal/inverter/idle_test.go: each
 // test stands up a gotls-backed HTTPS server via the shared ccmTestEnv from
 // client_ccm_test.go and routes requests with a per-test http.ServeMux.
 // HTTP-method-keyed atomic counters detect unintended fan-out.
@@ -65,15 +62,15 @@ func writeEdev(t *testing.T, w http.ResponseWriter, edev sep2.EndDevice) {
 	}
 }
 
-// otherLFDI is a deterministic non-matching LFDI used in IEEE-029 case 3.
+// otherLFDI is a deterministic non-matching LFDI used in case 3 below.
 // 40 uppercase hex chars matches the internal/tls.LFDI("%X", ...) format.
 const otherLFDI = "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"
 
 // =============================================================================
-// IEEE-029 cases 1-4: LookupOwnEndDevice + --csip flag plumbing
+// LookupOwnEndDevice + --csip flag plumbing
 // =============================================================================
 
-// TestLookupOwnEndDevice_FindsByLFDI exercises IEEE-029 case 1:
+// TestLookupOwnEndDevice_FindsByLFDI exercises case 1:
 // --csip on, server /edev list contains our LFDI → LookupOwnEndDevice
 // succeeds; Phase 3 (DER setup) fires exactly once afterward.
 //
@@ -133,7 +130,7 @@ func TestLookupOwnEndDevice_FindsByLFDI(t *testing.T) {
 	}
 
 	// Phase 3 fires exactly once : drive PutDERCapability through the
-	// href the server advertised. Per IEEE-030 the production code
+	// href the server advertised. The production code
 	// derives this href from the parsed EndDevice's DERListLink rather
 	// than constructing it from ID segments.
 	if err := client.PutDERCapability(ctx, edev.DERListLink.Href+"/1/dercap", sep2.DERCapability{}); err != nil {
@@ -148,7 +145,7 @@ func TestLookupOwnEndDevice_FindsByLFDI(t *testing.T) {
 	}
 }
 
-// TestLookupOwnEndDevice_EmptyListReturnsNotFound exercises IEEE-029 case 2:
+// TestLookupOwnEndDevice_EmptyListReturnsNotFound exercises case 2:
 // --csip on, server /edev list empty → ErrEndDeviceNotFound; caller idles;
 // zero PUTs/POSTs on Phase 3+ endpoints while idling. Then the list
 // becomes populated and Lookup succeeds on the retry.
@@ -239,7 +236,7 @@ func TestLookupOwnEndDevice_EmptyListReturnsNotFound(t *testing.T) {
 	}
 }
 
-// TestLookupOwnEndDevice_OtherLFDIsNotOurs exercises IEEE-029 case 3:
+// TestLookupOwnEndDevice_OtherLFDIsNotOurs exercises case 3:
 // --csip on, server list contains other LFDIs but not ours → LookupOwnEndDevice
 // returns ErrEndDeviceNotFound. Verifies the LFDI filter is exact-match,
 // not just a non-empty list check, and case-sensitive on the uppercase-hex
@@ -274,18 +271,18 @@ func TestLookupOwnEndDevice_OtherLFDIsNotOurs(t *testing.T) {
 
 }
 
-// TestLookupOwnEndDevice_CaseInsensitiveLFDI codifies the IEEE-113 fix:
-// IEEE 2030.5 / CSIP servers commonly emit lowercase `<lFDI>` on the wire
-// (xs:hexBinary is case-insensitive per W3C XML Schema Part 2; SunSpec test
-// PKI documents the canonical LFDI in lowercase). The Go client computes
-// its own LFDI as uppercase via fmt.Sprintf("%X", ...) in internal/tls.LFDI.
-// LookupOwnEndDevice MUST match across cases : case-sensitive equality
-// produced a silent CSIP interop failure (caller idle-polls forever on a
-// false ErrEndDeviceNotFound) before IEEE-113 switched the comparison to
-// strings.EqualFold.
+// TestLookupOwnEndDevice_CaseInsensitiveLFDI codifies a case-insensitivity
+// fix: IEEE 2030.5 / CSIP servers commonly emit lowercase `<lFDI>` on the
+// wire (xs:hexBinary is case-insensitive per W3C XML Schema Part 2; SunSpec
+// test PKI documents the canonical LFDI in lowercase). The Go client
+// computes its own LFDI as uppercase via fmt.Sprintf("%X", ...) in
+// internal/tls.LFDI. LookupOwnEndDevice MUST match across cases :
+// case-sensitive equality produced a silent CSIP interop failure (caller
+// idle-polls forever on a false ErrEndDeviceNotFound) before the comparison
+// switched to strings.EqualFold.
 //
-// This test supersedes the pre-IEEE-113 TestLookupOwnEndDevice_CaseSensitiveLFDI
-// fixture, which asserted the bug as expected behavior.
+// This test supersedes an earlier fixture that asserted the case-sensitive
+// bug as expected behavior.
 func TestLookupOwnEndDevice_CaseInsensitiveLFDI(t *testing.T) {
 	t.Parallel()
 	env := newCCMTestEnv(t)
@@ -330,9 +327,9 @@ func TestLookupOwnEndDevice_CaseInsensitiveLFDI(t *testing.T) {
 }
 
 // TestLookupOwnEndDevice_EmptyHrefErrors covers the empty-href guard on
-// LookupOwnEndDevice : the same defensive check IEEE-030 added across all
-// five methods. Not in the IEEE-069 ticket-body case list, but lifts
-// LookupOwnEndDevice over the ≥80% coverage gate and asserts the contract.
+// LookupOwnEndDevice : the same defensive check added across all
+// five methods. Lifts LookupOwnEndDevice over the >=80% coverage gate and
+// asserts the contract.
 func TestLookupOwnEndDevice_EmptyHrefErrors(t *testing.T) {
 	t.Parallel()
 	env := newCCMTestEnv(t)
@@ -393,7 +390,7 @@ func TestLookupOwnEndDevice_ServerErrorIsWrapped(t *testing.T) {
 	}
 }
 
-// TestRegister_CSIPOffFiresPOST exercises IEEE-029 case 4 (back-compat):
+// TestRegister_CSIPOffFiresPOST exercises case 4 (back-compat):
 // --csip off, the existing Register() POST still fires /edev and Phase 3
 // proceeds. Asserts no regression : the IEEE 2030.5 self-registration
 // path is unchanged when --csip is not set.
@@ -464,10 +461,10 @@ func TestRegister_CSIPOffFiresPOST(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-030 cases 1-5: four href-taking method signatures + reporter no-op
+// Four href-taking method signatures + reporter no-op
 // =============================================================================
 
-// TestRegister_PostsToExactHref exercises IEEE-030 case 1: Register(ctx,
+// TestRegister_PostsToExactHref exercises case 1: Register(ctx,
 // edevListHref) POSTs to the passed href (not a hardcoded path), and
 // returns the parsed EndDevice from the Location read.
 func TestRegister_PostsToExactHref(t *testing.T) {
@@ -578,7 +575,7 @@ func TestRegister_PostsToExactHref(t *testing.T) {
 	})
 }
 
-// TestPutDERCapability_WritesToExactHref exercises IEEE-030 case 2:
+// TestPutDERCapability_WritesToExactHref exercises case 2:
 // PutDERCapability(ctx, href, ...) writes to the exact href, not a
 // derived path. The handler asserts the literal request path.
 func TestPutDERCapability_WritesToExactHref(t *testing.T) {
@@ -647,7 +644,7 @@ func TestPutDERCapability_WritesToExactHref(t *testing.T) {
 	}
 }
 
-// TestPhase3SkipsWhenDERListLinkAbsent exercises IEEE-030 case 3:
+// TestPhase3SkipsWhenDERListLinkAbsent exercises case 3:
 // EndDevice with DERListLink == nil → zero DER PUTs. The production
 // gating logic lives in cmd/inverterclient/main.go's Phase 3 block :
 // we assert the contract at the inverter package boundary: when the
@@ -715,7 +712,7 @@ func TestPhase3SkipsWhenDERListLinkAbsent(t *testing.T) {
 	}
 }
 
-// TestPhase4SkipsWhenMUPListLinkAbsent exercises IEEE-030 case 4:
+// TestPhase4SkipsWhenMUPListLinkAbsent exercises case 4:
 // dcap with MirrorUsagePointListLink == nil → zero /mup calls. The
 // inverter package contract: CreateMirrorUsagePoint and PostMeterReading
 // short-circuit on empty href, so a nil MirrorUsagePointListLink in the
@@ -770,13 +767,13 @@ func TestPhase4SkipsWhenMUPListLinkAbsent(t *testing.T) {
 	}
 }
 
-// TestReporter_EmptyHrefsAreNoOps exercises IEEE-030 case 5: a Reporter
+// TestReporter_EmptyHrefsAreNoOps exercises case 5: a Reporter
 // constructed with empty derStatusHref and mmrHref is a silent no-op :
 // ReportStatus and ReportMetering return nil and emit zero HTTP calls
 // regardless of how many times the simulation ticker drives them.
 //
 // This is the "ticker drives the simulation but emits no HTTP calls"
-// assertion from the IEEE-030 origin ticket. We exercise the contract
+// contract. We exercise it
 // directly by calling the report methods in a loop; production wires a
 // time.Ticker on top of the same methods, so the contract holds at the
 // boundary the inverter package owns.
@@ -825,16 +822,17 @@ func TestReporter_EmptyHrefsAreNoOps(t *testing.T) {
 }
 
 // =============================================================================
-// Optional case (IEEE-030 case 6): endpoint constant scan
+// Optional case: endpoint constant scan
 // =============================================================================
 
-// TestNoHardcodedEndpointConstants is the optional IEEE-030 case 6: a
+// TestNoHardcodedEndpointConstants is an optional case: a
 // build-tag-less unit test that fails if anyone reintroduces the old
 // hardcoded endpoint string literals in internal/inverter/client.go.
 //
 // The check is intentionally narrow : we look only for the specific
-// path literals IEEE-030 replaced. The integration_test.go file pre-
-// dates the link-derivation cleanup and still uses literal hrefs in
+// path literals the link-derivation cleanup replaced. The
+// integration_test.go file predates that cleanup and still uses literal
+// hrefs in
 // its assertions; that's intentional (a server-side route check). The
 // scan therefore targets only the production source under test.
 //

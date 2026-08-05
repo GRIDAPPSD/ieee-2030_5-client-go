@@ -1,31 +1,30 @@
 package main
 
-// Phase 2c (continued): DERProgram-walk outer for-loop (IEEE-036 : plan-1
+// Phase 2c (continued): DERProgram-walk outer for-loop (plan-1
 // phase 4 continued).
 //
-// Extracted from main() by IEEE-076 to give the 2 deferred IEEE-073 Phase 2c
+// Extracted from main() to give the Phase 2c
 // DERProgram-walk integration cases a function seam to test against. The
 // previous inline form lived straight inside main() and called log.Fatalf on
 // the walk-error path, which tears down any test process that drives it.
-// Same structural template as IEEE-074's Phase 2b extraction
-// (cmd/inverterclient/phase2b.go) and IEEE-075's Phase 2c FSAList extraction
+// Same structural template as the Phase 2b extraction
+// (cmd/inverterclient/phase2b.go) and the Phase 2c FSAList extraction
 // (cmd/inverterclient/phase2c_fsalist.go).
 //
 // runPhase2cDERProgramWalk owns ONLY the outer for-loop body that lived in
 // the inline block : repeated calls to walkDERProgramTree, the
 // non-empty-aggregate cache-and-break branch, the CSIP-strict empty-aggregate
 // idle-on-PollRate branch, and the non-CSIP empty-aggregate proceed branch.
-// It does not touch the inner walkDERProgramTree (already package-level,
-// extracted by IEEE-036 itself and fully covered by IEEE-073's tests) and it
-// does not touch the IEEE-037 Primacy selection or the IEEE-041 DefaultDERControl
+// It does not touch the inner walkDERProgramTree (already package-level and
+// fully covered by its own tests) and it
+// does not touch the Primacy selection or the DefaultDERControl
 // re-GET that follow in main().
 //
-// Behavior contract (frozen at IEEE-036 / merged main@1210539; verified
-// identical):
+// Behavior contract (frozen; verified identical):
 //
 //   - empty FSAList (len(fsaList.FunctionSetAssignments) == 0): NOT this
 //     function's concern. The caller (main()) gates entry on a non-empty
-//     fsaList, and the IEEE-035 / IEEE-072 path already covers empty-FSAList
+//     fsaList, and the FSAList empty-list path already covers empty-FSAList
 //     short-circuit. This function is only entered when there is at least
 //     one FSA to walk.
 //   - Banner: log "=== Phase 2c: DERProgram Tree Walk ===" once on entry.
@@ -44,17 +43,17 @@ package main
 // log.Fatalf stays in main() for two reasons:
 //  1. Exit-code preservation: log.Fatalf calls os.Exit(1); pushing it down
 //     here would shrink the testability gain we just made.
-//  2. Pattern symmetry with runPhase2bRegistration (IEEE-074),
-//     runPhase2cFSAList (IEEE-075), and walkDERProgramTree (IEEE-036), which
+// 2. Pattern symmetry with runPhase2bRegistration,
+// runPhase2cFSAList, and walkDERProgramTree, which
 //     also return wrapped errors and let the outer main() owner log.Fatalf.
 //
 // Test seam: phase2cDERProgramPollMin and phase2cDERProgramPollDefault are
 // vars (not consts) so phase2c_derprogram_test.go can shrink the floor below
 // 60s without faking time. The production pinPollInterval() helper is
 // unchanged : these vars shadow its policy only inside
-// runPhase2cDERProgramWalk. Mirrors IEEE-074's phase2bPollMin/phase2bPollDefault
-// and IEEE-075's phase2cFSAListPollMin/phase2cFSAListPollDefault patterns
-// (and IEEE-070's minTimeSyncPollRate before them). The production binary
+// runPhase2cDERProgramWalk. Mirrors the phase2bPollMin/phase2bPollDefault
+// and phase2cFSAListPollMin/phase2cFSAListPollDefault patterns
+// (and the minTimeSyncPollRate pattern before them). The production binary
 // never writes to these.
 
 import (
@@ -89,7 +88,7 @@ func (e *derProgramWalkFatal) Error() string { return e.reason }
 func (e *derProgramWalkFatal) Unwrap() error { return e.inner }
 
 // phase2cDERProgramPollMin and phase2cDERProgramPollDefault mirror the floor /
-// default applied by pinPollInterval. Declared as vars so the IEEE-076 tests
+// default applied by pinPollInterval. Declared as vars so the tests
 // can shrink the floor without faking time; see phase2c_derprogram_test.go.
 // Production behavior is identical to the previous inline form (60s floor,
 // 30min default-on-zero).
@@ -130,8 +129,8 @@ func phase2cDERProgramPollInterval(rate uint32) time.Duration {
 //     errors.As.
 //
 // Precondition: len(fsaList.FunctionSetAssignments) > 0. The caller is
-// responsible for short-circuiting the empty-FSAList case (the IEEE-035 /
-// IEEE-072 path; no walk is performed when there are no FSAs to walk).
+// responsible for short-circuiting the empty-FSAList case (the FSAList
+// empty-list path; no walk is performed when there are no FSAs to walk).
 //
 // See package-level comment for the full behavior contract.
 func runPhase2cDERProgramWalk(

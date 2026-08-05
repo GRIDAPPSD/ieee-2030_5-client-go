@@ -1,5 +1,7 @@
-// Package inverter : IEEE-054 concrete LogEventRateLimiter, satisfying
-// the seam defined by IEEE-053 (log_event_emitter.go).
+// Package inverter : concrete LogEventRateLimiter, satisfying
+// the seam defined in log_event_emitter.go
+// (GRIDAPPSD/ieee-2030_5-server-go#189). This file is
+// GRIDAPPSD/ieee-2030_5-server-go#190.
 //
 // CSIP V1.2 BASIC-027 lists trip-flap mitigation as a deployment concern:
 // a marginal voltage signal flapping in and out of the trip region must
@@ -58,7 +60,7 @@ type PerCodeLogEventLimiter struct {
 // safe defense-in-depth behavior. A nil now function defaults to
 // time.Now.
 //
-// IEEE-054 main.go wires this with DefaultLogEventWindow + time.Now;
+// main.go wires this with DefaultLogEventWindow + time.Now;
 // unit tests pin a short window + synthetic clock to exercise the
 // allow/deny edges without sleeping.
 func NewPerCodeLogEventLimiter(window time.Duration, now func() time.Time) *PerCodeLogEventLimiter {

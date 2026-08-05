@@ -8,12 +8,12 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
-// DERControl event state machine (IEEE-040 / Phase 5 ticket 3 of 5) ===========
+// DERControl event state machine (Phase 5, GRIDAPPSD/ieee-2030_5-server-go#92) ===========
 //
-// IEEE-038 ships the polling cache (DERControlCache.Snapshot/Diff). IEEE-039
-// ships the randomization-aware scheduler (OnEventsAdded/OnEventsCancelled/
-// PopExpired/Next). This file ties them together into a state machine that
-// owns the inverter's DefaultDERControl ↔ active DERControl lifecycle.
+// This file ties the polling cache (DERControlCache.Snapshot/Diff) and the
+// randomization-aware scheduler (OnEventsAdded/OnEventsCancelled/
+// PopExpired/Next) together into a state machine that
+// owns the inverter's DefaultDERControl <-> active DERControl lifecycle.
 //
 // Lifecycle (single-event scope):
 //
@@ -32,12 +32,12 @@ import (
 //	EVENT_COMPLETED ─────────────►  DEFAULT  ◄───── EVENT_CANCELLED
 //	   (terminal, same-tick auto-revert)        (terminal, same-tick auto-revert)
 //
-// Out of scope for IEEE-040:
-//   - Replacing ApplyControls(nil, ...) at cmd/inverterclient/main.go:699 :
-//     IEEE-041. This ticket exposes Current() so IEEE-041 can read
+// Out of scope for this state machine:
+//   - Replacing ApplyControls(nil, ...) at cmd/inverterclient/main.go:699.
+//     This file exposes Current() so the caller can read
 //     ActiveDERControl when State == EVENT_STARTED; the actual swap lives in
 //     main.go.
-//   - DERCurve retrieval : IEEE-042.
+//   - DERCurve retrieval.
 //   - Response Function Set / replyTo POSTs : Phase 6. The OnTransition hook
 //     is the wiring point; Phase 6 registers it.
 //   - Multi-event Primacy arbitration (Phase 5 doc test case 10). Single-
@@ -84,8 +84,8 @@ func (s EventState) String() string {
 // Callers MUST treat ActiveDERControl as read-only; the state machine returns
 // a pointer to a private copy and reuses the slot across transitions.
 //
-// IEEE-041 will consume this in cmd/inverterclient/main.go's simulation
-// loop: when State == EVENT_STARTED, ApplyControls is fed
+// cmd/inverterclient/main.go's simulation
+// loop consumes this: when State == EVENT_STARTED, ApplyControls is fed
 // ActiveDERControl.DERControlBase; otherwise the DefaultDERControl base
 // resolved in Phase 4.
 type EventStateSnapshot struct {
@@ -119,14 +119,14 @@ type TransitionHook func(prev, next EventState, evt *sep2.DERControl)
 // Pike rule 3 is satisfied even though no goroutine lives inside the
 // state machine).
 //
-// Hook surface (IEEE-044, Phase 6 ticket 2 of 3):
+// Hook surface (Phase 6):
 //   - OnTransition(hook) : replace-only. The single-hook slot; passing nil
 //     clears it. Test code swaps implementations in/out via this method.
 //   - AddTransitionHook(hook) : append. Each call adds a hook to a slice;
 //     every transition fires every appended hook in registration order
 //     PLUS the OnTransition slot (if set). Production code that wants to
-//     compose multiple concerns (e.g. IEEE-042 curve refresh + IEEE-044
-//     Response POST) registers each through AddTransitionHook.
+//     compose multiple concerns (e.g. curve refresh + Response POST)
+//     registers each through AddTransitionHook.
 type StateMachine struct {
 	mu             sync.Mutex
 	state          EventState
@@ -140,7 +140,7 @@ type StateMachine struct {
 // NewStateMachine constructs a state machine in DEFAULT. No required
 // dependencies : the scheduler and now-source are passed to Tick so the
 // state machine never holds a clock reference (parity with the scheduler's
-// pure-function design from IEEE-039).
+// pure-function design).
 func NewStateMachine() *StateMachine {
 	return &StateMachine{state: StateDefault}
 }
@@ -150,8 +150,8 @@ func NewStateMachine() *StateMachine {
 // mutex. The replace-only semantics make this the preferred surface for
 // test code that needs to swap implementations during a run.
 //
-// Production code with multiple independent concerns (e.g. IEEE-042 curve
-// refresh AND IEEE-044 Response POST) should use AddTransitionHook instead,
+// Production code with multiple independent concerns (e.g. curve
+// refresh AND Response POST) should use AddTransitionHook instead,
 // which appends rather than replaces.
 func (sm *StateMachine) OnTransition(hook TransitionHook) {
 	sm.mu.Lock()
@@ -185,7 +185,7 @@ func (sm *StateMachine) AddTransitionHook(hook TransitionHook) {
 // MUST be treated as read-only; the state machine may swap it on the next
 // transition.
 //
-// IEEE-041 will consume this in main.go's simulation loop.
+// main.go's simulation loop consumes this.
 func (sm *StateMachine) Current() EventStateSnapshot {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -212,8 +212,8 @@ func (sm *StateMachine) Current() EventStateSnapshot {
 // into the state machine). Hook invocations happen AFTER the mutex is
 // released for each transition.
 //
-// `now` is the caller's clock reading (production: client.Now() from
-// IEEE-031; tests: a fixed-time closure). The state machine never reads
+// `now` is the caller's clock reading (production: client.Now(), the
+// server-offset clock; tests: a fixed-time closure). The state machine never reads
 // real time.Now() : consistent with the scheduler's discipline.
 //
 // `sched` is required (panics on nil : programmer error, not a runtime
@@ -280,8 +280,8 @@ type transition struct {
 //
 // Multi-event arbitration TODO: when PopExpired returns >1 event in one
 // call (FireAt-ascending), only the first becomes active. The remainder are
-// dropped on the floor : IEEE-040 single-event scope. Multi-event ranking
-// by Primacy is IEEE-041 or a follow-up ticket per Phase 5 doc case 10.
+// dropped on the floor : single-event scope by design. Multi-event ranking
+// by Primacy is a follow-up (Phase 5 doc case 10).
 func (sm *StateMachine) computeTransitionsLocked(
 	now time.Time,
 	added []sep2.DERControl,

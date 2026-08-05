@@ -3,7 +3,7 @@ package inverter
 import "github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 
 // ActiveControlBase resolves which DERControlBase the simulation tick loop
-// should pass to ApplyControls. Closes the IEEE-041 defect at
+// should pass to ApplyControls. Closes a defect at
 // cmd/inverterclient/main.go where the base was hard-coded nil : the inverter
 // never observed server-sent DERControls.
 //
@@ -15,7 +15,7 @@ import "github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 //  2. defaultCtl is non-nil AND its DERControlBase is non-nil → return that.
 //     This is the IEEE 2030.5 §10.7 "DefaultDERControl fallback" path :
 //     when no event is active, the device applies the program's default.
-//  3. Otherwise → nil. Preserves the pre-IEEE-041 behavior when no CSIP
+//  3. Otherwise → nil. Preserves the existing behavior when no CSIP
 //     server is reachable, no default has been provisioned, or the only
 //     event in flight has a nil DERControlBase. ApplyControls handles a
 //     nil base as a no-op (see internal/inverter/controller.go).

@@ -1,4 +1,4 @@
-// IEEE-054 alarm detector unit + integration tests.
+// Alarm detector unit + integration tests.
 //
 // Two-layer coverage:
 //
@@ -468,7 +468,7 @@ func TestAlarmDetector_Integration_RateLimiterDropsDuplicate(t *testing.T) {
 }
 
 // Sanity: the integration plumbing is using the real PostLogEvent and
-// the same Location/201 path the IEEE-053 unit tests pin.
+// the same Location/201 path the PostLogEvent unit tests pin.
 func TestAlarmDetector_Integration_GracefulBypassOn405(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -1,10 +1,10 @@
 // Package dispatch : simulator dispatcher (relocated from package inverter).
 //
-// IEEE-051 Notification dispatcher for the simulator role.
+// Notification dispatcher for the simulator role.
 //
-// IEEE-049 stood up the /notify listener with a no-op default dispatcher.
-// IEEE-050 made the SEP2 server actually POST Notifications by registering
-// Subscriptions on the EndDevice.SubscriptionListLink. The SimulatorDispatcher
+// The /notify listener starts with a no-op default dispatcher. The SEP2
+// server actually POSTs Notifications once Subscriptions are registered on
+// the EndDevice.SubscriptionListLink. The SimulatorDispatcher
 // is the consumer policy: it takes each parsed Notification, identifies which
 // resource changed, GETs the latest value via the existing typed SEP2 client
 // helpers, and feeds the result into Phase 5's state machine (indirectly, via
@@ -12,10 +12,8 @@
 //
 // CSIP V1.2 CORE-018 procedure step 5: "Inverter responds 201 or 204, then
 // performs a GET on the resource href included in the Notification body."
-// IEEE-049 already handled the 204 response; IEEE-051 added the GET and
-// state-machine feed.
 //
-// IEEESIM-004: moved from package inverter into package dispatch so both
+// Moved from package inverter into package dispatch so both
 // dispatcher implementations cohabit the dispatch package and the dependency
 // direction matches the device-seam topology. Behavior is unchanged.
 
@@ -38,8 +36,8 @@ import (
 // applies the change on its next tick.
 //
 // Wiring: cmd/inverterclient/main.go constructs an empty dispatcher BEFORE
-// the SEP2 client and Phase 5 cache exist (so the IEEE-049 NotifyReceiver
-// can be brought up early and publish its bound address to the IEEE-050
+// the SEP2 client and Phase 5 cache exist (so the NotifyReceiver
+// can be brought up early and publish its bound address to the
 // subscription POST), then calls RegisterDERControlList once Phase 5
 // wiring is complete. Until then, every Dispatch call logs and drops.
 //

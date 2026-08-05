@@ -3,7 +3,7 @@ package inverter
 import "github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 
 // SelectHighestPriority picks the highest-priority DERProgram from the cache
-// IEEE-036 populates during the Phase 2c FSA-walk in cmd/inverterclient/main.go.
+// populated during the Phase 2c FSA-walk in cmd/inverterclient/main.go.
 //
 // Selection rule per CSIP V1.2 CORE-012 step 2 and IEEE 2030.5-2018 §10.1.3
 // list ordering:

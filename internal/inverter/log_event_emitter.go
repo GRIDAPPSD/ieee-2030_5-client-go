@@ -1,25 +1,26 @@
-// Package inverter : IEEE-053 LogEvent emitter primitive (plan-1 Phase 9 entry).
+// Package inverter : LogEvent emitter primitive (plan-1 Phase 9 entry).
+// See GRIDAPPSD/ieee-2030_5-server-go#189.
 //
 // CSIP V1.2 BASIC-027 (Alarms, pp 139-140) requires the DER Client to POST
 // LogEvent resources to the server when alarm-class state transitions
 // occur (LVRT trip, HVRT trip, freq-watt curtailment, inverter offline,
 // manufacturer-specific faults). The server-side handler already exists
 // (internal/handler/log_event.go) and is unit-tested; this file adds the
-// outbound primitive so the alarm callers (IEEE-054) can fire-and-document.
+// outbound primitive so the alarm callers can fire-and-document.
 //
-// IEEE-053 ships:
+// This file ships:
 //  1. PostLogEvent : the HTTP primitive. Returns the new resource href on
 //     201 Created, or a wrapped error (typed sentinels where useful).
-//  2. PEN plumbing : SimConfig.LogEventPEN → SEP2Client.pen → stamped into
+//  2. PEN plumbing : SimConfig.LogEventPEN -> SEP2Client.pen -> stamped into
 //     the outgoing LogEvent if the caller left logEventPEN zero.
-//  3. logEventLimiter seam : IEEE-054 plugs in a concrete throttle; the
+//  3. logEventLimiter seam : a concrete throttle plugs in here; the
 //     default nil limiter allows every POST through.
-//  4. Reuse of (*SEP2Client).Now() (IEEE-031 server-synced clock) : the
+//  4. Reuse of (*SEP2Client).Now() (the server-synced clock) : the
 //     emitter does NOT synthesize createdDateTime; it only fills in zero
 //     values left by the caller as a convenience so the alarm sites can
 //     stay terse.
 //
-// Out of scope (IEEE-054):
+// Out of scope:
 //   - Wiring trip / curtailment detection sites to call PostLogEvent.
 //   - The rate-limiter implementation itself; this file only defines the
 //     interface.
@@ -42,12 +43,12 @@ import (
 // no HTTP traffic on a deny and returns ErrRateLimited.
 //
 // The interface is intentionally tiny : one method, no setup, no
-// teardown : so IEEE-054 can ship a simple in-memory ring buffer keyed by
+// teardown : the concrete implementation can ship a simple in-memory ring buffer keyed by
 // code (1 LogEvent per code per minute, the BASIC-027 trip-flap mitigation)
 // without dragging context, cancellation, or persistence into the seam.
 // Per the Pike rule "accept interfaces, return concrete types," this
 // interface is declared at the consumer (inverter package, where
-// PostLogEvent calls it) : IEEE-054's struct just satisfies it implicitly.
+// PostLogEvent calls it) : the concrete struct just satisfies it implicitly.
 type LogEventRateLimiter interface {
 	Allow(logEventCode uint8) bool
 }
@@ -57,14 +58,14 @@ type LogEventRateLimiter interface {
 //
 // logEventListHref is the path published by the server in
 // EndDevice.LogEventListLink (typically "/edev/{id}/lel"). The caller
-// sources it via IEEE-030 link-derivation. An empty string returns
+// sources it via link-derivation. An empty string returns
 // ErrLogEventLinkAbsent without making any HTTP request : LogEvent is an
 // OPTIONAL function set, and a missing link is a server gap to be logged
 // and bypassed, not a fatal.
 //
 // The caller-supplied event is mutated for two zero-value conveniences:
 //
-//  1. evt.CreatedDateTime == 0 → filled in from c.Now() (IEEE-031
+//  1. evt.CreatedDateTime == 0 -> filled in from c.Now() (the
 //     server-synced clock, falling back to time.Now() before first sync).
 //     Callers that need a specific timestamp set it explicitly.
 //
@@ -76,7 +77,7 @@ type LogEventRateLimiter interface {
 //
 // FunctionSet, LogEventCode, LogEventID, ProfileID, Details, and
 // ExtendedData are caller-controlled : the emitter does not synthesize
-// them. The mutation is intentional so IEEE-054's alarm callers can pass
+// them. The mutation is intentional so the alarm callers can pass
 // a partially-filled event and rely on the emitter for the time + PEN.
 //
 // On 201 Created the server returns the new LogEvent href in the Location
@@ -112,7 +113,7 @@ func (c *SEP2Client) PostLogEvent(
 
 	// Zero-value conveniences: caller can leave CreatedDateTime / LogEventPEN
 	// unset and the emitter will fill them in. This keeps the alarm-site
-	// call sites in IEEE-054 terse while preserving the ability to set an
+	// call sites terse while preserving the ability to set an
 	// explicit timestamp (e.g. tests pinning time.Time) or override the PEN.
 	if evt.CreatedDateTime == 0 {
 		evt.CreatedDateTime = c.Now().Unix()

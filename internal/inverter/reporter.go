@@ -9,7 +9,7 @@ import (
 
 // Reporter sends periodic DERStatus PUTs and MirrorMeterReading POSTs.
 //
-// Hrefs are derived by main.go from the advertised link graph (see IEEE-030)
+// Hrefs are derived by main.go from the advertised link graph
 // rather than built from ID segments. Empty hrefs cause the corresponding
 // report to be skipped silently : used when the server's DeviceCapability
 // or EndDevice didn't advertise the corresponding link, in which case the
@@ -25,11 +25,10 @@ type Reporter struct {
 // meter readings to mmrHref. Either or both may be empty to disable that
 // channel (see Reporter doc).
 //
-// IEEE-030 tests deferred per Craig override 2026-05-12 (time crunch).
-// Required-but-deferred coverage:
-//  1. derStatusHref empty → ReportStatus is a no-op, returns nil, zero HTTP.
-//  2. mmrHref empty → ReportMetering is a no-op, returns nil, zero HTTP.
-//  3. both set → exactly one PUT and one POST per ReportStatus/ReportMetering
+// See TestReporter_EmptyHrefsAreNoOps in client_test.go for coverage:
+//  1. derStatusHref empty -> ReportStatus is a no-op, returns nil, zero HTTP.
+//  2. mmrHref empty -> ReportMetering is a no-op, returns nil, zero HTTP.
+//  3. both set -> exactly one PUT and one POST per ReportStatus/ReportMetering
 //     call, to the exact hrefs passed in.
 func NewReporter(client *SEP2Client, derStatusHref, mmrHref string) *Reporter {
 	return &Reporter{
@@ -82,7 +81,7 @@ func (r *Reporter) ReportMetering(ctx context.Context, state InverterState) erro
 	uomW := sep2.UomWatts
 	activeW := int64(state.ActivePowerW)
 
-	// IEEE-031: outbound identifier derives from the server-synced clock
+	// Outbound identifier derives from the server-synced clock
 	// (client.Now()), not local wall-clock. state.Time is simulation time
 	// (2024 sunrise + accelerated delta), so it stays where it is on the
 	// reading payload fields : replacing it would jump reported timestamps
