@@ -63,7 +63,8 @@ var (
 	// no HTTP traffic on a deny. Callers branch on errors.Is(err,
 	// ErrRateLimited) to silently drop the duplicate without escalating.
 	// The default (nil-limiter) policy is allow-all; the concrete limiter
-	// implementation lives elsewhere.
+	// implementation is PerCodeLogEventLimiter in log_event_ratelimiter.go
+	// (GRIDAPPSD/ieee-2030_5-server-go#190).
 	ErrRateLimited = errors.New("LogEvent rate limited")
 )
 

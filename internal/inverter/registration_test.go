@@ -5,8 +5,9 @@ package inverter_test
 //
 // Reuses the ccmTestEnv from client_ccm_test.go
 // and startIdleListener from idle_test.go. The test does not need TLS-cipher
-// negotiation coverage (that lives elsewhere); it needs Registration XML
-// parsing, empty-href sentinel error, 404 / malformed-XML wrapping.
+// negotiation coverage (GRIDAPPSD/ieee-2030_5-server-go#62 owns that); it
+// needs Registration XML parsing, empty-href sentinel error, 404 /
+// malformed-XML wrapping.
 //
 // Cases covered:
 //

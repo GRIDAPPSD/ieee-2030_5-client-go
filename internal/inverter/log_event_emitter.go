@@ -1,4 +1,5 @@
 // Package inverter : LogEvent emitter primitive (plan-1 Phase 9 entry).
+// See GRIDAPPSD/ieee-2030_5-server-go#189.
 //
 // CSIP V1.2 BASIC-027 (Alarms, pp 139-140) requires the DER Client to POST
 // LogEvent resources to the server when alarm-class state transitions

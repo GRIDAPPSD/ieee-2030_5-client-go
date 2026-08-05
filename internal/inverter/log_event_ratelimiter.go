@@ -1,5 +1,7 @@
 // Package inverter : concrete LogEventRateLimiter, satisfying
-// the seam defined in log_event_emitter.go.
+// the seam defined in log_event_emitter.go
+// (GRIDAPPSD/ieee-2030_5-server-go#189). This file is
+// GRIDAPPSD/ieee-2030_5-server-go#190.
 //
 // CSIP V1.2 BASIC-027 lists trip-flap mitigation as a deployment concern:
 // a marginal voltage signal flapping in and out of the trip region must

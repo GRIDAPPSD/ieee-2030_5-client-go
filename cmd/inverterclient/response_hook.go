@@ -1,5 +1,6 @@
 // Package main : hook wiring StateMachine transitions to
 // (*SEP2Client).PostResponse. Phase 6 ticket 2 of 3.
+// See GRIDAPPSD/ieee-2030_5-server-go#112.
 //
 // On every state-machine transition the hook produced by responsePOSTHook:
 //

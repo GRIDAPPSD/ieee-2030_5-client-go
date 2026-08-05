@@ -1,4 +1,5 @@
 // Package inverter : edge-triggered alarm transition detector.
+// See GRIDAPPSD/ieee-2030_5-server-go#190.
 //
 // CSIP V1.2 BASIC-027 (Alarms, pp 139-140) requires the DER Client to POST
 // a LogEvent on each alarm-class state TRANSITION. Continuous emission

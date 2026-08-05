@@ -8,7 +8,7 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
-// DERControl event state machine (Phase 5) ===========
+// DERControl event state machine (Phase 5, GRIDAPPSD/ieee-2030_5-server-go#92) ===========
 //
 // This file ties the polling cache (DERControlCache.Snapshot/Diff) and the
 // randomization-aware scheduler (OnEventsAdded/OnEventsCancelled/
