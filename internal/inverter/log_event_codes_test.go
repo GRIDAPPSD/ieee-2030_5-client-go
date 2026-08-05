@@ -1,4 +1,4 @@
-// IEEE-054 Table 34 logEventCode constant tests.
+// Table 34 logEventCode constant tests.
 //
 // Pins the numeric values per IEEE 2030.5-2018 §9.5 Table 34 (PEN == 0
 // general category). Downstream alarm detectors emit these codes; a

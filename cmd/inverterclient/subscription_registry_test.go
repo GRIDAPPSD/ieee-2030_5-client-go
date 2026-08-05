@@ -1,4 +1,4 @@
-// IEEE-052 Phase 8 ticket 4 of 4 (final) unit tests: subscriptionRegistry.
+// Phase 8 ticket 4 of 4 (final) unit tests: subscriptionRegistry.
 //
 // Covers Add / Cancel / Lookup / Len / Snapshot / CancelHookFunc semantics
 // plus a race-detector exercise so concurrent Add+Cancel from independent

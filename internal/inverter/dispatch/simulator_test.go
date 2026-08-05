@@ -1,4 +1,4 @@
-// IEEESIM-004 SimulatorDispatcher tests.
+// SimulatorDispatcher tests.
 //
 // The SimulatorDispatcher is the relocated PhaseStateDispatcher. These tests
 // mirror the contract tests from the original package inverter location and

@@ -1,4 +1,4 @@
-// Package inverter : IEEE-054 edge-triggered alarm transition detector.
+// Package inverter : edge-triggered alarm transition detector.
 //
 // CSIP V1.2 BASIC-027 (Alarms, pp 139-140) requires the DER Client to POST
 // a LogEvent on each alarm-class state TRANSITION. Continuous emission

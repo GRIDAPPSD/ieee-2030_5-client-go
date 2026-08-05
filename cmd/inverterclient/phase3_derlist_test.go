@@ -1,11 +1,10 @@
 package main
 
-// IEEE-048 tests: Phase 3 DER list fetch graceful bypass.
+// Tests: Phase 3 DER list fetch graceful bypass.
 //
 // Verifies that fetchDERListForSetup (a) does not call log.Fatalf on any
-// HTTP or transport error class, and (b) preserves the IEEE-047 happy path
-// byte-for-byte. Phase 7 exit criterion 1 in
-// `plans/plan-1-csip-client-conformance/phase-7-http-semantics.md`.
+// HTTP or transport error class, and (b) preserves the happy path
+// byte-for-byte. Phase 7 exit criterion 1.
 //
 // Tests are driven against the derListClient interface defined in
 // phase3_derlist.go so the test surface stays narrow.

@@ -1,4 +1,4 @@
-// IEEESIM-004 ProductionDispatcher tests.
+// ProductionDispatcher tests.
 //
 // Field-value assertions per data-invariants Rule 1: tests assert the data
 // written to the cache and received by hooks, not just "no crash."

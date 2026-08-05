@@ -279,7 +279,7 @@ func rejectMalformed(c inverter.ControlOutputs) error {
 // nameplate to be configured.
 //
 // The full SunSpec register-map scale-factor validation (from go-sunspec) is
-// out of scope for IEEESIM-007; this implementation uses the nameplate as a
+// out of scope here; this implementation uses the nameplate as a
 // proxy for the expected SI-unit range.
 func (g *guardedDevice) validateUnitsAndScale(c inverter.ControlOutputs) error {
 	if g.scaleMaxW <= 0 || g.scaleMaxVAr <= 0 {

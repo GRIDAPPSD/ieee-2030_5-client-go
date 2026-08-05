@@ -1,4 +1,4 @@
-// IEEESIM-004 dispatch.New factory and ADR-003 invariant tests.
+// dispatch.New factory and ADR-003 invariant tests.
 
 package dispatch
 
