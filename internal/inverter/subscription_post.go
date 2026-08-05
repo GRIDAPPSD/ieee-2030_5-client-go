@@ -1,20 +1,20 @@
-// Package inverter : IEEE-050 inverter Subscription POST helper.
+// Package inverter : inverter Subscription POST helper.
 //
-// CSIP V1.2 CORE-018 step 2 (pp 59-61). With the IEEE-049 /notify listener
+// CSIP V1.2 CORE-018 step 2 (pp 59-61). With the /notify listener
 // up, the inverter registers subscriptions with the SEP2 server by POSTing
 // a Subscription resource to EndDevice.SubscriptionListLink. On 201 the
 // server returns the new subscription href via the Location header; the
-// inverter persists it for the IEEE-052 cancellation path.
+// inverter persists it for the cancellation path.
 //
 // Servers that don't implement subscription/notification respond 405 Method
 // Not Allowed. The inverter MUST fall back to polling on 405 : that's the
 // CSIP V1.2 graceful-degradation contract against non-CSIP servers. Callers
 // branch on errors.Is(err, ErrMethodNotAllowed) (the typed sentinel surfaced
-// by IEEE-046's classifyResponse) and continue polling without aborting.
+// by classifyResponse) and continue polling without aborting.
 //
-// IEEE-050 ships the helper + main.go wiring + tests. IEEE-051 plugs the
-// real Phase-5 NotificationDispatcher into IEEE-049's no-op slot; IEEE-052
-// handles status=1 cancellation Notifications. Neither is in scope here.
+// This file ships the helper + main.go wiring + tests. A companion piece plugs the
+// real Phase-5 NotificationDispatcher into the /notify listener's no-op slot;
+// another handles status=1 cancellation Notifications. Neither is in scope here.
 
 package inverter
 
@@ -32,11 +32,11 @@ import (
 // EndDevice.SubscriptionListLink (typically "/edev/{id}/sub"). subscribedHref
 // is the resource the inverter wants change-notifications for (typically the
 // FSAList or DERList). notifyURL is the full https URL of the inverter's
-// /notify endpoint (built from IEEE-049 NotifyReceiver.Addr()).
+// /notify endpoint (built from NotifyReceiver.Addr()).
 //
 // On 201 Created the server returns the new subscription href in the
 // Location header; PostSubscription returns that value. The caller should
-// persist it so IEEE-052 can DELETE on cancellation.
+// persist it so it can DELETE on cancellation.
 //
 // On 405 Method Not Allowed the server doesn't support subscriptions;
 // PostSubscription returns the underlying ErrMethodNotAllowed (wrapped with
@@ -78,7 +78,7 @@ func (c *SEP2Client) PostSubscription(
 	}
 
 	// (*SEP2Client).Post handles XML marshalling, mTLS, keep-alive, and
-	// IEEE-047 one-shot 301 follow. We get the Location header on 201
+	// one-shot 301 follow. We get the Location header on 201
 	// directly; on 405 / other non-2xx we get a typed error from
 	// classifyResponse.
 	location, _, postErr := c.Post(ctx, subscriptionListHref, &sub)

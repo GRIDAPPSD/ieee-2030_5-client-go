@@ -24,18 +24,18 @@ import (
 	gotls "github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2tls/gotls"
 )
 
-// TestInverterAcceptsServerWithCriticalHardwareModuleSAN reproduces the
-// IEEE-027 failure mode: a strict CSIP server presents a cert that carries
+// TestInverterAcceptsServerWithCriticalHardwareModuleSAN reproduces a
+// failure mode: a strict CSIP server presents a cert that carries
 // the IEEE 2030.5 §6.11 device-profile critical HardwareModuleName SAN
 // (otherName OID 1.3.6.1.5.5.7.8.4).
 //
 // Without a peer-cert verify hook, stdlib's x509.Verify lists the SAN OID in
 // UnhandledCriticalExtensions and the handshake fails with
-// `x509: unhandled critical extension`. This is exactly what Craig hit
-// against the strict-CSIP server at 192.168.150.213:8888 right after IEEE-019
-// landed; the IEEE-019 fixture used SAN-less server certs and missed it.
+// `x509: unhandled critical extension`. This surfaced against a real
+// strict-CSIP server; an earlier fixture used SAN-less server certs and
+// missed it.
 //
-// RED before scope items 1-3 of IEEE-027: client errors with
+// RED before this fix: client errors with
 // `unhandled critical extension`. GREEN once VerifyPeerCertificate is wired
 // to the existing internal/tls verify helper: handshake completes and /dcap
 // returns.
@@ -86,7 +86,7 @@ func newHMNServerEnv(t *testing.T) *hmnServerEnv {
 	t.Helper()
 
 	caCertPEM, caKeyPEM, err := certs.GenerateCA(certs.CAOptions{
-		CommonName: "IEEE-027 Test CA",
+		CommonName: "HMN SAN Test CA",
 		ValidYears: 1,
 	})
 	if err != nil {
@@ -101,14 +101,14 @@ func newHMNServerEnv(t *testing.T) *hmnServerEnv {
 		t.Fatalf("parse CA key: %v", err)
 	}
 
-	serverCertPEM, serverKeyPEM, err := serverCertWithHMNSAN(caCert, caKey, "IEEE-027-SRV-001")
+	serverCertPEM, serverKeyPEM, err := serverCertWithHMNSAN(caCert, caKey, "HMN-SAN-SRV-001")
 	if err != nil {
 		t.Fatalf("build server cert with HMN SAN: %v", err)
 	}
 
 	deviceCertPEM, deviceKeyPEM, err := certs.GenerateDeviceCert(caCert, caKey, certs.DeviceCertOptions{
 		DeviceType:  certs.DeviceTypeGeneric,
-		HWSerialNum: "IEEE-027-DEV-001",
+		HWSerialNum: "HMN-SAN-DEV-001",
 	})
 	if err != nil {
 		t.Fatalf("generate device cert: %v", err)
@@ -155,8 +155,8 @@ func newHMNServerEnv(t *testing.T) *hmnServerEnv {
 // mixing a known form (DNS/IP) with the otherName would mask the failure.
 //
 // This re-implements the inner ASN.1 marshaling that internal/certs hides
-// behind unexported helpers; the IEEE-027 scope explicitly rules out exporting
-// those helpers, and the test only needs to produce a wire-equivalent cert.
+// behind unexported helpers; exporting those helpers is out of scope here,
+// and the test only needs to produce a wire-equivalent cert.
 func serverCertWithHMNSAN(caCert *x509.Certificate, caKey *ecdsa.PrivateKey, hwSerial string) (certPEM, keyPEM []byte, err error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -260,7 +260,7 @@ func buildHardwareModuleNameOnlySAN(hwType asn1.ObjectIdentifier, hwSerial strin
 
 // startGotlsListenerWithCert boots a gotls-backed HTTPS server using the
 // fixture's hand-built server cert (critical HMN SAN). No client-verify hook
-// is installed because IEEE-027 is about the client's view of the server
+// is installed because this test is about the client's view of the server
 // cert : peer client auth is not the test surface here.
 func startGotlsListenerWithCert(t *testing.T, env *hmnServerEnv, cipherSuites []uint16) (serverURL string, stop func()) {
 	t.Helper()

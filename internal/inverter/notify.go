@@ -1,4 +1,4 @@
-// Package inverter : IEEE-049 inbound HTTPS Notification receiver.
+// Package inverter : inbound HTTPS Notification receiver.
 //
 // Until Phase 8, the inverter was outbound-only: it polled the SEP2 server
 // for DERControlList changes. CSIP V1.2 CORE-018 recommends a
@@ -6,12 +6,12 @@
 // subscribes to a resource (typically FSAList) and the server POSTs a
 // Notification to the inverter every time the resource changes.
 //
-// IEEE-049 is the inbound side only: a TLS listener using the project's
+// This file is the inbound side only: a TLS listener using the project's
 // vendored gotls fork (TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8) running an
 // http.Server that accepts POST /notify, parses the IEEE 2030.5 Notification
-// XML body, and hands it to a no-op dispatch hook. Subscription POST
-//, Phase 5 state-machine dispatch, and cancellation
-// handling on status=1 are out of scope for this ticket.
+// XML body, and hands it to a no-op dispatch hook. Subscription POST,
+// Phase 5 state-machine dispatch, and cancellation
+// handling on status=1 are out of scope here.
 //
 // mTLS posture mirrors the server-side ccmserver: ClientAuth =
 // RequireAnyClientCert + a VerifyPeerCertificate that walks the chain via
@@ -56,8 +56,8 @@ const notifyReadHeaderTimeout = 5 * time.Second
 const notifyShutdownTimeout = 5 * time.Second
 
 // NotificationDispatcher is the callback the receiver invokes for every
-// well-formed Notification POST. IEEE-049 ships a no-op default so the
-// listener path is exercised end-to-end without forcing IEEE-051's
+// well-formed Notification POST. This file ships a no-op default so the
+// listener path is exercised end-to-end without forcing the
 // Phase-5-state-machine integration to land first.
 //
 // The dispatcher runs synchronously inside the /notify handler : keep it
@@ -69,10 +69,10 @@ const notifyShutdownTimeout = 5 * time.Second
 // spawned by the dispatcher implementation.
 type NotificationDispatcher func(ctx context.Context, n sep2.Notification)
 
-// NoopNotificationDispatcher is the IEEE-049 default : logs and returns.
-// IEEE-051 will replace this with the real Phase-5 dispatcher.
+// NoopNotificationDispatcher is the default : logs and returns.
+// The real Phase-5 dispatcher replaces this.
 func NoopNotificationDispatcher(_ context.Context, n sep2.Notification) {
-	log.Printf("Notification receiver: subscribed=%q new=%q status=%d (no-op dispatch : IEEE-051 pending)",
+	log.Printf("Notification receiver: subscribed=%q new=%q status=%d (no-op dispatch)",
 		n.SubscribedResource, n.NewResourceURI, n.Status)
 }
 
@@ -221,10 +221,10 @@ func (r *NotifyReceiver) Start() error {
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: notifyReadHeaderTimeout,
-		// IEEE-049 doesn't need ConnContext / CCMIdentityMiddleware :
+		// This listener doesn't need ConnContext / CCMIdentityMiddleware :
 		// the handler doesn't inspect the peer cert (the SEP2 server
 		// is presumed trusted once the chain validates). Subsequent
-		// IEEE-051 dispatchers MAY need peer identity; if so they can
+		// dispatchers MAY need peer identity; if so they can
 		// add the same SetupCCMServer / CCMIdentityMiddleware pair the
 		// server-side router uses.
 	}
