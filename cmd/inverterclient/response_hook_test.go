@@ -1,4 +1,4 @@
-// Tests for IEEE-044 : state-machine → Response POST hook
+// Tests for the state-machine -> Response POST hook
 // (Phase 6 ticket 2 of 3).
 //
 // The hook produced by responsePOSTHook is the leaf consumer that turns
@@ -25,7 +25,7 @@
 //
 // Tests use a hand-rolled `fakePoster` to record PostResponse calls
 // directly at the consumer-side interface boundary. The full SEP2Client
-// HTTP/TLS path is covered by IEEE-043's response_post_test.go in
+// HTTP/TLS path is covered by response_post_test.go in
 // internal/inverter : this file's scope ends at the hook contract.
 
 package main
@@ -222,7 +222,7 @@ func TestResponseRequiredOn_Bitmask(t *testing.T) {
 			want:   false,
 		},
 		{
-			// Out-of-IEEE-044-scope statuses (4/5/7+) are not emitted by
+			// Out-of-scope statuses (4/5/7+) are not emitted by
 			// this hook and must read as false even if the bitmap would
 			// select them in principle.
 			name:   "0xff mask does not select status 4 (opt-out, out of scope)",
@@ -522,7 +522,7 @@ func TestResponsePOSTHook_NilResponseRequiredEmitsZeroPOSTs(t *testing.T) {
 func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
 	t.Parallel()
 	// First call returns a transient-wrapped error mirroring what
-	// PostResponse would surface on a persistent 5xx. With IEEE-045's
+	// PostResponse would surface on a persistent 5xx. With
 	// PostResponseWithRetry layered in, the hook will retry : so the
 	// first transition takes 2 PostResponse calls (attempt 1: transient,
 	// attempt 2: success). The hook must still log + move on with no
@@ -536,7 +536,7 @@ func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
 	tnow := fixedTestNow
 	clock := func() time.Time { return tnow }
 	sm, sched := newTestStateMachine(clock)
-	// Tight retry cfg so the test does not burn the IEEE-045 default
+	// Tight retry cfg so the test does not burn the default
 	// 500ms initial backoff per recovered failure.
 	tightRetry := inverter.ResponseRetryConfig{
 		MaxAttempts:       3,
@@ -568,27 +568,27 @@ func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
 }
 
 // =============================================================================
-// IEEE-045 integration: state-machine transition → retry wrapper →
-// dead-letter log when all attempts fail.
+// Retry + dead-letter integration: state-machine transition -> retry wrapper
+// -> dead-letter log when all attempts fail.
 // =============================================================================
 
-// TestResponsePOSTHook_IEEE045DeadLetterOnPersistentTransient is the
-// Phase 6 end-to-end smoke test that ties IEEE-044 (hook wiring) and
-// IEEE-045 (retry + dead-letter) together. A persistent 5xx response
-// at the IEEE-040 state machine's DEFAULT→RECEIVED edge must:
+// TestResponsePOSTHook_DeadLetterOnPersistentTransient is the
+// Phase 6 end-to-end smoke test that ties hook wiring and
+// retry + dead-letter together. A persistent 5xx response
+// at the state machine's DEFAULT->RECEIVED edge must:
 //
 //  1. Drive cfg.MaxAttempts PostResponse calls (retry schedule consumed).
 //  2. Emit a dead-letter log line carrying the event mRID and Table 31
 //     status so an operator can audit the dropped Response.
 //  3. NOT wedge the state machine : the next transition
-//     (RECEIVED→STARTED) must still fire its own Response POST.
+//     (RECEIVED->STARTED) must still fire its own Response POST.
 //
 // Pike rules satisfied: errors are values (dead-letter line preserves
 // %w chain to ErrResponseTransient), no goroutine leak (the test runs
 // synchronously on a fake retry clock effectively : InitialDelay is
 // 1ms via the tight cfg).
-func TestResponsePOSTHook_IEEE045DeadLetterOnPersistentTransient(t *testing.T) {
-	// IEEE-081: deliberately serial : captureLog (and the inline
+func TestResponsePOSTHook_DeadLetterOnPersistentTransient(t *testing.T) {
+	// Deliberately serial : captureLog (and the inline
 	// SetOutput pattern below) swaps log.Default()'s writer, which is
 	// process-global. Any t.Parallel() sibling test that emits log
 	// lines via production code while we hold the capture would race
