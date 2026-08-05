@@ -1,8 +1,8 @@
-// IEEE-049 Phase 8 entry: HTTPS Notification receiver startup.
+// Phase 8 entry: HTTPS Notification receiver startup.
 //
 // Extracted from main.go so the receiver-start path can fail gracefully
-// without growing the cmd/inverterclient log.Fatalf inventory (IEEE-048
-// audit). The receiver is optional : when bind, cert load, or address
+// without growing the cmd/inverterclient log.Fatalf inventory. The
+// receiver is optional : when bind, cert load, or address
 // resolution fails, we log and return nil; main() proceeds with polling-
 // only (CSIP CORE-018 recommends subscription/notification but doesn't
 // require it).
@@ -18,16 +18,16 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 )
 
-// startNotifyReceiver builds and starts the IEEE-049 inbound Notification
+// startNotifyReceiver builds and starts the inbound Notification
 // listener. Returns nil on disabled (empty addr) or on any failure path,
-// matching IEEE-048's graceful-bypass philosophy : the inverter can run
+// matching the graceful-bypass philosophy : the inverter can run
 // in polling-only mode when the recommended-but-not-required subscription
 // receiver can't come up.
 //
 // hmi may be nil; when non-nil, the chosen bind address is published to
 // the dashboard via SetNotifyAddr.
 //
-// dispatcher is the per-Notification callback IEEE-049 hands every
+// dispatcher is the per-Notification callback this listener hands every
 // well-formed POST. main() passes a dispatch.RegisterableDispatcher
 // constructed before Phase 5 wiring is done; the dispatcher self-handles
 // the unregistered case (log + drop) so the listener can come up before

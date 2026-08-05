@@ -1,7 +1,7 @@
-// IEEE-052 Phase 8 ticket 4 of 4 (final) : integration test for the
+// Phase 8 ticket 4 of 4 (final) : integration test for the
 // /notify listener to SimulatorDispatcher to CancelHook chain.
 //
-// IEEESIM-004: updated to use dispatch.SimulatorDispatcher in place of the
+// Uses dispatch.SimulatorDispatcher in place of the
 // removed inverter.PhaseStateDispatcher. Behavior and assertions are unchanged.
 //
 // Exercises the full stack: a real ccmTestEnv-backed NotifyReceiver
@@ -63,7 +63,7 @@ func (r *inlineRegistry) cancel(sub string) {
 	r.mu.Unlock()
 }
 
-// TestNotifyHandler_Status1_CancelHookMutatesRegistry is the IEEE-052
+// TestNotifyHandler_Status1_CancelHookMutatesRegistry is the
 // integration anchor: an inbound Notification with status=1 must result
 // in the CancelHook firing with the SubscribedResource href, and the
 // caller's subscription-tracking state must be cleaned up : observable
@@ -73,7 +73,7 @@ func TestNotifyHandler_Status1_CancelHookMutatesRegistry(t *testing.T) {
 
 	env := newCCMTestEnv(t)
 
-	// Pre-seed registry as if IEEE-050 had registered two subscriptions.
+	// Pre-seed registry as if two subscriptions had already been registered.
 	registry := newInlineRegistry()
 	registry.Add("/edev/0/fsa", "/edev/0/sub/1") // sampleNotificationXML uses /edev/0/fsa
 	registry.Add("/edev/0/der", "/edev/0/sub/2")
@@ -112,7 +112,7 @@ func TestNotifyHandler_Status1_CancelHookMutatesRegistry(t *testing.T) {
 		t.Fatalf("status: want 204, got %d", resp.StatusCode)
 	}
 
-	// The IEEE-049 handler invokes the dispatcher synchronously on the
+	// The notify handler invokes the dispatcher synchronously on the
 	// handler goroutine before writing 204 (see notify.go), so by the
 	// time we observe the 204 the CancelHook has fired.
 	if registry.Has("/edev/0/fsa") {

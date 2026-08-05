@@ -13,7 +13,7 @@ import (
 
 // writeCertEnv writes a fresh CA + device cert under t.TempDir() and
 // returns the SimConfig fields the helper expects. The CA + device cert
-// pair is the minimum the IEEE-049 receiver needs to bind.
+// pair is the minimum the notify receiver needs to bind.
 func writeCertEnv(t *testing.T) (certFile, keyFile, caFile string) {
 	t.Helper()
 	caCertPEM, caKeyPEM, err := certs.GenerateCA(certs.CAOptions{
@@ -59,7 +59,7 @@ func writeCertEnv(t *testing.T) (certFile, keyFile, caFile string) {
 
 // TestStartNotifyReceiver_DisabledOnEmptyAddr asserts the disabled-on-empty
 // contract: empty --notify-listen returns nil receiver without error and
-// without touching cert files. The atomic op for IEEE-049 against an
+// without touching cert files. The atomic op for an
 // inverter that wants polling-only is "set SEP2_NOTIFY_LISTEN= (empty)
 // and proceed."
 func TestStartNotifyReceiver_DisabledOnEmptyAddr(t *testing.T) {
@@ -75,10 +75,10 @@ func TestStartNotifyReceiver_DisabledOnEmptyAddr(t *testing.T) {
 	}
 }
 
-// TestStartNotifyReceiver_GracefulBypassOnBadCerts asserts the IEEE-048-
-// style graceful-bypass posture: when cert load fails, the helper logs
-// and returns nil. main() then proceeds with polling-only. This is the
-// invariant the IEEE-049 ticket protects: an optional function set that
+// TestStartNotifyReceiver_GracefulBypassOnBadCerts asserts the
+// graceful-bypass posture: when cert load fails, the helper logs
+// and returns nil. main() then proceeds with polling-only. This protects
+// the invariant that an optional function set that
 // can't initialize must NOT crash the inverter.
 func TestStartNotifyReceiver_GracefulBypassOnBadCerts(t *testing.T) {
 	t.Parallel()
@@ -121,7 +121,7 @@ func TestStartNotifyReceiver_HappyPath(t *testing.T) {
 	}
 }
 
-// TestStartNotifyReceiver_AcceptsCustomDispatcher asserts the IEEESIM-004
+// TestStartNotifyReceiver_AcceptsCustomDispatcher asserts the
 // dispatcher seam: startNotifyReceiver forwards its dispatcher arg to
 // NewNotifyReceiver instead of forcing the NoopNotificationDispatcher.
 // This is the wiring point main() uses to install the real
