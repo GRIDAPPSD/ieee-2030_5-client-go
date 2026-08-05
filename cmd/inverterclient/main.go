@@ -23,6 +23,7 @@ import (
 
 // defaultServerURL matches the Makefile's `run-inverter` SERVER_URL default
 // so invoking the binary directly behaves the same as `make run-inverter`.
+// See GRIDAPPSD/ieee-2030_5-server-go#29.
 const defaultServerURL = "https://localhost:8443"
 
 // HMI server timeout defaults. The HMI is a local dashboard, but zero
@@ -117,7 +118,8 @@ func diffSnapshots(prev, curr map[string]sep2.DERControl) (added, cancelled []se
 // are tolerated : the walker skips that level and continues. Transport / decode
 // failures are returned wrapped with `%w` so callers can `errors.Is`/`As` on
 // underlying causes. Context cancellation propagates through c.Get; this
-// function spawns no goroutines. See derprogram_phase_test.go for coverage.
+// function spawns no goroutines. See derprogram_phase_test.go for coverage
+// and GRIDAPPSD/ieee-2030_5-server-go#77.
 func walkDERProgramTree(
 	ctx context.Context,
 	client *inverter.SEP2Client,
@@ -181,6 +183,7 @@ func main() {
 	flag.BoolVar(&cfg.AllowUnregistered, "allow-unregistered", false, "bypass missing-RegistrationLink check in CSIP mode (dev/test only)")
 
 	// PEN (Private Enterprise Number) stamped into every outbound LogEvent.
+	// See GRIDAPPSD/ieee-2030_5-server-go#189.
 	// Env var SEP2_PEN seeds the default; the CLI
 	// flag still wins per stdlib flag.Parse() precedence. Default 0 means
 	// "no manufacturer namespace" : fine for test / interop, but production
@@ -291,7 +294,7 @@ func main() {
 
 	// Inbound HTTPS Notification receiver. The listener uses the same gotls
 	// (CCM-8) stack as the outbound client and presents the device cert as
-	// its server cert.
+	// its server cert. See GRIDAPPSD/ieee-2030_5-server-go#174.
 	//
 	// notifyDispatcher is now a dispatch.Dispatcher constructed above by
 	// dispatch.New(cfg). Phase 5 dependencies (client, cache,
@@ -345,6 +348,7 @@ func main() {
 	// advertised pollRate rather than crash forward into Phase 2 against
 	// paths the server has not provisioned. WaitForAdvertisedLinks returns
 	// immediately if at least one link is already present.
+	// See GRIDAPPSD/ieee-2030_5-server-go#34.
 	dcap, err = client.WaitForAdvertisedLinks(ctx, dcap)
 	if err != nil {
 		log.Fatalf("wait for advertised links: %v", err)
@@ -359,10 +363,12 @@ func main() {
 	// exits cleanly when the inverter's root context cancels (Ctrl-C
 	// handler already wired). If TimeLink is absent the inverter
 	// degrades to local clock : log it and proceed.
+	// See GRIDAPPSD/ieee-2030_5-server-go#40.
 	//
 	// Extracted into runPhase1bTimeSync so the previously-fatal
 	// log.Fatalf on Time-resource fetch failure is replaced with graceful
-	// bypass (Phase 7 exit criterion 1). See phase1b_timesync.go.
+	// bypass (Phase 7 exit criterion 1). See phase1b_timesync.go and
+	// GRIDAPPSD/ieee-2030_5-server-go#129.
 	log.Println("=== Phase 1b: Time Sync ===")
 	if err := runPhase1bTimeSync(ctx, client, dcap); err != nil {
 		// Only context.Canceled / context.DeadlineExceeded reach here under
@@ -379,11 +385,13 @@ func main() {
 	// rather than POSTing /edev. If our LFDI is not in the list yet, idle
 	// and re-poll at dcap.PollRate (default 30s). IEEE 2030.5 mode (--csip
 	// off, the default) keeps the self-registration POST /edev path.
+	// See GRIDAPPSD/ieee-2030_5-server-go#36.
 	// Phase 2 / 3 / 4 walk the link graph reachable from /dcap rather than
 	// hardcoding URLs. Per IEEE 2030.5 §10.3 / CSIP §6.6 the client MUST
 	// derive every endpoint from advertised links : the server is free to
 	// host resources at any path. Each phase skips with a log line if the
 	// upstream link is absent (server did not advertise that function set).
+	// See GRIDAPPSD/ieee-2030_5-server-go#38.
 	edevListHref := ""
 	if dcap.EndDeviceListLink != nil {
 		edevListHref = dcap.EndDeviceListLink.Href
@@ -471,7 +479,8 @@ func main() {
 	}
 
 	// Register Subscriptions with the SEP2 server so it can POST
-	// Notifications to the /notify listener. Runs after Phase 2b (we now
+	// Notifications to the /notify listener. See
+	// GRIDAPPSD/ieee-2030_5-server-go#180. Runs after Phase 2b (we now
 	// know our EndDevice and its links) and before Phase 2c (the rest of
 	// the link-graph walk doesn't depend on subscription state). All
 	// failure modes degrade to polling : never fatal : so CSIP V1.2's
@@ -488,6 +497,7 @@ func main() {
 	// Wire the registry's Cancel method as the dispatcher's CancelHook so
 	// status=1 notifications (CSIP V1.2 CORE-019 step 13: "subscription
 	// cancelled by server") free the inverter-side subscription entry.
+	// See GRIDAPPSD/ieee-2030_5-server-go#186.
 	// Polling for the affected resource continues unaffected : the hook
 	// only cleans local state so a future re-subscription attempt can fire
 	// again. Safe to wire even when the registry is empty (no entries →
@@ -565,6 +575,7 @@ func main() {
 	// Primacy wins; ties on Primacy broken by MRID lex-min. Empty cache →
 	// no selection; the simulation tick loop's ApplyControls call falls back
 	// to nil base via inverter.ActiveControlBase's rule-3 (no-op semantics).
+	// See GRIDAPPSD/ieee-2030_5-server-go#80.
 	//
 	// selectedDERProgram + selectedDefaultControlHref feed the DefaultDERControl
 	// fetch below: the href drives a one-shot GET, whose base is the
@@ -618,7 +629,7 @@ func main() {
 	// Phase 5 entry: start the DERControlList polling goroutine on
 	// the active DERProgram's DERControlListLink. The cache surfaces added /
 	// updated / cancelled events for the scheduler and state
-	// machine that follow.
+	// machine that follow. See GRIDAPPSD/ieee-2030_5-server-go#84.
 	//
 	// pollRate source: dcap.PollRate. The advertised list-level pollRate lives
 	// on the ListResource returned by the GET : not on the *ListLink : so we
@@ -644,6 +655,7 @@ func main() {
 		// bind them into the dispatcher so the /notify listener stops
 		// being a no-op. Polling stays active above; notifications additively
 		// cut the latency floor from pollRate to "as soon as server POSTs."
+		// See GRIDAPPSD/ieee-2030_5-server-go#183.
 		// Bypass when the receiver never came up (notifyReceiver == nil) :
 		// no listener means no inbound POSTs, so the dispatcher would never
 		// fire anyway. The Register call is still safe (idempotent), but the
@@ -661,6 +673,7 @@ func main() {
 	// Phase 5 entry: state machine that ties the DERControlList cache and
 	// the scheduler together. Drives DEFAULT ↔ EVENT_RECEIVED ↔
 	// EVENT_STARTED ↔ (EVENT_COMPLETED | EVENT_CANCELLED) → DEFAULT.
+	// See GRIDAPPSD/ieee-2030_5-server-go#92.
 	//
 	// The state-machine tick goroutine runs at the same cadence as the cache
 	// poll (dcap.PollRate, floored at 60s) so each tick can observe the
@@ -677,6 +690,7 @@ func main() {
 	// EVENT_RECEIVED → EVENT_STARTED transition (CSIP V1.2 CORE-012 step 6:
 	// curves are part of "apply," not "discover"). Phase 6 layers the
 	// Response Function Set emitter on top of this same hook surface.
+	// See GRIDAPPSD/ieee-2030_5-server-go#102.
 	sched := inverter.NewScheduler(client.Now, mathrand.New(mathrand.NewPCG(uint64(time.Now().UnixNano()), 0xCAFEBABE)))
 	stateMachine := inverter.NewStateMachine()
 
@@ -720,6 +734,7 @@ func main() {
 	// filters on evt.ReplyTo + evt.ResponseRequired + Table 31 status
 	// mapping internally; here we just register it. lfdi is the inverter's
 	// LFDI hex (set in Phase 2 via SEP2Client.LFDI()).
+	// See GRIDAPPSD/ieee-2030_5-server-go#109.
 	if selected {
 		stateMachine.AddTransitionHook(responsePOSTHook(client, client.LFDI(), client.Now))
 		log.Println("Phase 6: response POST hook installed")
@@ -766,6 +781,7 @@ func main() {
 	// tick loop below, which feeds inverter.ActiveControlBase(stateMachine.
 	// Current(), defaultCtl) into ApplyControls, closing the
 	// long-standing ApplyControls(nil, ...) defect at this seam.
+	// See GRIDAPPSD/ieee-2030_5-server-go#98.
 
 	// Phase 3: DER Setup : follow EndDevice.DERListLink to find the first
 	// DER, then PUT to its DERCapabilityLink / DERSettingsLink. DERStatus
@@ -895,6 +911,7 @@ func main() {
 	reporter := inverter.NewReporter(client, derStatusHref, mmrHref)
 
 	// Wire the LogEvent rate-limiter + alarm transition detector.
+	// See GRIDAPPSD/ieee-2030_5-server-go#190.
 	//
 	// Source the LogEventList href from EndDevice.LogEventListLink (set
 	// during registration/lookup). An empty/missing link means the

@@ -26,6 +26,7 @@ import (
 // EndDeviceList does not contain an entry whose LFDI matches the client's.
 // Callers in CSIP mode treat this as a transient "not yet provisioned"
 // condition and re-poll the list rather than aborting.
+// See GRIDAPPSD/ieee-2030_5-server-go#36.
 var ErrEndDeviceNotFound = errors.New("end device not found in server list")
 
 // ErrResponseTransient is the sentinel error returned by PostResponse when
@@ -36,6 +37,7 @@ var ErrEndDeviceNotFound = errors.New("end device not found in server list")
 // sentinel is intentionally a bare leaf error; PostResponse wraps it with
 // %w plus contextual detail (status code, URL) so callers retain both the
 // pattern-match handle and the diagnostic chain.
+// See GRIDAPPSD/ieee-2030_5-server-go#116.
 var ErrResponseTransient = errors.New("response POST transient failure")
 
 const (
@@ -64,6 +66,7 @@ type SEP2Client struct {
 	// namespace" : acceptable for test/interop, not for production. The
 	// field is read-only after NewSEP2Client returns;
 	// concurrent POSTs share a single value with no race.
+	// See GRIDAPPSD/ieee-2030_5-server-go#189.
 	pen uint32
 
 	// logEventLimiter is the rate-limit seam consumed by PostLogEvent. The
@@ -72,6 +75,7 @@ type SEP2Client struct {
 	// through. The seam is intentionally an interface declared at the
 	// consumer (this package) and accepts a single method so the limiter
 	// can be a function adapter, a struct, or a stub.
+	// See GRIDAPPSD/ieee-2030_5-server-go#190.
 	logEventLimiter LogEventRateLimiter
 }
 
@@ -134,6 +138,7 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 		// Subject and an otherName-only SAN, so stdlib hostname
 		// verification cannot succeed against them in any case; the helper
 		// matches the existing server-side enforcement scope.
+		// See GRIDAPPSD/ieee-2030_5-server-go#32.
 		InsecureSkipVerify: true, //nolint:gosec // see comment above
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			return sepTLS.VerifyPeerCertWithHardwareModuleSAN(rawCerts, caPool)
@@ -145,7 +150,7 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 	// Reading the cert file a second time and re-decoding the PEM (the
 	// previous behavior) was redundant and discarded errors from both
 	// os.ReadFile and pem.Decode, leaving a nil-pointer deref on the next
-	// line if either failed.
+	// line if either failed. See GRIDAPPSD/ieee-2030_5-server-go#7.
 	if len(cert.Certificate) == 0 {
 		return nil, fmt.Errorf("client cert %q has no leaf certificate", cfg.CertFile)
 	}
@@ -218,7 +223,7 @@ func (c *SEP2Client) SetLogEventRateLimiter(rl LogEventRateLimiter) {
 // *MovedError for redirects, ErrResponseTransient for 5xx). All errors are
 // wrapped with the method-and-URL context so the error message reads
 // "GET /edev: not found (404)" while callers can still match the underlying
-// sentinel via errors.Is. See errors.go.
+// sentinel via errors.Is. See errors.go and GRIDAPPSD/ieee-2030_5-server-go#120.
 //
 // Follow-once semantics: when the first attempt returns a
 // *MovedError with a non-empty Location, the GET is re-issued exactly once
@@ -226,7 +231,8 @@ func (c *SEP2Client) SetLogEventRateLimiter(rl LogEventRateLimiter) {
 // holding a cached href can update their local copy; newHref is "" when no
 // follow happened (i.e. the 200 path or any non-3xx error). Subsequent
 // redirects on the retry propagate as a *MovedError without further retry
-// (no chain following per RFC 7231 §6.4.2 / CSIP V1.2 §6.6).
+// (no chain following per RFC 7231 §6.4.2 / CSIP V1.2 §6.6). See
+// GRIDAPPSD/ieee-2030_5-server-go#124.
 func (c *SEP2Client) Get(ctx context.Context, path string, out any) (newHref string, err error) {
 	if err := c.getOnce(ctx, c.baseURL+path, path, out); err != nil {
 		var moved *MovedError
@@ -423,7 +429,8 @@ func (c *SEP2Client) Discover(ctx context.Context) (sep2.DeviceCapability, error
 // EndDeviceList href advertised in DeviceCapability. The href is passed in
 // rather than baked in as a constant : per IEEE 2030.5 §10.3 / CSIP §6.6 a
 // client MUST traverse the link graph reachable from /dcap and never assume
-// URL shapes.
+// URL shapes. This link-derivation discipline applies to every href-taking
+// method in this file; see GRIDAPPSD/ieee-2030_5-server-go#38.
 //
 // Test coverage checklist:
 //  1. Register(ctx, edevListHref) POSTs to the exact passed href (httptest
@@ -476,6 +483,7 @@ func (c *SEP2Client) Register(ctx context.Context, edevListHref string) (registe
 // External IEEE 2030.5 / CSIP servers commonly emit lowercase `<lFDI>` on
 // the wire : xs:hexBinary is case-insensitive per W3C XML Schema Part 2 :
 // so byte-equality silently misses provisioned devices.
+// See GRIDAPPSD/ieee-2030_5-server-go#226.
 //
 // First-cut paging: appends `?l=255` to fetch the first page. Cursor walking
 // for lists larger than 255 entries is deferred to a follow-up ticket.
@@ -541,6 +549,7 @@ func stripPagingQuery(followed, sep string) string {
 // match against its out-of-band provisioned PIN. Mismatch enforcement and
 // idle-retry on a not-yet-provisioned PIN, plus strict-mode
 // missing-RegistrationLink behavior, live in the caller.
+// See GRIDAPPSD/ieee-2030_5-server-go#42.
 //
 // Test coverage checklist:
 //   - happy path: stub server returns Registration with known PIN; method
@@ -569,6 +578,7 @@ func (c *SEP2Client) GetRegistration(ctx context.Context, registrationHref strin
 // this EndDevice. CSIP V1.2 CORE-012 step 1 : first move after the device is
 // confirmed commissioned. The tree walk per FSA (DERProgramList enumeration)
 // and Primacy + mRID program selection are handled by the caller.
+// See GRIDAPPSD/ieee-2030_5-server-go#48.
 //
 // First-cut paging: appends `?l=255` to fetch the first page; cursor walking
 // for lists larger than 255 entries is deferred to a follow-up. Mirrors the
@@ -651,6 +661,7 @@ func (c *SEP2Client) PutDERStatus(ctx context.Context, derstatusHref string, sta
 // DERPrograms bound to it. GetDERProgramList lands ONLY the list GET + per-program
 // subtree fetch in cmd/inverterclient/main.go; Primacy + mRID selection of
 // the highest-priority DERProgram happens downstream in the caller.
+// See GRIDAPPSD/ieee-2030_5-server-go#77.
 //
 // First-cut paging: appends `?l=255` to fetch the first page; cursor walking
 // for lists larger than 255 entries is deferred to a follow-up. Mirrors the
@@ -832,7 +843,7 @@ func isTransientResponseStatus(code int) bool {
 // the server-issued DERControl, per CSIP V1.2 CORE-022 and IEEE 2030.5
 // §10.10. The href may be relative (e.g. `/rsps/{rspSetID}/rsp`) or absolute
 // (e.g. `https://server/rsps/...`); both forms resolve correctly against
-// c.baseURL via resolveServerURL.
+// c.baseURL via resolveServerURL. See GRIDAPPSD/ieee-2030_5-server-go#106.
 //
 // Success criteria per CORE-022: the server returns 201 Created (typically
 // with a Location header pointing at the new Response resource) or 204 No
@@ -843,7 +854,7 @@ func isTransientResponseStatus(code int) bool {
 //
 // Failure handling is split by status class so the state
 // machine hook and the retry/dead-letter policy can pattern-match
-// without re-parsing:
+// without re-parsing (GRIDAPPSD/ieee-2030_5-server-go#109):
 //
 //   - 4xx: wrapped error containing the status code and URL. The response
 //     body is NOT logged verbatim : it may echo XML that triggered the
@@ -1008,6 +1019,7 @@ func dcapHasAnyLink(d sep2.DeviceCapability) bool {
 // When the server returns a bare <DeviceCapability pollRate="N"/>
 // with no children, the inverter must idle-re-poll rather than crash
 // forward into Phase 2 (which would 404 on the unprovisioned /edev path).
+// See GRIDAPPSD/ieee-2030_5-server-go#34.
 func (c *SEP2Client) WaitForAdvertisedLinks(ctx context.Context, initial sep2.DeviceCapability) (sep2.DeviceCapability, error) {
 	dcap := initial
 	for !dcapHasAnyLink(dcap) {
@@ -1027,7 +1039,7 @@ func (c *SEP2Client) WaitForAdvertisedLinks(ctx context.Context, initial sep2.De
 	return dcap, nil
 }
 
-// Server time sync =================================================
+// Server time sync (GRIDAPPSD/ieee-2030_5-server-go#40) =================================================
 //
 // CSIP / IEEE 2030.5 §10 require devices to source time from the server's Time
 // resource (linked from DeviceCapability.TimeLink) and to use that time :
@@ -1107,6 +1119,7 @@ func (c *SEP2Client) SyncServerTime(ctx context.Context, timeHref string) (sep2.
 // Production code reads via getMinTimeSyncPollRate(); the
 // production binary itself never writes. Mirrors the pollDuration
 // testability seam pattern used elsewhere in this package.
+// See GRIDAPPSD/ieee-2030_5-server-go#134.
 var minTimeSyncPollRateNanos atomic.Int64
 
 func init() {
