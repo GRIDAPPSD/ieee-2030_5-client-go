@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-// HTTP response-code router typed errors (IEEE-046, plan-1 Phase 7 entry).
+// HTTP response-code router typed errors (plan-1 Phase 7 entry).
 //
 // classifyResponse maps non-2xx HTTP responses returned by (*SEP2Client).Get /
 // Post / Put to these sentinels (or to a *MovedError on a 3xx redirect) so
@@ -14,7 +14,7 @@ import (
 // status codes. CSIP V1.2 GEN.037..GEN.049 require a DER Client to *process*
 // each of these codes per spec semantics; this is the typed-error half of
 // that work : caller behavior changes (graceful bypass replacing log.Fatalf,
-// 301 follow with cached-href update) ship in IEEE-048 and IEEE-047.
+// 301 follow with cached-href update) are layered on top elsewhere.
 //
 // 5xx maps to the pre-existing ErrResponseTransient, so callers
 // already pattern-matching that sentinel continue to work unchanged.
@@ -35,7 +35,7 @@ var (
 	// For optional function sets (LogEventList, MirrorUsagePoint, subscription)
 	// callers should bypass with a warning; for essential function sets
 	// (RegistrationLink in --csip strict mode) callers should bail. Wiring is
-	// IEEE-048's scope; this ticket only surfaces the typed error.
+	// out of scope here; this file only surfaces the typed error.
 	ErrNotFound = errors.New("not found (404)")
 
 	// ErrMethodNotAllowed is returned when the server responds with 405
@@ -54,8 +54,7 @@ var (
 	// LogEvent function set OPTIONAL : when an EndDevice does not advertise
 	// a LogEventListLink the alarm-class emitter must bypass with a warning,
 	// not abort. Callers branch on errors.Is(err, ErrLogEventLinkAbsent) to
-	// distinguish the "server gap" case from real POST failures. See
-	// IEEE-053 (Plan-1 Phase 9 entry) and IEEE-054 (wiring).
+	// distinguish the "server gap" case from real POST failures.
 	ErrLogEventLinkAbsent = errors.New("LogEventListLink absent")
 
 	// ErrRateLimited is returned by PostLogEvent when the configured
@@ -64,7 +63,7 @@ var (
 	// no HTTP traffic on a deny. Callers branch on errors.Is(err,
 	// ErrRateLimited) to silently drop the duplicate without escalating.
 	// The default (nil-limiter) policy is allow-all; the concrete limiter
-	// implementation is owned by IEEE-054.
+	// implementation lives elsewhere.
 	ErrRateLimited = errors.New("LogEvent rate limited")
 )
 
@@ -73,7 +72,7 @@ var (
 // the case of 301 Moved Permanently, update its cached href so subsequent
 // traversals use the new path.
 //
-// Only 301 handling is in IEEE-047's scope. The struct covers the broader
+// Only 301 handling is in scope here. The struct covers the broader
 // redirect family because the stdlib http.Client otherwise treats them
 // alike : disabling auto-follow on the client surfaces every redirect class
 // through this type, and callers can pattern-match via the Status field
@@ -113,12 +112,12 @@ func (e *MovedError) Error() string {
 //	204 No Content      → nil (POST/PUT succeeded, no body)
 //	301 Moved Permanently → *MovedError{Status: 301, Location: <header>}
 //	302/307/308          → *MovedError (general redirect; only 301 has follow
-//	                       logic in IEEE-047, but the type surfaces all four)
+//	                       logic, but the type surfaces all four)
 //	400 Bad Request     → ErrBadRequest
 //	404 Not Found       → ErrNotFound
 //	405 Method Not Allowed → ErrMethodNotAllowed
 //	501 Not Implemented → ErrNotImplemented
-//	5xx (other)         → ErrResponseTransient (IEEE-043 sentinel reused)
+//	5xx (other)         → ErrResponseTransient (pre-existing sentinel reused)
 //	other 4xx           → bare "unexpected client error %d"
 //	other 1xx/3xx       → bare "unexpected status %d"
 //
