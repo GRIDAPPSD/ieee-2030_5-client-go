@@ -30,9 +30,9 @@ func ApplyControls(base *sep2.DERControlBase, grid GridState, maxPW float64) Con
 // `curves == nil` is equivalent to calling ApplyControls : no behavior
 // change for callers that haven't adopted the curve cache yet.
 //
-// IEEE-042 (Phase 5 closer): plumbs server-fetched DERCurves into the
+// Phase 5 closer: plumbs server-fetched DERCurves into the
 // control application path. cmd/inverterclient/main.go installs a
-// state-machine hook that populates the cache on EVENT_RECEIVED →
+// state-machine hook that populates the cache on EVENT_RECEIVED ->
 // EVENT_STARTED transitions.
 func ApplyControlsWithCurves(
 	base *sep2.DERControlBase,
@@ -71,8 +71,7 @@ func ApplyControlsWithCurves(
 	// Priority c: volt-watt (limits active power based on voltage). Uses
 	// the server-supplied Volt/Watt curve if cached, else the IEEE 1547
 	// default. Pre-existing behavior: this branch fires under the
-	// OpModVoltVar guard (a quirk flagged in IEEE-041; out of scope for
-	// IEEE-042 to refactor).
+	// OpModVoltVar guard (a known quirk; out of scope here to refactor).
 	if base.OpModVoltVar != nil {
 		curve := lookupCurveOrDefault(curves, sep2.CurveTypeOpModVoltWatt, VoltWattDefaultCurve())
 		pFraction := EvaluateCurve(curve, grid.VoltsPU)
