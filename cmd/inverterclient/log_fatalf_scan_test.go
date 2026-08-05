@@ -107,11 +107,11 @@ func TestLogFatalfCallSites(t *testing.T) {
 	}{
 		{
 			needle: `log.Fatalf("initial server time sync `,
-			reason: "Phase 1b time-sync was extracted into runPhase1bTimeSync with graceful bypass ",
+			reason: "Phase 1b time-sync was extracted into runPhase1bTimeSync with graceful bypass",
 		},
 		{
 			needle: `log.Fatalf("GET DER list `,
-			reason: "Phase 3 DER list GET was extracted into fetchDERListForSetup with graceful bypass ",
+			reason: "Phase 3 DER list GET was extracted into fetchDERListForSetup with graceful bypass",
 		},
 	}
 	for _, f := range forbidden {

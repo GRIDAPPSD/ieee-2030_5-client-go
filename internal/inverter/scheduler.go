@@ -10,26 +10,26 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
-// DERControl event scheduler (IEEE-039 / Phase 5 ticket 2 of 5) ===============
+// DERControl event scheduler (Phase 5) ===============
 //
-// IEEE-038 ships the polling cache (DERControlCache.Snapshot / Diff). This
-// file consumes those deltas to build a randomization-aware event scheduler:
+// The polling cache (DERControlCache.Snapshot / Diff) produces deltas; this
+// file consumes them to build a randomization-aware event scheduler:
 //
 //   - For each polled DERControl, parse Interval.Start + Interval.Duration,
 //     apply RandomizeStart and RandomizeDuration per IEEE 2030.5 §10.1.4,
 //     queue a scheduledEvent keyed by mRID, sorted ascending by FireAt.
-//   - Expose Next() (peek) and PopExpired(now) so IEEE-040's state machine
-//     can drive EVENT_RECEIVED → EVENT_STARTED transitions without coupling
+//   - Expose Next() (peek) and PopExpired(now) so the state machine
+//     can drive EVENT_RECEIVED -> EVENT_STARTED transitions without coupling
 //     to the queue internals.
 //   - All scheduling math uses an injected nowFunc : production passes
-//     client.Now (the server-offset wall clock from IEEE-031); tests inject
+//     client.Now (the server-offset wall clock); tests inject
 //     a fixed-time clock. The scheduler NEVER reads real time.Now() inline.
 //
-// Out of scope for IEEE-039:
-//   - Firing events / mutating inverter mode/output : IEEE-040 owns the
-//     state machine; this scheduler just produces the queue.
-//   - Replacing ApplyControls(nil, ...) at cmd/inverterclient/main.go : IEEE-041.
-//   - DERCurve retrieval : IEEE-042.
+// Out of scope for this scheduler:
+//   - Firing events / mutating inverter mode/output : the state machine owns
+//     that; this scheduler just produces the queue.
+//   - Replacing ApplyControls(nil, ...) at cmd/inverterclient/main.go.
+//   - DERCurve retrieval.
 //   - Response Function Set / replyTo POSTs : Phase 6.
 //
 // IEEE 2030.5 §10.1.4 randomization interpretation (Phase 5 doc exit criterion 3):
@@ -45,13 +45,13 @@ import (
 //     cannot produce a negative-duration scheduled event.
 
 // scheduledEvent is the unit the scheduler queues. Source carries the full
-// DERControl so IEEE-040's state machine can inspect EventStatus, primacy,
+// DERControl so the state machine can inspect EventStatus, primacy,
 // and the DERControlBase fields when it actually applies the event. The
 // scheduler itself never reads Source's body : it only routes by mRID and
 // fire window.
 //
-// Exported so IEEE-040 can construct test fixtures without going through
-// the package boundary.
+// Exported so the state machine can construct test fixtures without going
+// through the package boundary.
 type scheduledEvent struct {
 	MRID     string
 	FireAt   time.Time
@@ -68,7 +68,7 @@ type scheduledEvent struct {
 // extra read parallelism an RWMutex would buy is not worth its complexity
 // here. The mutex is held only across in-memory queue mutation; never
 // across I/O. Pike rule 3 (no goroutine leaks) is not relevant : Scheduler
-// owns no goroutine; IEEE-040's state machine will own its own loop.
+// owns no goroutine; the state machine will own its own loop.
 type Scheduler struct {
 	mu      sync.Mutex
 	queue   []scheduledEvent
@@ -100,21 +100,21 @@ func NewScheduler(nowFunc func() time.Time, rng *rand.Rand) *Scheduler {
 
 // OnEventsAdded inserts each event into the queue, sorted by FireAt
 // ascending. Caller obtains `events` from DERControlCache.Diff's `added`
-// bucket; IEEE-040 will route updated/cancelled to the matching method.
+// bucket; the state machine routes updated/cancelled to the matching method.
 //
 // Events with a nil Interval are skipped : IEEE 2030.5 §10.7 requires
 // DERControl to carry an interval, but server-side garbage shouldn't crash
 // the scheduler. Skip count is logged.
 //
 // Events whose Interval.Start is 0 (Unix epoch) are still queued. Per the
-// spec a Start of 0 is unusual but not invalid; IEEE-040 will detect "fire
-// time has already passed by hours" and treat it as past-due during the
-// state-machine transition. The scheduler stays pure.
+// spec a Start of 0 is unusual but not invalid; the state machine detects
+// "fire time has already passed by hours" and treats it as past-due during
+// the state-machine transition. The scheduler stays pure.
 //
 // Repeated calls with the same mRID are tolerated: the older entry is
 // removed before the new one is inserted. This is the path that handles
-// "server adjusted Interval.Start mid-poll" without IEEE-040 having to
-// route through OnEventsCancelled first.
+// "server adjusted Interval.Start mid-poll" without the state machine
+// having to route through OnEventsCancelled first.
 func (s *Scheduler) OnEventsAdded(events []sep2.DERControl) {
 	if len(events) == 0 {
 		return
@@ -157,23 +157,23 @@ func (s *Scheduler) OnEventsCancelled(mRIDs []string) {
 	}
 }
 
-// OnEventsUpdated is a no-op for IEEE-039. EventStatus.currentStatus
-// transitions surface here in IEEE-040 : the state-machine context is what
-// distinguishes "transitioning to Active mid-window" (no re-queue) from
+// OnEventsUpdated is an intentional no-op. EventStatus.currentStatus
+// transitions need the state-machine context to distinguish
+// "transitioning to Active mid-window" (no re-queue) from
 // "server pushed Interval forward" (re-queue with new fireAt). Implementing
-// it here without that context would commit to a semantic IEEE-040 may need
-// to undo. Documented intentional no-op, not forgotten.
+// it here without that context would commit to a semantic the state machine
+// may need to undo. Documented intentional no-op, not forgotten.
 func (s *Scheduler) OnEventsUpdated(events []sep2.DERControl) {
 	if len(events) == 0 {
 		return
 	}
-	log.Printf("scheduler: OnEventsUpdated called with %d events : no-op until IEEE-040 state machine ships",
+	log.Printf("scheduler: OnEventsUpdated called with %d events : no-op, handled by the state machine",
 		len(events))
 }
 
 // Next returns the head of the queue (earliest FireAt) without removing it.
-// Returns ok=false when the queue is empty. Used by IEEE-040 to compute the
-// next wake-up duration for its state machine loop.
+// Returns ok=false when the queue is empty. Used by the state machine to
+// compute the next wake-up duration for its loop.
 func (s *Scheduler) Next() (scheduledEvent, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -185,12 +185,12 @@ func (s *Scheduler) Next() (scheduledEvent, bool) {
 
 // PopExpired removes and returns every queued event whose FireAt <= now.
 // Returned slice is ordered ascending by FireAt (matches queue order).
-// An empty queue returns nil. IEEE-040 calls this each loop iteration to
-// drive EVENT_RECEIVED → EVENT_STARTED.
+// An empty queue returns nil. The state machine calls this each loop
+// iteration to drive EVENT_RECEIVED -> EVENT_STARTED.
 //
 // PopExpired does NOT consult ExpireAt : pop-by-fire-time is the
-// state-machine's entry point; expiry handling is IEEE-040's concern after
-// it transitions to EVENT_STARTED.
+// state-machine's entry point; expiry handling is the state machine's
+// concern after it transitions to EVENT_STARTED.
 func (s *Scheduler) PopExpired(now time.Time) []scheduledEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -220,8 +220,9 @@ func (s *Scheduler) Len() int {
 }
 
 // Now returns the scheduler's clock reading via the injected nowFunc.
-// Exposed so IEEE-040 (or any caller that already holds a *Scheduler) can
-// read the same clock the scheduler uses without re-injecting nowFunc.
+// Exposed so the state machine (or any caller that already holds a
+// *Scheduler) can read the same clock the scheduler uses without
+// re-injecting nowFunc.
 func (s *Scheduler) Now() time.Time {
 	return s.nowFunc()
 }
@@ -300,7 +301,7 @@ func applyRandomizeStart(start time.Time, randomizeStart *int32, rng *rand.Rand)
 //
 // rng.Int64N gives [0, |rd|+1) so we shift by |rd|/2 to center the window.
 // The resulting duration may be negative if duration is small and |rd| is
-// large; the caller clamps to zero. Documented for IEEE-040 reviewers.
+// large; the caller clamps to zero. Documented for state-machine reviewers.
 func applyRandomizeDuration(duration time.Duration, randomizeDuration *int32, rng *rand.Rand) time.Duration {
 	if randomizeDuration == nil || *randomizeDuration == 0 {
 		return duration

@@ -30,7 +30,7 @@ var ErrEndDeviceNotFound = errors.New("end device not found in server list")
 
 // ErrResponseTransient is the sentinel error returned by PostResponse when
 // the server reports a transient failure (5xx, or a transport-level error
-// that survives the one-shot in-call retry). Phase 6 / IEEE-045 will
+// that survives the one-shot in-call retry). Phase 6 will
 // `errors.Is`-match against this to drive the exponential-backoff +
 // dead-letter retry policy without coupling to status-code parsing. The
 // sentinel is intentionally a bare leaf error; PostResponse wraps it with
@@ -61,14 +61,14 @@ type SEP2Client struct {
 	// pen is the IANA Private Enterprise Number stamped into every LogEvent
 	// the client POSTs (IEEE 2030.5 §9.5 logEventPEN). Sourced from
 	// SimConfig.LogEventPEN at construction. Zero means "no manufacturer
-	// namespace" : acceptable for test/interop, not for production. See
-	// IEEE-053. The field is read-only after NewSEP2Client returns;
+	// namespace" : acceptable for test/interop, not for production. The
+	// field is read-only after NewSEP2Client returns;
 	// concurrent POSTs share a single value with no race.
 	pen uint32
 
-	// logEventLimiter is the rate-limit seam consumed by PostLogEvent.
-	// IEEE-054 plugs in a concrete implementation (max 1 LogEvent per
-	// logEventCode per minute); the default (nil) allows every POST
+	// logEventLimiter is the rate-limit seam consumed by PostLogEvent. The
+	// concrete implementation caps at max 1 LogEvent per
+	// logEventCode per minute; the default (nil) allows every POST
 	// through. The seam is intentionally an interface declared at the
 	// consumer (this package) and accepts a single method so the limiter
 	// can be a function adapter, a struct, or a stub.
@@ -173,8 +173,8 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 			Timeout:   30 * time.Second,
 			// Disable stdlib auto-follow on 3xx so 301 Moved Permanently
 			// surfaces as a *MovedError via classifyResponse instead of
-			// being silently followed. IEEE-047 will consume the
-			// *MovedError to update cached hrefs; IEEE-046 lands only the
+			// being silently followed. Callers consume the
+			// *MovedError to update cached hrefs; this hook only does the
 			// surfacing. http.ErrUseLastResponse tells the client to
 			// return the redirect response unmodified rather than follow.
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -201,8 +201,8 @@ func (c *SEP2Client) PEN() uint32 { return c.pen }
 
 // SetLogEventRateLimiter installs a rate-limit gate consulted by every
 // PostLogEvent call. Passing nil disables rate limiting (allow-all, the
-// default). IEEE-054 owns the concrete limiter; IEEE-053 just exposes the
-// seam so tests and the simulator can plug in their own throttle.
+// default). This exposes the seam so tests and the simulator can plug in
+// their own throttle.
 //
 // Not concurrency-safe with concurrent PostLogEvent: install the limiter
 // before any goroutine starts emitting events.
@@ -218,9 +218,9 @@ func (c *SEP2Client) SetLogEventRateLimiter(rl LogEventRateLimiter) {
 // *MovedError for redirects, ErrResponseTransient for 5xx). All errors are
 // wrapped with the method-and-URL context so the error message reads
 // "GET /edev: not found (404)" while callers can still match the underlying
-// sentinel via errors.Is. See IEEE-046 / errors.go.
+// sentinel via errors.Is. See errors.go.
 //
-// IEEE-047 follow-once semantics: when the first attempt returns a
+// Follow-once semantics: when the first attempt returns a
 // *MovedError with a non-empty Location, the GET is re-issued exactly once
 // against the new URL. The new URL is returned as newHref so callers
 // holding a cached href can update their local copy; newHref is "" when no
@@ -251,7 +251,7 @@ func (c *SEP2Client) Get(ctx context.Context, path string, out any) (newHref str
 }
 
 // getOnce performs a single GET attempt against rawURL. logPath supplies the
-// human-readable URL token used in error messages so the IEEE-046 message
+// human-readable URL token used in error messages so the message
 // shape ("GET /edev: not found (404)") survives both the original and the
 // post-follow attempt.
 func (c *SEP2Client) getOnce(ctx context.Context, rawURL, logPath string, out any) error {
@@ -296,9 +296,9 @@ func (c *SEP2Client) getOnce(ctx context.Context, rawURL, logPath string, out an
 // non-2xx codes return the appropriate typed error wrapped with method-and-
 // URL context. 201 Created is the spec-canonical POST success code and is
 // where the Location header carries the new-resource URI per CSIP V1.2 §6.6
-// / IEEE 2030.5 §10.3. See IEEE-046 / errors.go.
+// / IEEE 2030.5 §10.3. See errors.go.
 //
-// IEEE-047 follow-once semantics: see Get. The marshalled XML body is held
+// Follow-once semantics: see Get. The marshalled XML body is held
 // in a []byte and wrapped in a fresh bytes.NewReader per attempt so the
 // retry re-sends the same payload (avoids the io.Reader-exhausted-on-retry
 // hazard). newHref is the new URL on follow, "" otherwise.
@@ -357,9 +357,9 @@ func (c *SEP2Client) postOnce(ctx context.Context, rawURL, logPath string, data 
 //
 // Status-code mapping is delegated to classifyResponse: 200/201/204 return
 // nil error; non-2xx codes return the appropriate typed error wrapped with
-// method-and-URL context. See IEEE-046 / errors.go.
+// method-and-URL context. See errors.go.
 //
-// IEEE-047 follow-once semantics: see Get. The marshalled XML body is held
+// Follow-once semantics: see Get. The marshalled XML body is held
 // in a []byte and wrapped in a fresh bytes.NewReader per attempt.
 func (c *SEP2Client) Put(ctx context.Context, path string, body any) (newHref string, err error) {
 	data, err := xml.Marshal(body)
@@ -425,12 +425,11 @@ func (c *SEP2Client) Discover(ctx context.Context) (sep2.DeviceCapability, error
 // client MUST traverse the link graph reachable from /dcap and never assume
 // URL shapes.
 //
-// IEEE-030 tests deferred per Craig override 2026-05-12 (time crunch).
-// Required-but-deferred coverage:
+// Test coverage checklist:
 //  1. Register(ctx, edevListHref) POSTs to the exact passed href (httptest
 //     assertion on req.URL.Path), returns the parsed EndDevice from the
 //     Location response.
-//  2. Empty href argument → error, no HTTP call.
+//  2. Empty href argument -> error, no HTTP call.
 //
 // On 301 against edevListHref the underlying Post follows once and surfaces
 // the new edev-list URL as newEdevListHref so the caller (typically
@@ -479,19 +478,17 @@ func (c *SEP2Client) Register(ctx context.Context, edevListHref string) (registe
 // so byte-equality silently misses provisioned devices.
 //
 // First-cut paging: appends `?l=255` to fetch the first page. Cursor walking
-// for lists larger than 255 entries is deferred to a follow-up ticket
-// (noted in IEEE-029).
+// for lists larger than 255 entries is deferred to a follow-up ticket.
 //
-// IEEE-029 tests deferred per Craig override 2026-05-12 (time crunch).
-// Required-but-deferred coverage (must be written before next backlog sweep):
-//  1. --csip on, server list contains our LFDI → succeeds; Phase 3 fires once.
-//  2. --csip on, server list empty → ErrEndDeviceNotFound; caller idle-loops;
+// Test coverage checklist:
+//  1. --csip on, server list contains our LFDI -> succeeds; Phase 3 fires once.
+//  2. --csip on, server list empty -> ErrEndDeviceNotFound; caller idle-loops;
 //     zero PUTs/POSTs on /edev/{id}/* or /mup while idling.
-//  3. --csip on, server list contains other LFDIs but not ours → ErrEndDeviceNotFound.
-//  4. --csip off → existing Register POST still fires /edev (no regression).
+//  3. --csip on, server list contains other LFDIs but not ours -> ErrEndDeviceNotFound.
+//  4. --csip off -> existing Register POST still fires /edev (no regression).
 //  5. Cursor paging: list > 255 entries (follow-up ticket; not filed yet).
 //
-// IEEE-047: on 301 the underlying Get follows once and the new edev-list
+// On 301 the underlying Get follows once and the new edev-list
 // href (with the ?l=255 page query stripped) is surfaced as
 // newEdevListHref so the caller can update its cached copy before the next
 // poll. newEdevListHref is "" when no follow happened.
@@ -541,13 +538,11 @@ func stripPagingQuery(followed, sep string) string {
 // GetRegistration GETs the server-provided Registration resource at the given
 // href and decodes it. The Registration resource carries the server-assigned
 // pIN that CSIP V1.2 BASIC-001 step 5 / IEEE 2030.5 §10 expect the device to
-// match against its out-of-band provisioned PIN. IEEE-032 lands the read;
-// IEEE-033 will add mismatch enforcement and idle-retry on a not-yet-
-// provisioned PIN; IEEE-034 will add strict-mode missing-RegistrationLink
-// behavior.
+// match against its out-of-band provisioned PIN. Mismatch enforcement and
+// idle-retry on a not-yet-provisioned PIN, plus strict-mode
+// missing-RegistrationLink behavior, live in the caller.
 //
-// IEEE-032 tests deferred per Craig override 2026-05-12 (time crunch).
-// Required-but-deferred coverage:
+// Test coverage checklist:
 //   - happy path: stub server returns Registration with known PIN; method
 //     returns it parsed.
 //   - empty href: returns error matching "registration href required".
@@ -573,14 +568,13 @@ func (c *SEP2Client) GetRegistration(ctx context.Context, registrationHref strin
 // UsagePointListLink, DemandResponseProgramListLink) the server has bound to
 // this EndDevice. CSIP V1.2 CORE-012 step 1 : first move after the device is
 // confirmed commissioned. The tree walk per FSA (DERProgramList enumeration)
-// and Primacy + mRID program selection are deferred to IEEE-036 and IEEE-037
-// respectively (plan-1-csip-client-conformance phase 4).
+// and Primacy + mRID program selection are handled by the caller.
 //
 // First-cut paging: appends `?l=255` to fetch the first page; cursor walking
 // for lists larger than 255 entries is deferred to a follow-up. Mirrors the
 // paging pattern in LookupOwnEndDevice.
 //
-// IEEE-035 tests deferred per Craig override 2026-05-12. Required coverage:
+// Test coverage checklist:
 //  1. Happy path: stub server returns FSAList with N entries; method returns
 //     the parsed list intact.
 //  2. Empty href: returns error matching "FSAList href required"; no HTTP call.
@@ -589,7 +583,7 @@ func (c *SEP2Client) GetRegistration(ctx context.Context, registrationHref strin
 //  5. Pagination cap: list with > 255 entries : first 255 returned, rest
 //     deferred to cursor follow-up (no silent drop documented).
 //
-// IEEE-047: on 301 the underlying Get follows once and the new FSAList href
+// On 301 the underlying Get follows once and the new FSAList href
 // (with the ?l=255 page query stripped) is surfaced as newFSAListHref so
 // the caller can update its cached copy. newFSAListHref is "" when no
 // follow happened.
@@ -613,14 +607,13 @@ func (c *SEP2Client) GetFSAList(ctx context.Context, fsaListHref string) (list s
 // DERCapabilityLink. The href is passed in rather than constructed by
 // string formatting (no `/edev/{id}/der/{id}/dercap` literal).
 //
-// IEEE-030 tests deferred per Craig override 2026-05-12 (time crunch).
-// Required-but-deferred coverage: assert PUT is issued to the exact passed
-// href and not to a derived path; empty href → error, no HTTP call.
+// Test coverage checklist: assert PUT is issued to the exact passed
+// href and not to a derived path; empty href -> error, no HTTP call.
 func (c *SEP2Client) PutDERCapability(ctx context.Context, dercapHref string, cap sep2.DERCapability) error {
 	if dercapHref == "" {
 		return fmt.Errorf("dercap href required")
 	}
-	// IEEE-047: PUT follows once internally; new href not surfaced : DER
+	// PUT follows once internally; new href not surfaced : DER
 	// setup PUTs fire exactly once per startup and the caller does not
 	// re-issue them.
 	_, err := c.Put(ctx, dercapHref, &cap)
@@ -629,13 +622,11 @@ func (c *SEP2Client) PutDERCapability(ctx context.Context, dercapHref string, ca
 
 // PutDERSettings PUTs the inverter's DER settings to the advertised
 // DERSettingsLink. See PutDERCapability for the link-derivation rationale.
-//
-// IEEE-030 tests deferred per Craig override 2026-05-12.
 func (c *SEP2Client) PutDERSettings(ctx context.Context, dersettingsHref string, settings sep2.DERSettings) error {
 	if dersettingsHref == "" {
 		return fmt.Errorf("dersettings href required")
 	}
-	// IEEE-047: PUT follows once internally; new href not surfaced (see
+	// PUT follows once internally; new href not surfaced (see
 	// PutDERCapability).
 	_, err := c.Put(ctx, dersettingsHref, &settings)
 	return err
@@ -643,13 +634,11 @@ func (c *SEP2Client) PutDERSettings(ctx context.Context, dersettingsHref string,
 
 // PutDERStatus PUTs the inverter's current DER status to the advertised
 // DERStatusLink. See PutDERCapability for the link-derivation rationale.
-//
-// IEEE-030 tests deferred per Craig override 2026-05-12.
 func (c *SEP2Client) PutDERStatus(ctx context.Context, derstatusHref string, status sep2.DERStatus) error {
 	if derstatusHref == "" {
 		return fmt.Errorf("derstatus href required")
 	}
-	// IEEE-047: PUT follows once internally; new href not surfaced. The
+	// PUT follows once internally; new href not surfaced. The
 	// reporter loop calls this on each tick : a stale derStatusHref will
 	// pay one extra redirect per tick until restart. Acceptable scope.
 	_, err := c.Put(ctx, derstatusHref, &status)
@@ -659,16 +648,15 @@ func (c *SEP2Client) PutDERStatus(ctx context.Context, derstatusHref string, sta
 // GetDERProgramList GETs the DERProgramList at the given href and decodes
 // it. CSIP V1.2 CORE-012 step 2 : for each FSA the EndDevice has been
 // assigned, the device walks the FSA's DERProgramListLink to enumerate the
-// DERPrograms bound to it. IEEE-036 lands ONLY the list GET + per-program
+// DERPrograms bound to it. GetDERProgramList lands ONLY the list GET + per-program
 // subtree fetch in cmd/inverterclient/main.go; Primacy + mRID selection of
-// the highest-priority DERProgram is deferred to IEEE-037 (the next ticket
-// in plan-1 phase 4).
+// the highest-priority DERProgram happens downstream in the caller.
 //
 // First-cut paging: appends `?l=255` to fetch the first page; cursor walking
 // for lists larger than 255 entries is deferred to a follow-up. Mirrors the
 // paging pattern in LookupOwnEndDevice and GetFSAList.
 //
-// IEEE-036 tests deferred per Craig override 2026-05-12. Required coverage:
+// Test coverage checklist:
 //  1. Happy path: FSA returns DERProgramList with N entries; method returns
 //     the parsed list intact.
 //  2. Empty href: returns error matching "DERProgramList href required";
@@ -682,7 +670,7 @@ func (c *SEP2Client) PutDERStatus(ctx context.Context, derstatusHref string, sta
 //  7. Multi-FSA topology: each of 3 FSAs returns 2 DERPrograms; walker caches
 //     6 unique programs keyed by mRID.
 //
-// IEEE-047: on 301 the underlying Get follows once and the new
+// On 301 the underlying Get follows once and the new
 // DERProgramList href (with the ?l=255 page query stripped) is surfaced as
 // newDERProgramListHref so callers walking per-FSA hrefs can refresh their
 // reference. newDERProgramListHref is "" when no follow happened.
@@ -705,13 +693,12 @@ func (c *SEP2Client) GetDERProgramList(ctx context.Context, derProgramListHref s
 // GetDefaultDERControl GETs the DefaultDERControl resource at the advertised
 // href. CSIP V1.2 CORE-012 step 2 : each DERProgram surfaces a DefaultDERControl
 // that the device applies as fallback when no active DERControl is in effect.
-// IEEE-036 fetches and caches it; consumption in ApplyControls is Phase 5.
+// This method fetches and caches it; consumption in ApplyControls is Phase 5.
 //
 // Empty href returns a sentinel error so callers can distinguish "link absent"
 // from a transport failure without inspecting wrapped errors.
 //
-// IEEE-036 tests deferred per Craig override 2026-05-12.
-// IEEE-047: on 301 the underlying Get follows once and the new
+// On 301 the underlying Get follows once and the new
 // DefaultDERControl href is surfaced as newDefaultDERControlHref so the
 // caller (cmd/inverterclient/main.go's selectedDefaultControlHref) can
 // update its cached reference. newDefaultDERControlHref is "" when no
@@ -729,11 +716,10 @@ func (c *SEP2Client) GetDefaultDERControl(ctx context.Context, defaultDERControl
 
 // GetDERControlList GETs the DERControlList at the advertised href and decodes
 // it. Mirrors GetDERProgramList's paging pattern (?l=255 first page; cursor
-// walking deferred). IEEE-036 caches the result per-program; scheduling and
-// application are Phase 5 (IEEE-038..).
+// walking deferred). This method caches the result per-program; scheduling and
+// application are Phase 5.
 //
-// IEEE-036 tests deferred per Craig override 2026-05-12.
-// IEEE-047: on 301 the underlying Get follows once and the new
+// On 301 the underlying Get follows once and the new
 // DERControlList href (with the ?l=255 page query stripped) is surfaced as
 // newDERControlListHref so the long-lived PollDERControlList loop can
 // update its local href and stop paying a redirect on every tick.
@@ -755,11 +741,10 @@ func (c *SEP2Client) GetDERControlList(ctx context.Context, derControlListHref s
 }
 
 // GetDERCurveList GETs the DERCurveList at the advertised href and decodes
-// it. Mirrors GetDERProgramList's paging pattern. IEEE-036 caches the result
+// it. Mirrors GetDERProgramList's paging pattern. This method caches the result
 // per-program; curve lookup and interpolation are Phase 5.
 //
-// IEEE-036 tests deferred per Craig override 2026-05-12.
-// IEEE-047: on 301 the underlying Get follows once internally; the new
+// On 301 the underlying Get follows once internally; the new
 // href is not surfaced. DERCurveList is fetched on demand (event-start
 // hook) per-program; href reference is held inside the program struct and
 // a stale value will pay one extra redirect per event-start until restart.
@@ -782,11 +767,9 @@ func (c *SEP2Client) GetDERCurveList(ctx context.Context, derCurveListHref strin
 
 // CreateMirrorUsagePoint POSTs a MirrorUsagePoint registration to the
 // MirrorUsagePointList href advertised by DeviceCapability. Returns the
-// server-assigned Location of the new MirrorUsagePoint resource. See
-// IEEE-030.
+// server-assigned Location of the new MirrorUsagePoint resource.
 //
-// IEEE-030 tests deferred per Craig override 2026-05-12.
-// IEEE-047: on 301 the underlying Post follows once internally; the new
+// On 301 the underlying Post follows once internally; the new
 // mup-list href is not surfaced : MUP creation fires exactly once per
 // startup.
 func (c *SEP2Client) CreateMirrorUsagePoint(ctx context.Context, mupListHref string, mup sep2.MirrorUsagePoint) (string, error) {
@@ -801,8 +784,7 @@ func (c *SEP2Client) CreateMirrorUsagePoint(ctx context.Context, mupListHref str
 // PostMeterReading POSTs a metering data point to the MirrorMeterReadingList
 // href advertised on the MirrorUsagePoint resource.
 //
-// IEEE-030 tests deferred per Craig override 2026-05-12.
-// IEEE-047: on 301 the underlying Post follows once internally; the new
+// On 301 the underlying Post follows once internally; the new
 // mmr-list href is not surfaced. Reporter posts to mmrHref on every tick;
 // a stale href pays one extra redirect per tick until restart. Acceptable
 // scope.
@@ -839,9 +821,9 @@ func (c *SEP2Client) resolveServerURL(href string) (string, error) {
 }
 
 // isTransientResponseStatus reports whether an HTTP status code from a
-// Response POST should be treated as a transient failure (i.e. retriable
-// per IEEE-045's future policy and pattern-matchable via
-// ErrResponseTransient). Anything in the 5xx band qualifies.
+// Response POST should be treated as a transient failure (i.e. retriable and
+// pattern-matchable via ErrResponseTransient). Anything in the 5xx band
+// qualifies.
 func isTransientResponseStatus(code int) bool {
 	return code >= 500 && code <= 599
 }
@@ -900,7 +882,7 @@ func (c *SEP2Client) PostResponse(ctx context.Context, replyToHref string, resp 
 
 	// One-shot retry: attempt + (optional) single retry on transient
 	// failures. Keep the loop body straight-line : do not let it grow into
-	// IEEE-045's territory.
+	// full retry/backoff with dead-lettering.
 	const maxAttempts = 2
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -1023,7 +1005,7 @@ func dcapHasAnyLink(d sep2.DeviceCapability) bool {
 // the loop cleanly without re-polling. No timeout bound; callers control
 // lifetime via ctx.
 //
-// IEEE-028: when the server returns a bare <DeviceCapability pollRate="N"/>
+// When the server returns a bare <DeviceCapability pollRate="N"/>
 // with no children, the inverter must idle-re-poll rather than crash
 // forward into Phase 2 (which would 404 on the unprovisioned /edev path).
 func (c *SEP2Client) WaitForAdvertisedLinks(ctx context.Context, initial sep2.DeviceCapability) (sep2.DeviceCapability, error) {
@@ -1051,8 +1033,8 @@ func (c *SEP2Client) WaitForAdvertisedLinks(ctx context.Context, initial sep2.De
 // resource (linked from DeviceCapability.TimeLink) and to use that time :
 // not local wall-clock : for every timestamp the server consumes
 // (DERSettings.UpdatedTime, MirrorMeterReading identifiers, etc.). Before
-// IEEE-031 the inverter logged the TimeLink href and proceeded to use
-// time.Now() everywhere.
+// this subsystem landed, the inverter logged the TimeLink href and proceeded
+// to use time.Now() everywhere.
 //
 // Design notes:
 //
@@ -1068,14 +1050,7 @@ func (c *SEP2Client) WaitForAdvertisedLinks(ctx context.Context, initial sep2.De
 //     selects on ctx.Done() so it exits cleanly on shutdown (no leaked
 //     goroutine).
 //
-// Tests deferred per Craig override 2026-05-12 (time crunch). Required
-// follow-up coverage:
-//   1. GetServerTime: httptest server returns Time XML; parsed correctly.
-//   2. SyncServerTime updates the offset to round-trip-consistent value.
-//   3. RunTimeSync: ctx cancel exits the goroutine; `go test -race` clean.
-//   4. Now(): with offset=42s, client.Now() ~ time.Now()+42s.
-//   5. Reporter outbound MRID derives from client.Now() (already verifiable
-//      with a fixture-substituted offset).
+// See timesync_test.go for coverage.
 
 // Now returns the current wall-clock time adjusted by the server-time
 // offset discovered via SyncServerTime / RunTimeSync. Before any sync has
@@ -1089,7 +1064,7 @@ func (c *SEP2Client) Now() time.Time {
 // The href is advertised on DeviceCapability.TimeLink and MUST NOT be
 // hardcoded by the caller : per IEEE 2030.5 §10.3 / CSIP §6.6 the server
 // is free to host Time at any path.
-// IEEE-047: on 301 the underlying Get follows once internally; the new
+// On 301 the underlying Get follows once internally; the new
 // timeHref is not surfaced : RunTimeSync holds timeHref as a parameter and
 // a stale value will pay one extra redirect per sync tick. Acceptable
 // scope.
@@ -1148,7 +1123,7 @@ func getMinTimeSyncPollRate() time.Duration {
 // has no Time-resource pollRate to thread through. sep2.Time inherits
 // only Href from Resource; pollRate lives on ListResource/DeviceCapability,
 // not on single-instance resources like Time. 30 minutes matches the
-// "an hour is normal" sentiment in IEEE-031 and gives the sync goroutine
+// "an hour is normal" clock-drift tolerance and gives the sync goroutine
 // a sane default when nothing else is advertised.
 const DefaultTimeSyncPollRate = 30 * time.Minute
 
