@@ -1,14 +1,14 @@
 package main
 
 // Backfill of the 2 deferred Phase 2c DERProgram-walk outer-loop integration
-// cases from IEEE-073 PR #101. IEEE-076 extracted the Phase 2c DERProgram-walk
-// outer for-loop out of main() into runPhase2cDERProgramWalk
+// cases. The Phase 2c DERProgram-walk
+// outer for-loop was extracted out of main() into runPhase2cDERProgramWalk
 // (cmd/inverterclient/phase2c_derprogram.go) so these cases : previously
 // blocked by inline-in-main + log.Fatalf : can be driven directly. Same
-// structural template as IEEE-074's Phase 2b backfill (phase2b_test.go) and
-// IEEE-075's Phase 2c FSAList backfill (phase2c_fsalist_test.go).
+// structural template as the Phase 2b backfill (phase2b_test.go) and
+// the Phase 2c FSAList backfill (phase2c_fsalist_test.go).
 //
-// Reuses the main-package test bedrock established by IEEE-073:
+// Reuses the main-package test bedrock:
 //   - derWalkTestEnv / newDERWalkTestEnv      (TLS fixture + device cert)
 //   - startDERWalkListener                    (gotls HTTPS server)
 //   - newDERWalkClient                        (production SEP2Client)
@@ -18,20 +18,20 @@ package main
 // All declared in derprogram_phase_test.go and shared across this package's
 // test files. captureLog is shared with phase2b_test.go / phase2c_fsalist_test.go.
 //
-// Cases shipped (the 2 deferred from IEEE-073 PR #101):
+// Cases covered:
 //
 //   1. TestRunPhase2cDERProgramWalk_EmptyAggregateIdleThenAppears
-//        IEEE-073 #4: All FSAs return empty DERProgramList under --csip
-//        strict → runPhase2cDERProgramWalk idles on
+//        All FSAs return empty DERProgramList under --csip
+//        strict -> runPhase2cDERProgramWalk idles on
 //        phase2cDERProgramPollInterval (shrunk to 10ms). On a later poll, an
 //        FSA's DERProgramList is non-empty and the function returns the cache.
 //        Verifies BOTH the empty-aggregate idle path AND that the loop
 //        actually retries on PollRate.
 //   2. TestRunPhase2cDERProgramWalk_PollRateThrottlesEmptyAggregateLoop
-//        IEEE-073 #6: All FSAs keep returning empty lists; runPhase2cDERProgramWalk
+//        All FSAs keep returning empty lists; runPhase2cDERProgramWalk
 //        is parked in the idle loop on a tight 25ms cadence (test seam). The
 //        spacing between successive DERProgramList GETs MUST be at least
-//        25ms × tolerance, proving the time.After(pollEvery) gate is honored
+//        25ms x tolerance, proving the time.After(pollEvery) gate is honored
 //        and not bypassed by a busy loop. ctx-cancel after a fixed window
 //        unwinds cleanly. Race-clean.
 //
@@ -41,18 +41,19 @@ package main
 // inventing new fixture machinery:
 //
 //   3. TestRunPhase2cDERProgramWalk_HappyPathReturnsCache
-//        Baseline: non-empty DERProgramList GET on a single FSA → function
+//        Baseline: non-empty DERProgramList GET on a single FSA -> function
 //        returns the populated cache after one iteration, no idle, no fatal.
 //        Verifies the cache-and-return shape of the previous inline form.
 //   4. TestRunPhase2cDERProgramWalk_WalkErrorReturnsFatal
-//        Walk error (HTTP 500 on DERProgramList GET) → *derProgramWalkFatal
+//        Walk error (HTTP 500 on DERProgramList GET) -> *derProgramWalkFatal
 //        whose Error() preserves the "walk DERProgram tree: %v" format
 //        byte-for-byte and whose Unwrap() returns the wrapped walk error.
 //        errors.As + errors.Is chain assertions.
 //   5. TestRunPhase2cDERProgramWalk_EmptyAggregateAllowUnregisteredProceeds
-//        Symmetric to IEEE-072 #6 for the DERProgram-walk path: empty
-//        aggregate under cfg.AllowUnregistered → log the proceed marker,
-//        return the empty cache, nil error. No idle, no retry.
+//        Symmetric to the FSAList empty-list case for the DERProgram-walk
+//        path: empty aggregate under cfg.AllowUnregistered -> log the
+//        proceed marker, return the empty cache, nil error. No idle, no
+//        retry.
 
 import (
 	"context"
@@ -155,7 +156,7 @@ func TestRunPhase2cDERProgramWalk_HappyPathReturnsCache(t *testing.T) {
 	}
 }
 
-// TestRunPhase2cDERProgramWalk_EmptyAggregateIdleThenAppears : IEEE-073 #4.
+// TestRunPhase2cDERProgramWalk_EmptyAggregateIdleThenAppears : case 4.
 //
 // All FSAs return an empty DERProgramList on the first walk pass; on the
 // second pass the FSA returns a non-empty list. runPhase2cDERProgramWalk
@@ -229,7 +230,7 @@ func TestRunPhase2cDERProgramWalk_EmptyAggregateIdleThenAppears(t *testing.T) {
 	}
 }
 
-// TestRunPhase2cDERProgramWalk_PollRateThrottlesEmptyAggregateLoop : IEEE-073 #6.
+// TestRunPhase2cDERProgramWalk_PollRateThrottlesEmptyAggregateLoop : case 6.
 //
 // All FSAs keep returning empty DERProgramLists. runPhase2cDERProgramWalk is
 // parked in the empty-aggregate idle loop on a 25ms cadence (test seam).
@@ -238,12 +239,12 @@ func TestRunPhase2cDERProgramWalk_EmptyAggregateIdleThenAppears(t *testing.T) {
 //   - The function returns ctx.Err() in the chain (errors.Is(err,
 //     context.Canceled)).
 //   - The interval between successive DERProgramList GETs is at least
-//     phase2cDERProgramPollMin × tolerance, proving the time.After(pollEvery)
+//     phase2cDERProgramPollMin x tolerance, proving the time.After(pollEvery)
 //     gate is honored and not bypassed by a busy loop.
 //   - hits >= 2: we did observe at least two passes.
 //
-// The pollRate-throttling assertion uses a 0.5× tolerance window mirroring
-// the IEEE-073 backlog spec ("real-time assertion with a tolerance window
+// The pollRate-throttling assertion uses a 0.5x tolerance window mirroring
+// the "real-time assertion with a tolerance window
 // (>=50% of pollRate between successive GETs)"). Scheduler jitter on
 // race-detector runs occasionally compresses individual gaps; a 50% floor on
 // the median (or, equivalently, on the per-gap minimum after a small warmup)
@@ -405,8 +406,8 @@ func TestRunPhase2cDERProgramWalk_WalkErrorReturnsFatal(t *testing.T) {
 //
 // cfg.AllowUnregistered=true + all FSAs return empty DERProgramLists.
 // runPhase2cDERProgramWalk must log the proceed marker, return the empty
-// cache, nil error. No idle, no retry. Symmetric to the IEEE-072 #6
-// empty-list-proceeds path for the FSAList layer.
+// cache, nil error. No idle, no retry. Symmetric to the
+// empty-list-proceeds path at the FSAList layer.
 func TestRunPhase2cDERProgramWalk_EmptyAggregateAllowUnregisteredProceeds(t *testing.T) {
 	buf := captureLog(t)
 

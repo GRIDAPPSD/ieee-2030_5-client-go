@@ -1,30 +1,28 @@
 package main
 
-// Phase 2c: FunctionSetAssignmentsList discovery (IEEE-035 : plan-1 phase 4
+// Phase 2c: FunctionSetAssignmentsList discovery (plan-1 phase 4
 // entry).
 //
-// Extracted from main() by IEEE-075 to give the 5 deferred IEEE-072 Phase 2c
+// Extracted from main() to give the Phase 2c
 // integration cases a function seam to test against. The previous inline form
 // lived straight inside main() and called log.Fatalf on the fatal paths
 // (missing FunctionSetAssignmentsListLink in CSIP strict, GET FSAList error),
 // which tears down any test process that drives it. Same structural template
-// as IEEE-074's Phase 2b extraction (see cmd/inverterclient/phase2b.go).
+// as the Phase 2b extraction (see cmd/inverterclient/phase2b.go).
 //
 // runPhase2cFSAList owns ONLY the FSAList discovery control flow that lived
 // in the inline switch : the missing-link branch (bypass vs fatal), the
 // resolved-link branch (GET + empty-list idle vs accept), and the idle loop
 // that re-polls dcap.PollRate when the server has not yet bound any FSAs.
-// It does not touch the downstream IEEE-036 DERProgram-walk loop or the
-// IEEE-037 Primacy selection: those still live in main() (the DERProgram-walk
-// extraction is IEEE-076's scope; see backlog).
+// It does not touch the downstream DERProgram-walk loop or the
+// Primacy selection: those still live in main().
 //
-// Behavior contract (frozen at IEEE-035 / merged main@66de487; verified
-// identical):
+// Behavior contract (frozen; verified identical):
 //
 //   - edev.FunctionSetAssignmentsListLink == nil && (!cfg.CSIP ||
 //     cfg.AllowUnregistered): log "skipping Phase 2c" once, return zero-value
 //     FunctionSetAssignmentsList + nil error. Caller proceeds with an empty
-//     fsaList : the IEEE-036 DERProgram-walk loop guard handles that case.
+//     fsaList : the DERProgram-walk loop guard handles that case.
 //   - edev.FunctionSetAssignmentsListLink == nil && CSIP-strict: return
 //     *fsaListFatal citing "CSIP V1.2 CORE-012 step 1". Caller in main()
 //     unwraps via errors.As and calls log.Fatalf so the exit-code-1 contract
@@ -51,8 +49,8 @@ package main
 // (not consts) so phase2c_fsalist_test.go can shrink the floor below 60s
 // without faking time. The production pinPollInterval() helper is unchanged
 // : these vars shadow its policy only inside runPhase2cFSAList. Mirrors
-// IEEE-074's phase2bPollMin/phase2bPollDefault pattern (and IEEE-070's
-// minTimeSyncPollRate before it). The production binary never writes to
+// the phase2bPollMin/phase2bPollDefault pattern (and the
+// minTimeSyncPollRate pattern before it). The production binary never writes to
 // these.
 
 import (
@@ -86,7 +84,7 @@ func (e *fsaListFatal) Error() string { return e.reason }
 func (e *fsaListFatal) Unwrap() error { return e.inner }
 
 // phase2cFSAListPollMin and phase2cFSAListPollDefault mirror the floor /
-// default applied by pinPollInterval. Declared as vars so the IEEE-075 tests
+// default applied by pinPollInterval. Declared as vars so the tests
 // can shrink the floor without faking time; see phase2c_fsalist_test.go.
 // Production behavior is identical to the previous inline form (60s floor,
 // 30min default-on-zero).
@@ -148,7 +146,7 @@ func runPhase2cFSAList(
 	default:
 		log.Println("=== Phase 2c: FSAList Discovery ===")
 		for {
-			// IEEE-047: on 301 GetFSAList returns the new FSAList base href
+			// On 301 GetFSAList returns the new FSAList base href
 			// (paging query stripped). Update the cached link on the
 			// EndDevice so the next idle-poll iteration and any other
 			// caller that re-reads edev.FunctionSetAssignmentsListLink
