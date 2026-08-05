@@ -122,15 +122,24 @@ Every release's notes contain the following, in this order.
 One row per merged pull request. Per-merge, not per-commit: a pull request
 routinely carries a version bump, a fix and a test as three separate commits,
 and listing those separately is noise that buries the one line a reader needs.
-The card link carries the detail.
+The issue link carries the why.
 
 ```
 ### Commits in this release
 
-| Merge | Card | Category | Change | Difference for consumers |
+| Merge | Issue | Category | Change | Difference for consumers |
 |---|---|---|---|---|
-| [<sha>](<commit url>) ([#<pr>](<pr url>)) | <CARD-ID> | <categories> | <what changed> | <what a consumer observes now that they did not before> |
+| [<sha>](<commit url>) ([#<pr>](<pr url>)) | [#<issue>](<issue url>) | <categories> | <what changed> | <what a consumer observes now that they did not before> |
 ```
+
+Internal card IDs never appear here or anywhere else that ships: not in
+release notes, tag messages, commit messages, PR bodies, or source. A public
+issue is the anchor for why a change happened; an internal card may link out
+to that issue, never the reverse.
+
+Mint an issue when a row needs a why an outside reader cannot infer from its
+title. A dependency bump or a typo fix does not: leave the Issue cell empty
+rather than minting one to fill it.
 
 Immediately below the table, restate the category set and the version rule, so
 the table explains itself to a reader who has never seen this document:
