@@ -2,6 +2,7 @@
 // methods on *SEP2Client (Now, GetServerTime, SyncServerTime, RunTimeSync),
 // the atomic offset field, and the two outbound-timestamp call-site
 // replacements (DERSettings.UpdatedTime and MirrorMeterReading.MRID).
+// See GRIDAPPSD/ieee-2030_5-server-go#85.
 //
 // These tests assert frozen behavior; they do not exercise unmerged future
 // changes. If a test reveals a defect, the project policy is to file a

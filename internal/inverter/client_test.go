@@ -1,6 +1,6 @@
 // Package inverter_test covers LookupOwnEndDevice, ErrEndDeviceNotFound,
 // --csip flag plumbing, and the four href-taking method signatures that
-// replaced string-formatted paths.
+// replaced string-formatted paths. See GRIDAPPSD/ieee-2030_5-server-go#82.
 //
 // This behavior is frozen. These tests assert frozen
 // behavior; they do not exercise unmerged future changes. If a test reveals
