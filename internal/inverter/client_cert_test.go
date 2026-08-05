@@ -20,7 +20,7 @@ import (
 // + PEM decode path under test.
 func TestNewSEP2Client_CertLoadErrors(t *testing.T) {
 	caCertPEM, caKeyPEM, err := certs.GenerateCA(certs.CAOptions{
-		CommonName: "IEEE-008 Test CA",
+		CommonName: "CertLoad Test CA",
 		ValidYears: 1,
 	})
 	if err != nil {
@@ -38,7 +38,7 @@ func TestNewSEP2Client_CertLoadErrors(t *testing.T) {
 
 	deviceCertPEM, deviceKeyPEM, err := certs.GenerateDeviceCert(caCert, caKey, certs.DeviceCertOptions{
 		DeviceType:  certs.DeviceTypeGeneric,
-		HWSerialNum: "IEEE-008-TEST",
+		HWSerialNum: "CERTLOAD-TEST",
 	})
 	if err != nil {
 		t.Fatalf("generate device cert: %v", err)

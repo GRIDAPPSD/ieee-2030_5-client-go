@@ -1,4 +1,4 @@
-// IEEE-081: race regression test for captureLogs.
+// Race regression test for captureLogs.
 //
 // The captureLogs helper in response_post_test.go swaps log.Default()'s
 // global writer to capture log.Printf output for assertion. Two t.Parallel()
@@ -6,7 +6,7 @@
 // writer slot : the previous workaround was to strip t.Parallel() from
 // TestPostResponseWithRetry_DeadLetterLog (Pike DD).
 //
-// IEEE-081 makes captureLogs race-safe by serializing the swap behind a
+// captureLogs is race-safe by serializing the swap behind a
 // package-level sync.Mutex. This test pins that contract: two goroutines
 // hammer captureLogs with deterministic, distinguishable content, and each
 // must see only its own log output. If a future change removes the mutex

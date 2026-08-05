@@ -11,7 +11,7 @@ import (
 // ActiveControlBase. Each subtest names the rule it pins so a regression
 // is easy to localize.
 //
-// IEEE-041 (Phase 5 ticket 4 of 5). Closes the long-standing
+// Phase 5 ticket 4 of 5. Closes the long-standing
 // ApplyControls(nil, ...) defect at cmd/inverterclient/main.go.
 func TestActiveControlBase(t *testing.T) {
 	t.Parallel()
@@ -188,7 +188,7 @@ func TestActiveControlBase_DrivesApplyControls(t *testing.T) {
 	}
 
 	// Now plumb through ApplyControls : same call shape the simulation tick
-	// loop uses post-IEEE-041.
+	// loop uses.
 	grid := inverter.GridState{VoltsPU: 1.0, FreqHz: 60.0}
 	const maxP = 8000.0
 	out := inverter.ApplyControls(base, grid, maxP)
