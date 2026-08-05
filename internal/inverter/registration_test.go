@@ -1,41 +1,36 @@
 package inverter_test
 
-// Backfill of the IEEE-032 deferred unit tests for
-// (*SEP2Client).GetRegistration. Origin ticket merged at a7d8929; behavior
-// frozen. Plan-3 csip-test-debt-sweep Phase 3, IEEE-071.
+// Package inverter_test covers
+// (*SEP2Client).GetRegistration. This behavior is frozen.
 //
-// Reuses the IEEE-070 / IEEE-069 bedrock: ccmTestEnv from client_ccm_test.go
+// Reuses the ccmTestEnv from client_ccm_test.go
 // and startIdleListener from idle_test.go. The test does not need TLS-cipher
-// negotiation coverage (IEEE-067 owns that); it needs Registration XML
+// negotiation coverage (that lives elsewhere); it needs Registration XML
 // parsing, empty-href sentinel error, 404 / malformed-XML wrapping.
 //
-// Cases shipped (verbatim from IEEE-032 deferred-tests block, backlog.md
-// lines 621-624):
+// Cases covered:
 //
-//  1. TestGetRegistration_HappyPath           : IEEE-032 case 1: stub returns
+//  1. TestGetRegistration_HappyPath           : stub returns
 //                                                Registration with PIN=111115;
 //                                                method returns the parsed
 //                                                value.
-//  2. TestGetRegistration_EmptyHref           : IEEE-032 case 2: empty href
+//  2. TestGetRegistration_EmptyHref           : empty href
 //                                                returns error matching
 //                                                "registration href required",
 //                                                no GET attempted.
-//  3. TestGetRegistration_NotFound            : IEEE-032 case 3: server 404
+//  3. TestGetRegistration_NotFound            : server 404
 //                                                produces a wrapped error
 //                                                (path + status surfaced),
 //                                                no panic.
-//  4. TestGetRegistration_MalformedXML        : IEEE-032 case 4: server emits
+//  4. TestGetRegistration_MalformedXML        : server emits
 //                                                non-XML body, GetRegistration
 //                                                returns an unwrappable
 //                                                xml.SyntaxError (via %w from
 //                                                c.Get's `unmarshal %s: %w`).
 //
-// IEEE-032 cases 5-6 (Phase 2b log-line / skip behavior) are SUPERSEDED by
-// IEEE-034's redacted-log + missing-RegistrationLink idle/bypass semantics
-// AND live inside `cmd/inverterclient/main.go`'s `main()` body where they
-// are not addressable from a test binary (log.Fatalf tears down the test
-// process on the fatal-mismatch path). See PR body for the Phase 2b
-// extraction follow-up.
+// Phase 2b log-line / skip behavior (redacted-log + missing-RegistrationLink
+// idle/bypass semantics) lives inside `cmd/inverterclient/phase2b_test.go`,
+// which drives runPhase2bRegistration directly.
 
 import (
 	"context"
@@ -90,7 +85,7 @@ func newRegistrationTestClient(t *testing.T, handler http.Handler) (*inverter.SE
 	return client, ctx
 }
 
-// TestGetRegistration_HappyPath : IEEE-032 case 1.
+// TestGetRegistration_HappyPath : case 1.
 //
 // Stub returns Registration with PIN=111115 (the CSIP V1.2 BASIC-001 step 5
 // reference value), DateTimeRegistered, and a PollRate attribute.
@@ -132,7 +127,7 @@ func TestGetRegistration_HappyPath(t *testing.T) {
 	}
 }
 
-// TestGetRegistration_EmptyHref : IEEE-032 case 2.
+// TestGetRegistration_EmptyHref : case 2.
 //
 // An empty href is rejected at the call site without an HTTP round trip.
 // The sentinel error string is contractual: the Phase 2b block in main()
@@ -162,7 +157,7 @@ func TestGetRegistration_EmptyHref(t *testing.T) {
 	}
 }
 
-// TestGetRegistration_NotFound : IEEE-032 case 3.
+// TestGetRegistration_NotFound : case 3.
 //
 // Server returns 404 with a small body. GetRegistration must return a
 // non-nil error that surfaces both the path and the status code (Pike's
@@ -199,7 +194,7 @@ func TestGetRegistration_NotFound(t *testing.T) {
 	}
 }
 
-// TestGetRegistration_MalformedXML : IEEE-032 case 4.
+// TestGetRegistration_MalformedXML : case 4.
 //
 // Server returns 200 OK with non-XML body. GetRegistration must wrap the
 // xml.SyntaxError via the chain

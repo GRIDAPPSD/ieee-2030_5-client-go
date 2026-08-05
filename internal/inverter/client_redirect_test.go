@@ -1,13 +1,12 @@
-// Package inverter_test integration tests for IEEE-047 : single-hop 301
+// Package inverter_test covers single-hop 301
 // Moved Permanently follow + cached-href surfacing. These exercise the
-// follow-once behavior layered on top of IEEE-046's *MovedError surfacing,
-// run end-to-end through the gotls listener fixture shared with the IEEE-029
-// / -030 / -046 suites.
+// follow-once behavior layered on top of the *MovedError surfacing,
+// run end-to-end through the gotls listener fixture.
 //
-// Cases 1-6 map to the IEEE-047 ticket's test contract:
+// Cases 1-6:
 //
-//  1. 200 OK happy path: no redirect, behavior unchanged from IEEE-046.
-//  2. Single 301 → 200: follow-once, body returned, newHref surfaced.
+//  1. 200 OK happy path: no redirect, behavior unchanged from the base router.
+//  2. Single 301 -> 200: follow-once, body returned, newHref surfaced.
 //  3. Two 301s in a row: first followed, second *MovedError propagated
 //     without further retry (no chain following per RFC 7231 §6.4.2 /
 //     CSIP V1.2 §6.6).
@@ -43,9 +42,9 @@ func redirectTestCtx(t *testing.T) context.Context {
 	return ctx
 }
 
-// IEEE-047 case 1: 200 OK happy path : no redirect, no follow, newHref is
-// empty. Pins that the IEEE-047 wrapper does not perturb the 200 path that
-// IEEE-046's classifier already handled.
+// Case 1: 200 OK happy path : no redirect, no follow, newHref is
+// empty. Pins that the follow-once wrapper does not perturb the 200 path that
+// the base classifier already handled.
 func TestRedirect_200OKNoFollow(t *testing.T) {
 	t.Parallel()
 	env := newCCMTestEnv(t)
@@ -76,7 +75,7 @@ func TestRedirect_200OKNoFollow(t *testing.T) {
 	}
 }
 
-// IEEE-047 case 2: single 301 → 200. The wrapper follows once, returns the
+// Case 2: single 301 -> 200. The wrapper follows once, returns the
 // body parsed from the new URL, and surfaces the new path as newHref so the
 // caller can update its cached reference.
 func TestRedirect_Get301FollowsOnceAndReturnsBody(t *testing.T) {
@@ -117,7 +116,7 @@ func TestRedirect_Get301FollowsOnceAndReturnsBody(t *testing.T) {
 	}
 }
 
-// IEEE-047 case 3: two 301s in a row : only the first is followed. The
+// Case 3: two 301s in a row : only the first is followed. The
 // second *MovedError propagates back to the caller without further retry
 // (no chain following).
 func TestRedirect_ChainedRedirectsNotFollowed(t *testing.T) {
@@ -170,7 +169,7 @@ func TestRedirect_ChainedRedirectsNotFollowed(t *testing.T) {
 	}
 }
 
-// IEEE-047 case 4: 301 with empty Location header. RFC 7231 §6.4.2 doesn't
+// Case 4: 301 with empty Location header. RFC 7231 §6.4.2 doesn't
 // require Location on a 301 (it MUST be present per §7.1.2 but servers can
 // violate spec), so the wrapper must not attempt to follow and must not
 // crash. The *MovedError propagates with Location="" so the caller can
@@ -209,7 +208,7 @@ func TestRedirect_301EmptyLocationDoesNotFollow(t *testing.T) {
 	}
 }
 
-// IEEE-047 case 5: POST with 301 : the wrapper follows once and re-sends
+// Case 5: POST with 301 : the wrapper follows once and re-sends
 // the request body to the new URL. The test asserts that (a) the second
 // request body equals the first byte-for-byte (proving bytes.NewReader is
 // re-wrapped per attempt, not consumed on the first) and (b) the Location
@@ -272,7 +271,7 @@ func TestRedirect_Post301FollowsOnceAndResendsBody(t *testing.T) {
 	}
 }
 
-// IEEE-047 case 6: caller updates cached href on 301. Holds a local href
+// Case 6: caller updates cached href on 301. Holds a local href
 // variable, calls Get to fetch the resource, sees the newHref surfaced,
 // updates the cached value, then re-issues GET against the new value. The
 // original redirect handler must NOT fire on the second call : proving the
@@ -326,7 +325,7 @@ func TestRedirect_CallerUpdatesCachedHrefOnFollow(t *testing.T) {
 	}
 }
 
-// IEEE-047 Put coverage: PUT with 301 : the wrapper follows once and
+// Put coverage: PUT with 301 : the wrapper follows once and
 // re-sends the body to the new URL. PutDERCapability is the test surface
 // (PUT wrapper that doesn't surface newHref to the caller; we assert by
 // counting handler hits and reading both request bodies).
@@ -382,7 +381,7 @@ func TestRedirect_Put301FollowsOnceAndResendsBody(t *testing.T) {
 	}
 }
 
-// IEEE-047 wrapper coverage: GetFSAList surfaces the new FSAList base href
+// Wrapper coverage: GetFSAList surfaces the new FSAList base href
 // (with the ?l=255 paging query stripped) on a 301. Confirms the
 // stripPagingQuery seam : callers store the BASE href, not the paginated
 // URL, so subsequent fresh GETs append paging from a clean base.
