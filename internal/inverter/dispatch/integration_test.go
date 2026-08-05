@@ -2,7 +2,7 @@
 // server.
 //
 // These are relocated from internal/inverter/notification_dispatcher_integration_test.go
-// (IEEESIM-004). The package is dispatch_test (external) to avoid a circular
+//. The package is dispatch_test (external) to avoid a circular
 // import: dispatch imports inverter, so internal-package tests would not be
 // able to import both simultaneously.
 //

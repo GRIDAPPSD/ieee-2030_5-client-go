@@ -2,17 +2,17 @@ package main
 
 // Backfill of the IEEE-034 + IEEE-033 helper-function tests:
 //
-//   - redactPIN  (IEEE-034): masks all but the last 2 digits of a PIN
+// - redactPIN: masks all but the last 2 digits of a PIN
 //     producing "***NN". IEEE 2030.5 §8.2.1 makes the last digit a check
 //     digit; trailing 2 is conventional in security UIs for redaction that
 //     preserves the check-digit signature without exposing the secret.
-//   - pinPollInterval (IEEE-033 / IEEE-035 / IEEE-036): converts a SEP2
+// - pinPollInterval: converts a SEP2
 //     pollRate (seconds, uint32) to a time.Duration with the project's
 //     floor (60s) and default-on-zero (30min) policy. Used by the Phase 2b
 //     idle loops (server-PIN-not-provisioned and missing-RegistrationLink-
 //     in-CSIP-strict) and the Phase 2c FSAList / DERProgram-walk idle loops.
 //
-// Origin tickets MERGED at 833ae73 (IEEE-033) and 4965474 (IEEE-034).
+// Origin tickets MERGED at 833ae73 and 4965474.
 // Plan-3 csip-test-debt-sweep Phase 3, IEEE-071.
 //
 // Cases shipped:

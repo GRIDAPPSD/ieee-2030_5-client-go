@@ -28,10 +28,10 @@ import (
 //     events without touching the cache internals.
 //
 // Out of scope for IEEE-038:
-//   - Event scheduling and randomization (IEEE-039).
-//   - DEFAULT/EVENT_RECEIVED/EVENT_STARTED state machine (IEEE-040).
-//   - Replacing ApplyControls(nil, ...) at main.go:667 (IEEE-041).
-//   - DERCurve retrieval (IEEE-042).
+// - Event scheduling and randomization.
+// - DEFAULT/EVENT_RECEIVED/EVENT_STARTED state machine.
+// - Replacing ApplyControls(nil,...) at main.go:667.
+// - DERCurve retrieval.
 //   - Response POSTs on status transitions (Phase 6 / IEEE-043+).
 
 // defaultDERControlPollDuration maps an IEEE 2030.5 pollRate (seconds,
@@ -54,8 +54,9 @@ func defaultDERControlPollDuration(pollRateSec uint32) time.Duration {
 // derControlPollDurationPtr holds the current mapper. Stored in an
 // atomic.Pointer so tests can swap in a tight cadence
 // (SetDERControlPollDurationForTesting) while
-// (*SEP2Client).PollDERControlList reads on its own goroutine : no race
-// (IEEE-081). Pattern mirrors IEEE-028's pollDuration.
+// (*SEP2Client).PollDERControlList reads on its own goroutine : no race.
+// Mirrors the pollDuration testability seam pattern used elsewhere in
+// this package.
 var derControlPollDurationPtr atomic.Pointer[pollDurationFunc]
 
 func init() {
@@ -187,7 +188,7 @@ func derControlCurrentStatus(c sep2.DERControl) uint8 {
 //
 //	go client.PollDERControlList(ctx, href, dcap.PollRate, cache)
 //
-// matching the precedent set by RunTimeSync (IEEE-031).
+// matching the precedent set by RunTimeSync.
 //
 // On each tick the loop GETs the list (reusing GetDERControlList's paging),
 // calls cache.Refresh, and logs the delta counts derived from cache.Diff

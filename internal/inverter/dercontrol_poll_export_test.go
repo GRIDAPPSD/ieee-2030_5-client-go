@@ -13,7 +13,7 @@ import "time"
 // goroutine-spawning production loop MUST go through the atomic accessor.
 //
 // Only linked into the _test binary (file ends in _test.go). Mirrors
-// SetPollDurationForTesting (IEEE-028).
+// SetPollDurationForTesting.
 func SetDERControlPollDurationForTesting(fn func(pollRateSec uint32) time.Duration) (restore func()) {
 	prev := derControlPollDurationPtr.Load()
 	next := pollDurationFunc(fn)

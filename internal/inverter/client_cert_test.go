@@ -11,7 +11,7 @@ import (
 )
 
 // TestNewSEP2Client_CertLoadErrors covers the cert-load failure modes for
-// NewSEP2Client (IEEE-008). Prior to the fix, a missing or malformed cert
+// NewSEP2Client. Prior to the fix, a missing or malformed cert
 // file caused a nil-pointer panic because pem.Decode's nil return was
 // dereferenced without a guard, and os.ReadFile's error was discarded.
 //

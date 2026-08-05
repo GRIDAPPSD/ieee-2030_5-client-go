@@ -44,8 +44,8 @@ package main
 // log.Fatalf stays in main() for two reasons:
 //  1. Exit-code preservation: log.Fatalf calls os.Exit(1); pushing it down
 //     here would shrink the testability gain we just made.
-//  2. Pattern symmetry with runPhase2bRegistration (IEEE-074),
-//     runPhase2cFSAList (IEEE-075), and walkDERProgramTree (IEEE-036), which
+// 2. Pattern symmetry with runPhase2bRegistration,
+// runPhase2cFSAList, and walkDERProgramTree, which
 //     also return wrapped errors and let the outer main() owner log.Fatalf.
 //
 // Test seam: phase2cDERProgramPollMin and phase2cDERProgramPollDefault are

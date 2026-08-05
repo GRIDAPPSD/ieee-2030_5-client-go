@@ -63,7 +63,7 @@ import (
 // inside one test don't race on the global-writer swap. The bigger
 // constraint : callers MUST NOT be t.Parallel() because any sibling
 // parallel test emitting log.Printf lines will land in the captured
-// buffer : is documented on captureLog below (IEEE-081).
+// buffer: is documented on captureLog below.
 var captureLogMu sync.Mutex
 
 // captureLog redirects the default logger's output to a bytes.Buffer for
@@ -101,7 +101,7 @@ func captureLog(t *testing.T) *bytes.Buffer {
 
 // shrinkPhase2bPoll compresses the package-level poll floor/default for the
 // duration of the test so idle-loop tests run at sub-second cadence without
-// faking time. Mirrors SetMinTimeSyncPollRateForTesting (IEEE-070).
+// faking time. Mirrors SetMinTimeSyncPollRateForTesting.
 //
 // Tests that shrink the floor MUST NOT use t.Parallel(): the vars are
 // process-global state. The same constraint applies to captureLog above,

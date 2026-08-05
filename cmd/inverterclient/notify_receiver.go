@@ -28,7 +28,7 @@ import (
 // the dashboard via SetNotifyAddr.
 //
 // dispatcher is the per-Notification callback IEEE-049 hands every
-// well-formed POST. main() passes a dispatch.RegisterableDispatcher (IEEESIM-004)
+// well-formed POST. main() passes a dispatch.RegisterableDispatcher
 // constructed before Phase 5 wiring is done; the dispatcher self-handles
 // the unregistered case (log + drop) so the listener can come up before
 // the DERControlList href is known.
@@ -74,7 +74,7 @@ func startNotifyReceiver(
 		log.Printf("Notification receiver: Addr failed (%v); falling back to polling-only", err)
 		return nil
 	}
-	log.Printf("Notification receiver: https://%s/notify (IEEE-049)", addr)
+	log.Printf("Notification receiver: https://%s/notify ", addr)
 	if hmi != nil {
 		hmi.SetNotifyAddr(addr)
 	}

@@ -15,7 +15,7 @@ import (
 // MUST go through the atomic accessor : see Pike's IEEE-081 audit.
 //
 // Only available via _test.go suffix; never linked into the production
-// binary. Mirrors SetPollDurationForTesting (IEEE-028). See IEEE-070.
+// binary. Mirrors SetPollDurationForTesting.
 func SetMinTimeSyncPollRateForTesting(d time.Duration) (restore func()) {
 	prev := minTimeSyncPollRateNanos.Swap(int64(d))
 	return func() { minTimeSyncPollRateNanos.Store(prev) }

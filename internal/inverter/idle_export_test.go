@@ -12,7 +12,7 @@ import "time"
 // goroutine-spawning production loop MUST go through the atomic accessor.
 //
 // Only available via _test.go suffix; never linked into the production
-// binary. See IEEE-028.
+// binary.
 func SetPollDurationForTesting(fn func(pollRateSec uint32) time.Duration) (restore func()) {
 	prev := pollDurationPtr.Load()
 	next := pollDurationFunc(fn)

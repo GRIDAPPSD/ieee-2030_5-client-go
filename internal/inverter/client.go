@@ -25,7 +25,7 @@ import (
 // ErrEndDeviceNotFound is returned by LookupOwnEndDevice when the server's
 // EndDeviceList does not contain an entry whose LFDI matches the client's.
 // Callers in CSIP mode treat this as a transient "not yet provisioned"
-// condition and re-poll the list rather than aborting. See IEEE-029.
+// condition and re-poll the list rather than aborting.
 var ErrEndDeviceNotFound = errors.New("end device not found in server list")
 
 // ErrResponseTransient is the sentinel error returned by PostResponse when
@@ -35,7 +35,7 @@ var ErrEndDeviceNotFound = errors.New("end device not found in server list")
 // dead-letter retry policy without coupling to status-code parsing. The
 // sentinel is intentionally a bare leaf error; PostResponse wraps it with
 // %w plus contextual detail (status code, URL) so callers retain both the
-// pattern-match handle and the diagnostic chain. See IEEE-043 / IEEE-045.
+// pattern-match handle and the diagnostic chain.
 var ErrResponseTransient = errors.New("response POST transient failure")
 
 const (
@@ -50,7 +50,7 @@ const (
 // sync goroutine Store while the simulation/reporter Load with no lock.
 // Zero offset (the zero value) is the safe default : Now() degrades to
 // time.Now() before the first sync completes or when no TimeLink is
-// advertised. See IEEE-031.
+// advertised.
 type SEP2Client struct {
 	httpClient            *http.Client
 	baseURL               string
@@ -71,7 +71,7 @@ type SEP2Client struct {
 	// logEventCode per minute); the default (nil) allows every POST
 	// through. The seam is intentionally an interface declared at the
 	// consumer (this package) and accepts a single method so the limiter
-	// can be a function adapter, a struct, or a stub. See IEEE-053.
+	// can be a function adapter, a struct, or a stub.
 	logEventLimiter LogEventRateLimiter
 }
 
@@ -133,7 +133,7 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 		// against RootCAs. CSIP §6.11 device-profile certs have empty
 		// Subject and an otherName-only SAN, so stdlib hostname
 		// verification cannot succeed against them in any case; the helper
-		// matches the existing server-side enforcement scope. See IEEE-027.
+		// matches the existing server-side enforcement scope.
 		InsecureSkipVerify: true, //nolint:gosec // see comment above
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			return sepTLS.VerifyPeerCertWithHardwareModuleSAN(rawCerts, caPool)
@@ -145,7 +145,7 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 	// Reading the cert file a second time and re-decoding the PEM (the
 	// previous behavior) was redundant and discarded errors from both
 	// os.ReadFile and pem.Decode, leaving a nil-pointer deref on the next
-	// line if either failed (IEEE-008).
+	// line if either failed.
 	if len(cert.Certificate) == 0 {
 		return nil, fmt.Errorf("client cert %q has no leaf certificate", cfg.CertFile)
 	}
@@ -196,7 +196,7 @@ func (c *SEP2Client) LFDI() string { return c.lfdi }
 
 // PEN returns the IANA Private Enterprise Number this client stamps into
 // every LogEvent. Sourced from SimConfig.LogEventPEN at construction; zero
-// is the default (no manufacturer namespace). See IEEE-053.
+// is the default (no manufacturer namespace).
 func (c *SEP2Client) PEN() uint32 { return c.pen }
 
 // SetLogEventRateLimiter installs a rate-limit gate consulted by every
@@ -423,7 +423,7 @@ func (c *SEP2Client) Discover(ctx context.Context) (sep2.DeviceCapability, error
 // EndDeviceList href advertised in DeviceCapability. The href is passed in
 // rather than baked in as a constant : per IEEE 2030.5 §10.3 / CSIP §6.6 a
 // client MUST traverse the link graph reachable from /dcap and never assume
-// URL shapes. See IEEE-030.
+// URL shapes.
 //
 // IEEE-030 tests deferred per Craig override 2026-05-12 (time crunch).
 // Required-but-deferred coverage:
@@ -476,7 +476,7 @@ func (c *SEP2Client) Register(ctx context.Context, edevListHref string) (registe
 // 40-char form produced by internal/tls.LFDI (`fmt.Sprintf("%X", ...)`).
 // External IEEE 2030.5 / CSIP servers commonly emit lowercase `<lFDI>` on
 // the wire : xs:hexBinary is case-insensitive per W3C XML Schema Part 2 :
-// so byte-equality silently misses provisioned devices. See IEEE-113.
+// so byte-equality silently misses provisioned devices.
 //
 // First-cut paging: appends `?l=255` to fetch the first page. Cursor walking
 // for lists larger than 255 entries is deferred to a follow-up ticket
@@ -578,7 +578,7 @@ func (c *SEP2Client) GetRegistration(ctx context.Context, registrationHref strin
 //
 // First-cut paging: appends `?l=255` to fetch the first page; cursor walking
 // for lists larger than 255 entries is deferred to a follow-up. Mirrors the
-// paging pattern in LookupOwnEndDevice (IEEE-029).
+// paging pattern in LookupOwnEndDevice.
 //
 // IEEE-035 tests deferred per Craig override 2026-05-12. Required coverage:
 //  1. Happy path: stub server returns FSAList with N entries; method returns
@@ -611,7 +611,7 @@ func (c *SEP2Client) GetFSAList(ctx context.Context, fsaListHref string) (list s
 
 // PutDERCapability PUTs the inverter's DER capability to the advertised
 // DERCapabilityLink. The href is passed in rather than constructed by
-// string formatting (no `/edev/{id}/der/{id}/dercap` literal). See IEEE-030.
+// string formatting (no `/edev/{id}/der/{id}/dercap` literal).
 //
 // IEEE-030 tests deferred per Craig override 2026-05-12 (time crunch).
 // Required-but-deferred coverage: assert PUT is issued to the exact passed
@@ -666,7 +666,7 @@ func (c *SEP2Client) PutDERStatus(ctx context.Context, derstatusHref string, sta
 //
 // First-cut paging: appends `?l=255` to fetch the first page; cursor walking
 // for lists larger than 255 entries is deferred to a follow-up. Mirrors the
-// paging pattern in LookupOwnEndDevice (IEEE-029) and GetFSAList (IEEE-035).
+// paging pattern in LookupOwnEndDevice and GetFSAList.
 //
 // IEEE-036 tests deferred per Craig override 2026-05-12. Required coverage:
 //  1. Happy path: FSA returns DERProgramList with N entries; method returns
@@ -799,7 +799,7 @@ func (c *SEP2Client) CreateMirrorUsagePoint(ctx context.Context, mupListHref str
 }
 
 // PostMeterReading POSTs a metering data point to the MirrorMeterReadingList
-// href advertised on the MirrorUsagePoint resource. See IEEE-030.
+// href advertised on the MirrorUsagePoint resource.
 //
 // IEEE-030 tests deferred per Craig override 2026-05-12.
 // IEEE-047: on 301 the underlying Post follows once internally; the new
@@ -823,7 +823,6 @@ func (c *SEP2Client) PostMeterReading(ctx context.Context, mmrListHref string, m
 // surface (Response.replyTo is the first href that the spec allows to be
 // absolute); the GET/PUT helpers still string-concat with c.baseURL because
 // every other advertised link in IEEE 2030.5 is a path under the server.
-// See IEEE-043.
 func (c *SEP2Client) resolveServerURL(href string) (string, error) {
 	u, err := url.Parse(href)
 	if err != nil {
@@ -860,8 +859,8 @@ func isTransientResponseStatus(code int) bool {
 // duplicate-Response detection across retries, but not load-bearing for
 // behavior.
 //
-// Failure handling is split by status class so the upcoming IEEE-044 state
-// machine hook and IEEE-045 retry/dead-letter policy can pattern-match
+// Failure handling is split by status class so the state
+// machine hook and the retry/dead-letter policy can pattern-match
 // without re-parsing:
 //
 //   - 4xx: wrapped error containing the status code and URL. The response
@@ -871,7 +870,7 @@ func isTransientResponseStatus(code int) bool {
 //   - 5xx and transport-level errors: one in-call retry. If the retry also
 //     fails, the returned error wraps ErrResponseTransient so callers can
 //     `errors.Is(err, ErrResponseTransient)` to drive the upstream
-//     exponential-backoff policy (IEEE-045).
+//     exponential-backoff policy.
 //   - Other (1xx / 3xx): wrapped non-transient error. These should not
 //     occur in practice : IEEE 2030.5 servers do not redirect Response
 //     POSTs : but a hostile or misconfigured peer should not crash the
@@ -880,9 +879,9 @@ func isTransientResponseStatus(code int) bool {
 //     `errors.Is(err, context.Canceled)` / `errors.Is(err, context.DeadlineExceeded)`.
 //
 // The one-shot retry is intentionally surgical: full retry/backoff with
-// dead-lettering is IEEE-045's scope. PostResponse ships only the safety
+// dead-lettering is out of scope here. PostResponse ships only the safety
 // net so a single dropped connection or 503 does not bubble straight to
-// the state-machine hook in IEEE-044. See IEEE-043 (this ticket) and the
+// the state-machine hook. See the
 // `phase-6-response-function-set.md` plan doc.
 func (c *SEP2Client) PostResponse(ctx context.Context, replyToHref string, resp sep2.DERControlResponse) error {
 	if replyToHref == "" {
@@ -980,7 +979,7 @@ type pollDurationFunc func(pollRateSec uint32) time.Duration
 
 // defaultPollDuration is the production mapper. Zero/unset pollRate falls
 // back to 30s : a conservative default matching the example values in
-// IEEE 2030.5 / CSIP. See IEEE-028.
+// IEEE 2030.5 / CSIP.
 func defaultPollDuration(pollRateSec uint32) time.Duration {
 	if pollRateSec == 0 {
 		return 30 * time.Second
@@ -991,7 +990,7 @@ func defaultPollDuration(pollRateSec uint32) time.Duration {
 // pollDurationPtr holds the current mapper. Stored in an atomic.Pointer
 // so tests can compress polling cadence (SetPollDurationForTesting) while
 // (*SEP2Client).WaitForAdvertisedLinks reads in another goroutine : no
-// race (IEEE-081). Production binaries never write past the init.
+// race. Production binaries never write past the init.
 var pollDurationPtr atomic.Pointer[pollDurationFunc]
 
 func init() {
@@ -1010,7 +1009,6 @@ func pollDuration(pollRateSec uint32) time.Duration {
 // Per CSIP §6.6 / IEEE 2030.5 §10.3 a device MUST NOT proceed past
 // discovery (registration, DER setup, metering) when the entry point
 // advertises nothing : the server has not yet provisioned the device.
-// See IEEE-028.
 func dcapHasAnyLink(d sep2.DeviceCapability) bool {
 	return d.EndDeviceListLink != nil ||
 		d.TimeLink != nil ||
@@ -1047,7 +1045,7 @@ func (c *SEP2Client) WaitForAdvertisedLinks(ctx context.Context, initial sep2.De
 	return dcap, nil
 }
 
-// Server time sync (IEEE-031) =================================================
+// Server time sync =================================================
 //
 // CSIP / IEEE 2030.5 §10 require devices to source time from the server's Time
 // resource (linked from DeviceCapability.TimeLink) and to use that time :
@@ -1083,7 +1081,6 @@ func (c *SEP2Client) WaitForAdvertisedLinks(ctx context.Context, initial sep2.De
 // offset discovered via SyncServerTime / RunTimeSync. Before any sync has
 // run (or when no TimeLink is advertised) the offset is zero and Now()
 // returns local time. Use Now() for any timestamp the server consumes.
-// See IEEE-031.
 func (c *SEP2Client) Now() time.Time {
 	return time.Now().Add(time.Duration(c.serverTimeOffsetNanos.Load()))
 }
@@ -1129,12 +1126,12 @@ func (c *SEP2Client) SyncServerTime(ctx context.Context, timeHref string) (sep2.
 // ticket pins this at 60s as production hygiene : anything shorter
 // hammers the Time endpoint without buying meaningful clock accuracy.
 //
-// Stored as nanoseconds in an atomic.Int64 so the IEEE-070 sweep tests
+// Stored as nanoseconds in an atomic.Int64 so the time-sync sweep tests
 // can swap the floor via SetMinTimeSyncPollRateForTesting without racing
-// against (*SEP2Client).RunTimeSync's read in another goroutine
-// (IEEE-081). Production code reads via getMinTimeSyncPollRate(); the
+// against (*SEP2Client).RunTimeSync's read in another goroutine.
+// Production code reads via getMinTimeSyncPollRate(); the
 // production binary itself never writes. Mirrors the pollDuration
-// testability seam pattern established by IEEE-028.
+// testability seam pattern used elsewhere in this package.
 var minTimeSyncPollRateNanos atomic.Int64
 
 func init() {

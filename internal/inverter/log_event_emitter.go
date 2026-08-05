@@ -5,7 +5,7 @@
 // occur (LVRT trip, HVRT trip, freq-watt curtailment, inverter offline,
 // manufacturer-specific faults). The server-side handler already exists
 // (internal/handler/log_event.go) and is unit-tested; this file adds the
-// outbound primitive so the alarm callers (IEEE-054) can fire-and-document.
+// outbound primitive so the alarm callers can fire-and-document.
 //
 // IEEE-053 ships:
 //  1. PostLogEvent : the HTTP primitive. Returns the new resource href on
@@ -19,7 +19,7 @@
 //     values left by the caller as a convenience so the alarm sites can
 //     stay terse.
 //
-// Out of scope (IEEE-054):
+// Out of scope:
 //   - Wiring trip / curtailment detection sites to call PostLogEvent.
 //   - The rate-limiter implementation itself; this file only defines the
 //     interface.

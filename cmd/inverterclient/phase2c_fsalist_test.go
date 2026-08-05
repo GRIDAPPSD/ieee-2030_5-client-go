@@ -60,8 +60,8 @@ import (
 
 // shrinkPhase2cFSAListPoll compresses the package-level poll floor / default
 // for the duration of the test so idle-loop tests run at sub-second cadence
-// without faking time. Mirrors shrinkPhase2bPoll (IEEE-074) and
-// SetMinTimeSyncPollRateForTesting (IEEE-070).
+// without faking time. Mirrors shrinkPhase2bPoll and
+// SetMinTimeSyncPollRateForTesting.
 //
 // Tests that shrink the floor MUST NOT use t.Parallel(): the vars are
 // process-global state. The same constraint applies to captureLog (declared

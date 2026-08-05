@@ -1,6 +1,6 @@
 package main
 
-// Phase 1b: server-time sync (IEEE-031).
+// Phase 1b: server-time sync.
 //
 // Extracted from main() by IEEE-048 so the previously-fatal `log.Fatalf` call
 // site on `SyncServerTime` failure can be replaced with graceful bypass and

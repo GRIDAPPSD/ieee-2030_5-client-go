@@ -17,7 +17,7 @@ import (
 //
 // Curve-typed modes (Volt/Var, Volt/Watt) use the compiled-in IEEE 1547
 // default curves. Callers that have fetched server-supplied curves should
-// use ApplyControlsWithCurves (IEEE-042) instead.
+// use ApplyControlsWithCurves instead.
 func ApplyControls(base *sep2.DERControlBase, grid GridState, maxPW float64) ControlOutputs {
 	return ApplyControlsWithCurves(base, grid, maxPW, nil)
 }

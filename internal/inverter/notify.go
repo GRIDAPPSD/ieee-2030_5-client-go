@@ -1,7 +1,7 @@
 // Package inverter : IEEE-049 inbound HTTPS Notification receiver.
 //
 // Until Phase 8, the inverter was outbound-only: it polled the SEP2 server
-// for DERControlList changes (IEEE-038). CSIP V1.2 CORE-018 recommends a
+// for DERControlList changes. CSIP V1.2 CORE-018 recommends a
 // subscription/notification flow to optimize network traffic : the inverter
 // subscribes to a resource (typically FSAList) and the server POSTs a
 // Notification to the inverter every time the resource changes.
@@ -10,8 +10,8 @@
 // vendored gotls fork (TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8) running an
 // http.Server that accepts POST /notify, parses the IEEE 2030.5 Notification
 // XML body, and hands it to a no-op dispatch hook. Subscription POST
-// (IEEE-050), Phase 5 state-machine dispatch (IEEE-051), and cancellation
-// handling on status=1 (IEEE-052) are out of scope for this ticket.
+//, Phase 5 state-machine dispatch, and cancellation
+// handling on status=1 are out of scope for this ticket.
 //
 // mTLS posture mirrors the server-side ccmserver: ClientAuth =
 // RequireAnyClientCert + a VerifyPeerCertificate that walks the chain via

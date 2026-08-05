@@ -1,17 +1,13 @@
-// Package inverter_test backfills the deferred test coverage for IEEE-031
-// (server time sync subsystem): the four new methods on *SEP2Client (Now,
-// GetServerTime, SyncServerTime, RunTimeSync), the atomic offset field, and
-// the two outbound-timestamp call-site replacements (DERSettings.UpdatedTime
-// and MirrorMeterReading.MRID).
+// Package inverter_test covers the server time sync subsystem: the four
+// methods on *SEP2Client (Now, GetServerTime, SyncServerTime, RunTimeSync),
+// the atomic offset field, and the two outbound-timestamp call-site
+// replacements (DERSettings.UpdatedTime and MirrorMeterReading.MRID).
 //
-// The deferred-tests Craig override (2026-05-12) was lifted later the same
-// day; this file is the plan-3-csip-test-debt-sweep Phase 2 deliverable
-// (IEEE-070). Origin ticket IEEE-031 is MERGED : behavior is frozen. These
-// tests assert frozen behavior; they do not exercise unmerged future
+// These tests assert frozen behavior; they do not exercise unmerged future
 // changes. If a test reveals a defect, the project policy is to file a
 // separate MEDIUM ticket : do not fix inline.
 //
-// Fixture pattern mirrors IEEE-028's idle_test.go and IEEE-069's
+// Fixture pattern mirrors idle_test.go and
 // client_test.go: each test stands up a gotls-backed HTTPS server via the
 // shared ccmTestEnv from client_ccm_test.go and routes requests with a
 // per-test http.ServeMux. HTTP-method-keyed atomic counters detect

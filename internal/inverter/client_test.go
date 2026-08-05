@@ -10,7 +10,7 @@
 // a defect, the project policy is to file a separate MEDIUM ticket : do not
 // fix inline.
 //
-// Fixture pattern mirrors internal/inverter/idle_test.go (IEEE-028): each
+// Fixture pattern mirrors internal/inverter/idle_test.go: each
 // test stands up a gotls-backed HTTPS server via the shared ccmTestEnv from
 // client_ccm_test.go and routes requests with a per-test http.ServeMux.
 // HTTP-method-keyed atomic counters detect unintended fan-out.

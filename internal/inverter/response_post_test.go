@@ -497,7 +497,7 @@ func TestPostResponse_ContentTypeHeaderIsSEPXML(t *testing.T) {
 // =============================================================================
 // Bonus: empty replyToHref returns the documented guard error without a
 // network call. Mirrors the empty-href guards on every other client method
-// (IEEE-030 / IEEE-032 / IEEE-035) and lifts PostResponse over ≥80%.
+// and lifts PostResponse over ≥80%.
 // =============================================================================
 
 func TestPostResponse_EmptyHrefErrors(t *testing.T) {

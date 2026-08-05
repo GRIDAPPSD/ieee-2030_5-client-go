@@ -80,7 +80,7 @@ func (c *SEP2Client) PostSubscription(
 	// (*SEP2Client).Post handles XML marshalling, mTLS, keep-alive, and
 	// IEEE-047 one-shot 301 follow. We get the Location header on 201
 	// directly; on 405 / other non-2xx we get a typed error from
-	// classifyResponse (IEEE-046).
+	// classifyResponse.
 	location, _, postErr := c.Post(ctx, subscriptionListHref, &sub)
 	if postErr != nil {
 		// errors.Is preserves the typed sentinel through the Post wrapper's

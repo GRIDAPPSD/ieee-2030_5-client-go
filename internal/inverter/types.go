@@ -97,16 +97,15 @@ type SimConfig struct {
 	// pre-allowlisted out-of-band; the device's job is to discover its
 	// pre-provisioned EndDevice, not to create one. If our LFDI is not in
 	// the list, the inverter idles and re-polls the list. Default false
-	// retains the IEEE 2030.5 self-registration path. See IEEE-029.
+	// retains the IEEE 2030.5 self-registration path.
 	CSIP bool
 
 	// ExpectedPIN is the out-of-band-provisioned PIN that the device should
 	// see echoed by the server's Registration resource (CSIP V1.2 BASIC-001
-	// step 5 / IEEE 2030.5 §10). IEEE-032 plumbs the value and logs it
-	// alongside the server-presented PIN; mismatch enforcement and the
-	// "0 = skip" sentinel land in IEEE-033. IEEE-034 corrects the mismatch
-	// branch to fatal-on-nonzero (rg.PIN==0 stays idle; nonzero mismatch is
-	// a wrong-device/server-pair condition and must fail loud).
+	// step 5 / IEEE 2030.5 §10). The value is logged alongside the
+	// server-presented PIN for comparison: rg.PIN==0 means skip (stay idle),
+	// but a nonzero mismatch is a wrong-device/server-pair condition and
+	// must fail loud (fatal), not idle.
 	ExpectedPIN uint
 
 	// AllowUnregistered, when true, bypasses the strict missing-RegistrationLink
@@ -114,9 +113,8 @@ type SimConfig struct {
 	// Registration resource. Default false: in CSIP mode, a nil RegistrationLink
 	// triggers an idle-loop that re-fetches the EndDevice on dcap.PollRate until
 	// the server publishes the link (CSIP V1.2 BASIC-001 step 5 commissioning
-	// gate). Non-CSIP mode (--csip=false) ignores this flag : the legacy
+	// gate). Non-CSIP mode (--csip=false) ignores this flag: the legacy
 	// IEEE 2030.5 Register() POST path skips Phase 2b entirely.
-	// See IEEE-034.
 	AllowUnregistered bool
 
 	// LogEventPEN is the IANA-registered Private Enterprise Number stamped
@@ -125,13 +123,13 @@ type SimConfig struct {
 	// configure it here (--pen flag / SEP2_PEN env). Zero (default) means
 	// "no manufacturer namespace" -- acceptable for test / interop, but
 	// downstream operators reading log archives cannot disambiguate codes
-	// across vendors without a real PEN. See IEEE-053.
+	// across vendors without a real PEN.
 	LogEventPEN uint32
 
 	// Backend selects the source of physical state for the simulation loop:
 	//   "synthetic" (default): the scenario harness, no external I/O.
-	//   "gridlabd": GridLAB-D co-simulation via HELICS (stub, IEEESIM-004).
-	//   "realdevice": SunSpec/Modbus hardware (stub, IEEESIM-005).
+	//   "gridlabd": GridLAB-D co-simulation via HELICS (stub).
+	//   "realdevice": SunSpec/Modbus hardware (stub).
 	// Selection happens once at construction; the tick loop never branches on it.
 	Backend string
 

@@ -77,7 +77,7 @@ type Scheduler struct {
 }
 
 // NewScheduler constructs a Scheduler. nowFunc supplies the wall clock for
-// expiry checks : production callers pass (*SEP2Client).Now (IEEE-031);
+// expiry checks: production callers pass (*SEP2Client).Now ;
 // tests pass a fixed-time closure for determinism. rng supplies the
 // randomization source : production seeds rand.NewPCG from current nanos;
 // tests inject a deterministic seed.

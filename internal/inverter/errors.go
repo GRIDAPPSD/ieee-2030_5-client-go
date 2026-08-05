@@ -16,11 +16,11 @@ import (
 // that work : caller behavior changes (graceful bypass replacing log.Fatalf,
 // 301 follow with cached-href update) ship in IEEE-048 and IEEE-047.
 //
-// 5xx maps to the pre-existing ErrResponseTransient (IEEE-043), so callers
+// 5xx maps to the pre-existing ErrResponseTransient, so callers
 // already pattern-matching that sentinel continue to work unchanged.
 //
 // Semantic vs HTTP not-found: the pre-existing ErrEndDeviceNotFound
-// (IEEE-029) signals that a server's EndDeviceList does not contain the
+// signals that a server's EndDeviceList does not contain the
 // client's LFDI : an application-level absence on a 200-OK response, not a
 // 404. It is deliberately *not* unified with ErrNotFound below; callers that
 // idle-poll for provisioning must continue to distinguish "list returned but
@@ -64,7 +64,7 @@ var (
 	// no HTTP traffic on a deny. Callers branch on errors.Is(err,
 	// ErrRateLimited) to silently drop the duplicate without escalating.
 	// The default (nil-limiter) policy is allow-all; the concrete limiter
-	// implementation is owned by IEEE-054. See IEEE-053.
+	// implementation is owned by IEEE-054.
 	ErrRateLimited = errors.New("LogEvent rate limited")
 )
 

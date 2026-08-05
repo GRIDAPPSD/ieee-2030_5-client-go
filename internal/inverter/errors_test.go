@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// classifyResponse unit tests (IEEE-046).
+// classifyResponse unit tests.
 //
 // In-package _test.go so unexported classifyResponse is reachable without an
 // _export_test.go shim. Exercises the pure status-code → typed-error mapping
