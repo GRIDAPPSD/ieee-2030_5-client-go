@@ -1,7 +1,7 @@
 name: "Core freshness"
 
 # Two independent watchdogs against github.com/GRIDAPPSD/ieee-2030_5-core-go,
-# the private wire-format module this client depends on. Neither gates
+# the wire-format module this client depends on. Neither gates
 # a pull_request: core moves on its own schedule, independent of what a
 # given client PR touches, so failing an unrelated PR because core
 # advanced would be noise, not signal. Both run on a daily schedule
@@ -11,8 +11,8 @@ name: "Core freshness"
 # and ieee-2030_5-server-go repos both discovered they were building
 # and testing against a stale core pin, with silent wire-format
 # breakage in one case and a straight build failure in the other. This
-# client imports the same private core module and has the same class
-# of exposure, so it gets the same watchdog even though no incident has
+# client imports the same core module and has the same class of
+# exposure, so it gets the same watchdog even though no incident has
 # surfaced here yet.
 #
 # staleness-check answers "is our pin behind core main, and by what
@@ -273,7 +273,7 @@ jobs:
             ieee-2030_5-core-go
           permission-contents: read
 
-      - name: Configure private module access
+      - name: Configure module access
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |

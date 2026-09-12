@@ -5,9 +5,7 @@
 [![Go 1.26.3](https://img.shields.io/badge/Go-1.26.3-00ADD8?logo=go)](https://go.dev/)
 [![License: Battelle BSD](https://img.shields.io/badge/License-Battelle_BSD-blue.svg)](LICENSE)
 
-This repo is private: the workflow badges above render for viewers with
-repository access and show nothing for anonymous visitors. No release
-badge yet; this repo has not cut a tagged release.
+No release badge yet; this repo has not cut a tagged release.
 
 IEEE 2030.5 (SEP2) Go client and inverter simulator.
 
