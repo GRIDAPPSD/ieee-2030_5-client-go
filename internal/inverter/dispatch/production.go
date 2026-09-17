@@ -10,8 +10,9 @@
 // dispatcher. The dispatcher and the device backend are two independent axes
 // of the same production posture, selected once at construction.
 //
-// See docs/adr/ADR-004-production-as-mode.md for the measurable revisit
-// trigger that governs when to extract a separate hardened-gateway repo.
+// Extract a separate hardened-gateway repo only once three or more
+// production-hardening concerns (OTA agent, config attestation, OT-protocol
+// supervision, signed-config validation, secrets vault) land in-process.
 
 package dispatch
 

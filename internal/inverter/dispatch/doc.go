@@ -18,7 +18,7 @@
 // role. There is no --mode flag; role is resolved once by dispatch.New and
 // the resulting interface value is the only thing the receiver wiring holds.
 //
-// The measurable revisit trigger for extracting a separate hardened-gateway
-// repo is documented in docs/adr/ADR-004-production-as-mode.md. Consult that
-// ADR before adding in-process production-hardening concerns to this package.
+// Extract a separate hardened-gateway repo only once three or more
+// production-hardening concerns (OTA agent, config attestation, OT-protocol
+// supervision, signed-config validation, secrets vault) land in-process.
 package dispatch
