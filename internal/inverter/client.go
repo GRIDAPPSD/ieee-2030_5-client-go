@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -81,80 +80,50 @@ type SEP2Client struct {
 
 // NewSEP2Client creates a client with mTLS persistent connections per IEEE 2030.5.
 //
-// The client uses the vendored gotls fork rather than stdlib crypto/tls so it
-// can negotiate TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8 (0xC0AE), the IEEE 2030.5
-// mandatory cipher. By default GCM is left in the cipher list as a fallback
-// so the simulator keeps working against permissive peers; setting
-// cfg.CSIPStrict drops the GCM entry and forces the handshake to fail
-// loudly against non-CSIP-conformant peers.
+// The client uses core's NewCCMClientConfig, which builds on the vendored
+// gotls fork rather than stdlib crypto/tls so it can negotiate
+// TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8 (0xC0AE), the IEEE 2030.5 mandatory
+// cipher (clause 6.7). Core offers CCM-8 only: a server that cannot speak
+// it is refused, not downgraded to GCM.
 func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
-	certPEM, err := os.ReadFile(cfg.CertFile)
+	tlsCfg, err := sepTLS.NewCCMClientConfig(cfg.CertFile, cfg.KeyFile, cfg.CAFile)
 	if err != nil {
-		return nil, fmt.Errorf("read client cert %q: %w", cfg.CertFile, err)
-	}
-	keyPEM, err := os.ReadFile(cfg.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("read client key %q: %w", cfg.KeyFile, err)
-	}
-	cert, err := gotls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("load client cert %q: %w", cfg.CertFile, err)
+		return nil, fmt.Errorf("build CCM-8 client TLS config: %w", err)
 	}
 
-	caPEM, err := os.ReadFile(cfg.CAFile)
-	if err != nil {
-		return nil, fmt.Errorf("read CA cert %q: %w", cfg.CAFile, err)
-	}
-	caPool := x509.NewCertPool()
-	if !caPool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("parse CA cert %q: no PEM data", cfg.CAFile)
-	}
-
-	cipherSuites := []uint16{gotls.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8}
-	if !cfg.CSIPStrict {
-		// 0xC02B is TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256. Mirrors the
-		// fallback the server registers in internal/tls/ccmserver.go so
-		// `make run-inverter` against `make run-ccm` keeps interoperating.
-		cipherSuites = append(cipherSuites, gotls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
-	}
-
-	tlsCfg := &gotls.Config{
-		Certificates: []gotls.Certificate{cert},
-		RootCAs:      caPool,
-		MinVersion:   gotls.VersionTLS12,
-		MaxVersion:   gotls.VersionTLS12,
-		CipherSuites: cipherSuites,
-		// IEEE 2030.5 / CSIP section 6.11 server certs carry a critical
-		// HardwareModuleName SAN (otherName OID 1.3.6.1.5.5.7.8.4) that the
-		// stdlib x509 parser leaves in UnhandledCriticalExtensions. The
-		// gotls client-side handshake always runs stdlib Verify before
-		// invoking VerifyPeerCertificate (handshake_client.go:985-1002), so
-		// merely adding the hook is not enough : stdlib's pre-verify is
-		// what trips `unhandled critical extension`. Set InsecureSkipVerify
-		// to bypass that pre-verify, and do the chain walk ourselves in the
-		// hook via the shared HMN-tolerant helper. This is NOT
-		// `--insecure-skip-verify`; the hook performs full chain validation
-		// against RootCAs. CSIP section 6.11 device-profile certs have empty
-		// Subject and an otherName-only SAN, so stdlib hostname
-		// verification cannot succeed against them in any case; the helper
-		// matches the existing server-side enforcement scope.
-		// See GRIDAPPSD/ieee-2030_5-server-go#32.
-		InsecureSkipVerify: true, //nolint:gosec // see comment above
-		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			return sepTLS.VerifyPeerCertWithHardwareModuleSAN(rawCerts, caPool)
-		},
-		CurvePreferences: []gotls.CurveID{gotls.CurveP256},
+	// IEEE 2030.5 / CSIP section 6.11 server certs carry a critical
+	// HardwareModuleName SAN (otherName OID 1.3.6.1.5.5.7.8.4) that the
+	// stdlib x509 parser leaves in UnhandledCriticalExtensions. core's
+	// NewCCMClientConfig runs gotls's normal chain-and-hostname verify,
+	// which is correct for a bare IEEE 2030.5 server cert but trips the
+	// same way stdlib does against this deployment's HMN-SAN-bearing
+	// server certs. The gotls client-side handshake always runs stdlib
+	// Verify before invoking VerifyPeerCertificate
+	// (handshake_client.go:985-1002), so merely adding the hook is not
+	// enough: stdlib's pre-verify is what trips `unhandled critical
+	// extension`. Set InsecureSkipVerify to bypass that pre-verify, and do
+	// the chain walk ourselves in the hook via the shared HMN-tolerant
+	// helper, against the RootCAs pool core's constructor already built.
+	// This is NOT `--insecure-skip-verify`; the hook performs full chain
+	// validation. CSIP section 6.11 device-profile certs have empty
+	// Subject and an otherName-only SAN, so stdlib hostname verification
+	// cannot succeed against them in any case; the helper matches the
+	// existing server-side enforcement scope.
+	// See GRIDAPPSD/ieee-2030_5-server-go#32.
+	caPool := tlsCfg.RootCAs
+	tlsCfg.InsecureSkipVerify = true //nolint:gosec // see comment above
+	tlsCfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		return sepTLS.VerifyPeerCertWithHardwareModuleSAN(rawCerts, caPool)
 	}
 
-	// Derive SFDI/LFDI from the leaf cert that X509KeyPair already parsed.
-	// Reading the cert file a second time and re-decoding the PEM (the
-	// previous behavior) was redundant and discarded errors from both
-	// os.ReadFile and pem.Decode, leaving a nil-pointer deref on the next
-	// line if either failed. See GRIDAPPSD/ieee-2030_5-server-go#7.
-	if len(cert.Certificate) == 0 {
+	// Derive SFDI/LFDI from the leaf cert core's constructor already
+	// parsed into tlsCfg.Certificates[0], rather than reading and
+	// re-decoding the cert file a second time. See
+	// GRIDAPPSD/ieee-2030_5-server-go#7.
+	if len(tlsCfg.Certificates) == 0 || len(tlsCfg.Certificates[0].Certificate) == 0 {
 		return nil, fmt.Errorf("client cert %q has no leaf certificate", cfg.CertFile)
 	}
-	parsedCert, err := x509.ParseCertificate(cert.Certificate[0])
+	parsedCert, err := x509.ParseCertificate(tlsCfg.Certificates[0].Certificate[0])
 	if err != nil {
 		return nil, fmt.Errorf("parse client cert %q for identity: %w", cfg.CertFile, err)
 	}

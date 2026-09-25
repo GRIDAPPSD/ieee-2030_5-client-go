@@ -78,7 +78,6 @@ Key flags:
 | `--tick` | `1s` | Simulation tick interval |
 | `--hmi-port` | `8080` | Local HMI web dashboard port (0 to disable) |
 | `--csip` | false | CSIP mode: discover own EndDevice instead of POST-registering |
-| `--csip-strict` | false | Restrict TLS to TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8 |
 | `--pin` | `0` | Expected registration PIN (0 = skip check; nonzero mismatch is fatal) |
 | `--notify-listen` | `127.0.0.1:0` | Inbound HTTPS Notification listener (empty to disable) |
 | `--pen` | `0` | IANA Private Enterprise Number for outbound LogEvents (env: SEP2_PEN) |

@@ -23,7 +23,6 @@ package inverter
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -31,7 +30,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -128,7 +126,13 @@ func NewNotifyReceiver(cfg NotifyReceiverConfig) (*NotifyReceiver, error) {
 		return nil, nil
 	}
 
-	tlsCfg, err := buildNotifyTLSConfig(cfg.CertFile, cfg.KeyFile, cfg.CAFile)
+	// The inverter's device cert is the listener's server cert; core's
+	// NewCCMServerConfig already builds the CCM-8-only, mTLS
+	// RequireAnyClientCert + HardwareModuleName-SAN-tolerant config this
+	// receiver needs, so there is no reason to hand-build a second copy
+	// of it here (see client.go's NewSEP2Client for the outbound side of
+	// the same move).
+	tlsCfg, err := sepTLS.NewCCMServerConfig(cfg.CertFile, cfg.KeyFile, cfg.CAFile)
 	if err != nil {
 		return nil, fmt.Errorf("build notify TLS config: %w", err)
 	}
@@ -142,56 +146,6 @@ func NewNotifyReceiver(cfg NotifyReceiverConfig) (*NotifyReceiver, error) {
 		tlsCfg:     tlsCfg,
 		listenAddr: cfg.ListenAddr,
 		dispatcher: dispatcher,
-	}, nil
-}
-
-// buildNotifyTLSConfig produces a gotls.Config that mirrors the server-side
-// NewCCMServerConfig: CCM-8 primary cipher, GCM fallback, mTLS via
-// RequireAnyClientCert + HardwareModuleName-SAN-tolerant verify. The
-// inverter's device cert is the listener's server cert; the CA pool is
-// loaded from a single PEM file (the inverter doesn't have the
-// "extra-client-CAs" use case the server has).
-func buildNotifyTLSConfig(certFile, keyFile, caFile string) (*gotls.Config, error) {
-	certPEM, err := os.ReadFile(certFile)
-	if err != nil {
-		return nil, fmt.Errorf("read cert %q: %w", certFile, err)
-	}
-	keyPEM, err := os.ReadFile(keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("read key %q: %w", keyFile, err)
-	}
-	cert, err := gotls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("parse cert %q: %w", certFile, err)
-	}
-
-	caPEM, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, fmt.Errorf("read CA %q: %w", caFile, err)
-	}
-	caPool := x509.NewCertPool()
-	if !caPool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("parse CA %q: no PEM data", caFile)
-	}
-
-	return &gotls.Config{
-		Certificates: []gotls.Certificate{cert},
-		ClientCAs:    caPool,
-		// IEEE 2030.5 / CSIP section 6.11 device certs carry a critical
-		// HardwareModuleName SAN that stdlib x509 cannot parse.
-		// RequireAnyClientCert + manual verify in the hook matches
-		// internal/tls/ccmserver.go.
-		ClientAuth: gotls.RequireAnyClientCert,
-		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			return sepTLS.VerifyPeerCertWithHardwareModuleSAN(rawCerts, caPool)
-		},
-		MinVersion: gotls.VersionTLS12,
-		MaxVersion: gotls.VersionTLS12,
-		CipherSuites: []uint16{
-			gotls.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8,
-			gotls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-		},
-		CurvePreferences: []gotls.CurveID{gotls.CurveP256},
 	}, nil
 }
 

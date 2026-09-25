@@ -85,12 +85,6 @@ type SimConfig struct {
 	TickInterval   time.Duration // simulation tick
 	ReportInterval time.Duration // status/metering report interval
 
-	// CSIPStrict, when true, drops the GCM cipher-suite fallback from the
-	// TLS handshake so connections to non-CCM-8 peers fail loudly instead
-	// of silently degrading. Default false retains GCM for interop with
-	// the in-tree test/dev server (see internal/tls/ccmserver.go).
-	CSIPStrict bool
-
 	// CSIP, when true, selects CSIP-mode EndDevice discovery: the inverter
 	// GETs the server's EndDeviceList and finds its own EndDevice by LFDI
 	// match instead of POSTing to /edev to self-register. CSIP devices are
