@@ -3,83 +3,210 @@ package inverter_test
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
-	"fmt"
+	"encoding/xml"
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 	certs "github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2cert"
-	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2srv/assembly"
 	sepTLS "github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2tls"
-	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/store/memory"
+	gotls "github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2tls/gotls"
 )
 
-// deviceIdentityKey is a package-private context key used by the test-only
-// identity middleware to store the device LFDI/SFDI derived from the TLS peer
-// certificate.  A private type prevents accidental collision with any other
-// context key in the call chain.
-type deviceIdentityKey struct{}
-
-// deviceIdentity holds the pair extracted from the peer cert.
-type deviceIdentity struct {
-	lfdi string
-	sfdi string
+// e2eServer is a minimal stateful IEEE 2030.5 server double for this test.
+//
+// Core v0.20.0 dropped pkg/sep2srv and pkg/store to server-go (they moved
+// verbatim; core keeps only the surface a client and a server both need).
+// Depending on server-go from here to get them back would be a new
+// module dependency this change may not add, so this hand-rolls exactly
+// the routes the lifecycle below exercises, mirroring the pattern every
+// other test file in this package already uses (idle_test.go,
+// client_ccm_test.go, derprogram_phase_test.go all serve a bespoke
+// http.ServeMux rather than a real router).
+type e2eServer struct {
+	mu     sync.Mutex
+	edev   *sep2.EndDevice
+	dercap sep2.DERCapability
+	derg   sep2.DERSettings
+	ders   sep2.DERStatus
 }
 
-// buildTestAuthPolicy returns an assembly.AuthPolicy suitable for the
-// integration test:
-//
-//   - Wrap installs middleware that reads the TLS peer certificate from the
-//     request, derives LFDI and SFDI via sepTLS helpers, and stashes the pair
-//     in the request context.  Requests without a TLS peer cert are rejected
-//     with 403 Forbidden.
-//   - Identity reads the pair back from context (ok=false when absent).
-//   - SFDIPrefix returns the first 8 characters of the SFDI, matching the
-//     auth.ExtractSFDIPrefix rule (GRIDAPPSD/ieee-2030_5-server-go#13).
-func buildTestAuthPolicy() assembly.AuthPolicy {
-	return assembly.AuthPolicy{
-		Wrap: func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-					http.Error(w, "client certificate required", http.StatusForbidden)
-					return
-				}
-				cert := r.TLS.PeerCertificates[0]
-				id := deviceIdentity{
-					lfdi: sepTLS.LFDI(cert),
-					sfdi: sepTLS.SFDI(cert),
-				}
-				ctx := context.WithValue(r.Context(), deviceIdentityKey{}, id)
-				next.ServeHTTP(w, r.WithContext(ctx))
-			})
-		},
-		Identity: func(ctx context.Context) (lfdi, sfdi string, ok bool) {
-			id, ok := ctx.Value(deviceIdentityKey{}).(deviceIdentity)
-			if !ok {
-				return "", "", false
-			}
-			return id.lfdi, id.sfdi, true
-		},
-		SFDIPrefix: func(sfdi string) (string, error) {
-			if len(sfdi) < 8 {
-				return "", fmt.Errorf("SFDI %q too short: need at least 8 chars", sfdi)
-			}
-			return sfdi[:8], nil
-		},
+func writeXML(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/sep+xml")
+	_ = xml.NewEncoder(w).Encode(v)
+}
+
+func (s *e2eServer) handleDcap(w http.ResponseWriter, _ *http.Request) {
+	writeXML(w, &sep2.DeviceCapability{
+		Resource:                 sep2.Resource{Href: "/dcap"},
+		TimeLink:                 &sep2.Link{Href: "/tm"},
+		EndDeviceListLink:        &sep2.ListLink{Href: "/edev"},
+		MirrorUsagePointListLink: &sep2.ListLink{Href: "/mup"},
+	})
+}
+
+func (s *e2eServer) handleEdevCollection(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch r.Method {
+	case http.MethodPost:
+		var edev sep2.EndDevice
+		if err := xml.NewDecoder(r.Body).Decode(&edev); err != nil {
+			http.Error(w, "malformed", http.StatusBadRequest)
+			return
+		}
+		// Duplicate-tolerant: only one device registers in this test, so a
+		// second POST returns the existing resource rather than creating one.
+		if s.edev == nil {
+			edev.Href = "/edev/1"
+			edev.ChangedTime = time.Now().Unix()
+			s.edev = &edev
+		}
+		w.Header().Set("Location", s.edev.Href)
+		w.WriteHeader(http.StatusCreated)
+	case http.MethodGet:
+		list := sep2.EndDeviceList{}
+		if s.edev != nil {
+			list.All = 1
+			list.EndDevice = []sep2.EndDevice{*s.edev}
+		}
+		writeXML(w, &list)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *e2eServer) handleEdevItem(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.edev == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeXML(w, s.edev)
+}
+
+func (s *e2eServer) handleDERCapability(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch r.Method {
+	case http.MethodPut:
+		var cap sep2.DERCapability
+		if err := xml.NewDecoder(r.Body).Decode(&cap); err != nil {
+			http.Error(w, "malformed", http.StatusBadRequest)
+			return
+		}
+		s.dercap = cap
+		w.WriteHeader(http.StatusNoContent)
+	case http.MethodGet:
+		writeXML(w, &s.dercap)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *e2eServer) handleDERSettings(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch r.Method {
+	case http.MethodPut:
+		var settings sep2.DERSettings
+		if err := xml.NewDecoder(r.Body).Decode(&settings); err != nil {
+			http.Error(w, "malformed", http.StatusBadRequest)
+			return
+		}
+		s.derg = settings
+		w.WriteHeader(http.StatusNoContent)
+	case http.MethodGet:
+		writeXML(w, &s.derg)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *e2eServer) handleDERStatus(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch r.Method {
+	case http.MethodPut:
+		var status sep2.DERStatus
+		if err := xml.NewDecoder(r.Body).Decode(&status); err != nil {
+			http.Error(w, "malformed", http.StatusBadRequest)
+			return
+		}
+		s.ders = status
+		w.WriteHeader(http.StatusNoContent)
+	case http.MethodGet:
+		writeXML(w, &s.ders)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *e2eServer) handleMUPCollection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var mup sep2.MirrorUsagePoint
+	if err := xml.NewDecoder(r.Body).Decode(&mup); err != nil {
+		http.Error(w, "malformed", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Location", "/mup/1")
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (s *e2eServer) handleMeterReading(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var mmr sep2.MirrorMeterReading
+	if err := xml.NewDecoder(r.Body).Decode(&mmr); err != nil {
+		http.Error(w, "malformed", http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *e2eServer) handleTime(w http.ResponseWriter, _ *http.Request) {
+	writeXML(w, &sep2.Time{
+		CurrentTime: time.Now().Unix(),
+		TzOffset:    -28800,
+	})
+}
+
+func (s *e2eServer) handleDefaultDERControl(w http.ResponseWriter, _ *http.Request) {
+	writeXML(w, &sep2.DefaultDERControl{})
+}
+
+func (s *e2eServer) mux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dcap", s.handleDcap)
+	mux.HandleFunc("/edev", s.handleEdevCollection)
+	mux.HandleFunc("/edev/1", s.handleEdevItem)
+	mux.HandleFunc("/edev/1/der/1/dercap", s.handleDERCapability)
+	mux.HandleFunc("/edev/1/der/1/derg", s.handleDERSettings)
+	mux.HandleFunc("/edev/1/der/1/ders", s.handleDERStatus)
+	mux.HandleFunc("/mup", s.handleMUPCollection)
+	mux.HandleFunc("/mup/1/mr", s.handleMeterReading)
+	mux.HandleFunc("/tm", s.handleTime)
+	mux.HandleFunc("/edev/1/fsa/1/derp/1/dderc", s.handleDefaultDERControl)
+	return mux
 }
 
 // TestEndToEndInverterLifecycle runs the full IEEE 2030.5 protocol lifecycle:
 // discovery, registration, DER setup, metering, status reporting.
-// Uses a real TLS server with generated certs and drives the real inverter
-// client over the wire.
+// Uses a real CCM-8 TLS server with generated certs and drives the real
+// inverter client over the wire.
 func TestEndToEndInverterLifecycle(t *testing.T) {
 	// Generate all certificates.
 	caCertPEM, caKeyPEM, err := certs.GenerateCA(certs.CAOptions{
@@ -115,49 +242,14 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	writeFile(t, tmpDir+"/device.crt", deviceCertPEM)
 	writeFile(t, tmpDir+"/device.key", deviceKeyPEM)
 
-	// Build the in-process server.
-	serverTLSCfg, err := sepTLS.NewServerTLSConfigFromPEM(serverCertPEM, serverKeyPEM, caCertPEM)
+	// Build the in-process server. Core offers CCM-8 only (no stdlib
+	// *tls.Config path survives), so the listener is gotls-backed.
+	serverTLSCfg, err := sepTLS.NewCCMServerConfigFromPEM(serverCertPEM, serverKeyPEM, caCertPEM)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	stores := &assembly.Stores{
-		EndDevices:               memory.NewEndDeviceStore(),
-		Registrations:            memory.NewRegistrationStore(),
-		MirrorUsagePoints:        memory.NewStore[sep2.MirrorUsagePoint](),
-		MirrorMeterReadings:      memory.NewScopedStore[sep2.MirrorMeterReading](),
-		DERs:                     memory.NewScopedStore[sep2.DER](),
-		DERCapabilities:          memory.NewScopedStore[sep2.DERCapability](),
-		DERSettings:              memory.NewScopedStore[sep2.DERSettings](),
-		DERStatuses:              memory.NewScopedStore[sep2.DERStatus](),
-		DERAvailabilities:        memory.NewScopedStore[sep2.DERAvailability](),
-		DERPrograms:              memory.NewDERProgramStore(),
-		DERControls:              memory.NewScopedStore[sep2.DERControl](),
-		DefaultDERControls:       memory.NewScopedStore[sep2.DefaultDERControl](),
-		DERCurves:                memory.NewStore[sep2.DERCurve](),
-		FSAs:                     memory.NewScopedStore[sep2.FunctionSetAssignments](),
-		Subscriptions:            memory.NewSubscriptionStore(),
-		UsagePoints:              memory.NewStore[sep2.UsagePoint](),
-		MeterReadings:            memory.NewScopedStore[sep2.MeterReading](),
-		Readings:                 memory.NewScopedStore[sep2.Reading](),
-		ReadingTypes:             memory.NewStore[sep2.ReadingType](),
-		Configurations:           memory.NewScopedStore[sep2.Configuration](),
-		DeviceStatuses:           memory.NewScopedStore[sep2.DeviceStatus](),
-		LogEvents:                memory.NewScopedStore[sep2.LogEvent](),
-		PowerStatuses:            memory.NewScopedStore[sep2.PowerStatus](),
-		MessagingPrograms:        memory.NewStore[sep2.MessagingProgram](),
-		TextMessages:             memory.NewScopedStore[sep2.TextMessage](),
-		FlowReservationRequests:  memory.NewScopedStore[sep2.FlowReservationRequest](),
-		FlowReservationResponses: memory.NewScopedStore[sep2.FlowReservationResponse](),
-		ResponseSets:             memory.NewStore[sep2.ResponseSet](),
-		Responses:                memory.NewScopedStore[sep2.Response](),
-	}
-
-	routerCfg := assembly.RouterConfig{
-		TZOffset:    -28800,
-		TimeQuality: sep2.TimeQualityNTP,
-	}
-	authPolicy := buildTestAuthPolicy()
+	srvState := &e2eServer{}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -165,9 +257,8 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	}
 	defer func() { _ = listener.Close() }()
 
-	tlsListener := tls.NewListener(listener, serverTLSCfg)
-	router, _ := assembly.BuildProtocolRouter(routerCfg, stores, authPolicy, "", "", nil)
-	srv := &http.Server{Handler: router}
+	tlsListener := gotls.NewListener(listener, serverTLSCfg)
+	srv := &http.Server{Handler: srvState.mux()}
 	go func() { _ = srv.Serve(tlsListener) }()
 	defer func() { _ = srv.Close() }()
 
@@ -238,7 +329,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	t.Run("put_der_capability", func(t *testing.T) {
 		maxW := sep2.ActivePower{Value: 10000}
 		maxVAr := sep2.ReactivePower{Value: 4400}
-		modes := uint32(0xFF)
+		modes := sep2.DERControlType(0xFF)
 		dtype := uint8(4)
 
 		// PutDERCapability takes the DERCapabilityLink href directly.
