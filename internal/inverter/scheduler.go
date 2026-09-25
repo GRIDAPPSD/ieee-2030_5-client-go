@@ -16,7 +16,7 @@ import (
 // file consumes them to build a randomization-aware event scheduler:
 //
 //   - For each polled DERControl, parse Interval.Start + Interval.Duration,
-//     apply RandomizeStart and RandomizeDuration per IEEE 2030.5 §10.1.4,
+//     apply RandomizeStart and RandomizeDuration per IEEE 2030.5 section 10.1.4,
 //     queue a scheduledEvent keyed by mRID, sorted ascending by FireAt.
 //   - Expose Next() (peek) and PopExpired(now) so the state machine
 //     can drive EVENT_RECEIVED -> EVENT_STARTED transitions without coupling
@@ -32,7 +32,7 @@ import (
 //   - DERCurve retrieval.
 //   - Response Function Set / replyTo POSTs : Phase 6.
 //
-// IEEE 2030.5 §10.1.4 randomization interpretation (Phase 5 doc exit criterion 3):
+// IEEE 2030.5 section 10.1.4 randomization interpretation (Phase 5 doc exit criterion 3):
 //
 //   - randomizeStart jitters the start time within [start, start+|rs|].
 //     Phase 5 doc states: "start time is jittered uniformly within
@@ -102,7 +102,7 @@ func NewScheduler(nowFunc func() time.Time, rng *rand.Rand) *Scheduler {
 // ascending. Caller obtains `events` from DERControlCache.Diff's `added`
 // bucket; the state machine routes updated/cancelled to the matching method.
 //
-// Events with a nil Interval are skipped : IEEE 2030.5 §10.7 requires
+// Events with a nil Interval are skipped : IEEE 2030.5 section 10.7 requires
 // DERControl to carry an interval, but server-side garbage shouldn't crash
 // the scheduler. Skip count is logged.
 //
@@ -242,7 +242,7 @@ func (s *Scheduler) removeByMRIDLocked(mRID string) bool {
 }
 
 // computeWindow turns a parsed DERControl into a (FireAt, ExpireAt) pair,
-// applying §10.1.4 randomization. Caller MUST hold s.mu (because we touch
+// applying section 10.1.4 randomization. Caller MUST hold s.mu (because we touch
 // s.rng : math/rand/v2 *rand.Rand is NOT safe for concurrent use without
 // external synchronization).
 //

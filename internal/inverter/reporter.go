@@ -17,8 +17,8 @@ import (
 // don't exist on the server side.
 type Reporter struct {
 	client        *SEP2Client
-	derStatusHref string // empty → skip status PUT
-	mmrHref       string // empty → skip metering POST
+	derStatusHref string // empty -> skip status PUT
+	mmrHref       string // empty -> skip metering POST
 }
 
 // NewReporter creates a reporter that PUTs status to derStatusHref and POSTs

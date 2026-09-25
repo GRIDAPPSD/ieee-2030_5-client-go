@@ -71,7 +71,7 @@ func TestApplyControlsVoltVar(t *testing.T) {
 	if out.Mode != ModeVoltVar {
 		t.Errorf("mode = %v, want VoltVar", out.Mode)
 	}
-	// At 1.05 p.u., between V3(1.02,0) and V4(1.08,-1.0): Q ≈ -0.5 * 4400 = -2200
+	// At 1.05 p.u., between V3(1.02,0) and V4(1.08,-1.0): Q ~ -0.5 * 4400 = -2200
 	expectedQ := -0.5 * Rating.RatedVAr
 	if math.Abs(out.ReactivePowerVAr-expectedQ) > 50 {
 		t.Errorf("Q = %.0f, want ~%.0f (volt-var at 1.05 p.u.)", out.ReactivePowerVAr, expectedQ)
@@ -116,13 +116,13 @@ func TestApplyControlsPriorityDisconnectOverAll(t *testing.T) {
 }
 
 func TestTanFromPF(t *testing.T) {
-	// PF = 0.9, tan(acos(0.9)) ≈ 0.4843
+	// PF = 0.9, tan(acos(0.9)) ~ 0.4843
 	got := tanFromPF(0.9)
 	if math.Abs(got-0.4843) > 0.001 {
 		t.Errorf("tanFromPF(0.9) = %.4f, want ~0.4843", got)
 	}
 
-	// PF = 1.0 → 0
+	// PF = 1.0 -> 0
 	got = tanFromPF(1.0)
 	if got != 0 {
 		t.Errorf("tanFromPF(1.0) = %.4f, want 0", got)

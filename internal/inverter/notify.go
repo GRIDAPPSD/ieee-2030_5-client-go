@@ -83,7 +83,7 @@ func NoopNotificationDispatcher(_ context.Context, n sep2.Notification) {
 // the listener's server cert; the CA pool is the trust anchor for
 // validating the server-as-client cert.
 //
-// ListenAddr is the bind address (default 127.0.0.1:0 → random port). Empty
+// ListenAddr is the bind address (default 127.0.0.1:0 -> random port). Empty
 // string disables the receiver entirely; the caller should treat a
 // nil-returned receiver as "subscription/notification disabled, fall back
 // to polling."
@@ -177,7 +177,7 @@ func buildNotifyTLSConfig(certFile, keyFile, caFile string) (*gotls.Config, erro
 	return &gotls.Config{
 		Certificates: []gotls.Certificate{cert},
 		ClientCAs:    caPool,
-		// IEEE 2030.5 / CSIP §6.11 device certs carry a critical
+		// IEEE 2030.5 / CSIP section 6.11 device certs carry a critical
 		// HardwareModuleName SAN that stdlib x509 cannot parse.
 		// RequireAnyClientCert + manual verify in the hook matches
 		// internal/tls/ccmserver.go.
@@ -314,7 +314,7 @@ func (r *NotifyReceiver) Stop(ctx context.Context) error {
 //   - 415 Unsupported Media Type when Content-Type is not application/sep+xml.
 //   - 400 Bad Request on read failure, body-too-large, malformed XML, or
 //     XML that doesn't unmarshal into a Notification.
-//   - 204 No Content on accept. (IEEE 2030.5 §10.13 allows 200 or 204;
+//   - 204 No Content on accept. (IEEE 2030.5 section 10.13 allows 200 or 204;
 //     204 with no body is the lightest response and matches what most
 //     server-side fixtures expect from subscribers.)
 //
@@ -330,7 +330,7 @@ func (r *NotifyReceiver) notifyHandler() http.HandlerFunc {
 			return
 		}
 
-		// IEEE 2030.5 §10 / CSIP §6.6 mandates application/sep+xml as
+		// IEEE 2030.5 section 10 / CSIP section 6.6 mandates application/sep+xml as
 		// the canonical content type for the EXI-or-XML resource
 		// payload. Accept the bare value; ignore trailing params like
 		// charset since the spec doesn't require us to police them.

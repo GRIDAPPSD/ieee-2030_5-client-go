@@ -42,7 +42,7 @@ func TestActiveControlBase(t *testing.T) {
 			snap:        inverter.EventStateSnapshot{State: inverter.StateDefault},
 			defaultCtl:  nil,
 			wantBase:    nil,
-			description: "rule 3: no CSIP server / no default provisioned → nil (ApplyControls handles nil as no-op)",
+			description: "rule 3: no CSIP server / no default provisioned -> nil (ApplyControls handles nil as no-op)",
 		},
 		{
 			name: "default_nil_base_field",
@@ -52,7 +52,7 @@ func TestActiveControlBase(t *testing.T) {
 			// Rule 3.
 			defaultCtl:  defaultCtlNilBase,
 			wantBase:    nil,
-			description: "rule 2 guard: defaultCtl non-nil but DERControlBase nil → falls through to nil",
+			description: "rule 2 guard: defaultCtl non-nil but DERControlBase nil -> falls through to nil",
 		},
 
 		// Rule 2: default base when no active event.
@@ -61,7 +61,7 @@ func TestActiveControlBase(t *testing.T) {
 			snap:        inverter.EventStateSnapshot{State: inverter.StateDefault},
 			defaultCtl:  defaultCtl,
 			wantBase:    defaultBase,
-			description: "rule 2: DEFAULT state with non-nil default base → default base",
+			description: "rule 2: DEFAULT state with non-nil default base -> default base",
 		},
 
 		// Rule 1: event base when EVENT_STARTED with a non-nil base.
@@ -87,7 +87,7 @@ func TestActiveControlBase(t *testing.T) {
 			},
 			defaultCtl:  defaultCtl,
 			wantBase:    defaultBase,
-			description: "rule 1 guard: EVENT_STARTED but event DERControlBase nil → falls to rule 2 (default)",
+			description: "rule 1 guard: EVENT_STARTED but event DERControlBase nil -> falls to rule 2 (default)",
 		},
 		{
 			name: "event_started_nil_active_der_control",
@@ -98,7 +98,7 @@ func TestActiveControlBase(t *testing.T) {
 			},
 			defaultCtl:  defaultCtl,
 			wantBase:    defaultBase,
-			description: "rule 1 guard: EVENT_STARTED but ActiveDERControl pointer nil → falls to rule 2",
+			description: "rule 1 guard: EVENT_STARTED but ActiveDERControl pointer nil -> falls to rule 2",
 		},
 
 		// Transient states: never treated as "active event" : return default.
@@ -111,7 +111,7 @@ func TestActiveControlBase(t *testing.T) {
 			},
 			defaultCtl:  defaultCtl,
 			wantBase:    defaultBase,
-			description: "EVENT_RECEIVED: event known but not yet started → keep applying default base",
+			description: "EVENT_RECEIVED: event known but not yet started -> keep applying default base",
 		},
 		{
 			name: "event_completed_uses_default",
@@ -122,7 +122,7 @@ func TestActiveControlBase(t *testing.T) {
 			},
 			defaultCtl:  defaultCtl,
 			wantBase:    defaultBase,
-			description: "EVENT_COMPLETED: transient terminal state → default (state machine auto-reverts to DEFAULT same tick)",
+			description: "EVENT_COMPLETED: transient terminal state -> default (state machine auto-reverts to DEFAULT same tick)",
 		},
 		{
 			name: "event_cancelled_uses_default",
@@ -133,10 +133,10 @@ func TestActiveControlBase(t *testing.T) {
 			},
 			defaultCtl:  defaultCtl,
 			wantBase:    defaultBase,
-			description: "EVENT_CANCELLED: transient terminal state → default",
+			description: "EVENT_CANCELLED: transient terminal state -> default",
 		},
 
-		// Revert path: post-EVENT_STARTED → EVENT_COMPLETED → DEFAULT,
+		// Revert path: post-EVENT_STARTED -> EVENT_COMPLETED -> DEFAULT,
 		// Current() reports DEFAULT and the helper returns the default
 		// base again. Verifies the round-trip back to default works as the
 		// state machine clears ActiveDERControl.
@@ -149,7 +149,7 @@ func TestActiveControlBase(t *testing.T) {
 			},
 			defaultCtl:  defaultCtl,
 			wantBase:    defaultBase,
-			description: "post-completion revert: Current() shows DEFAULT with nil active → default base resumes",
+			description: "post-completion revert: Current() shows DEFAULT with nil active -> default base resumes",
 		},
 	}
 
