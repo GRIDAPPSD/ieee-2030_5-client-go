@@ -818,10 +818,10 @@ func main() {
 				// First DER only : multi-DER inverters are a follow-up.
 				der := derList.DER[0]
 
-				maxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
-				maxVAr := sep2.ReactivePower{Value: int64(inverter.Rating.RatedVAr)}
-				modesSupported := uint32(0xFF) // all modes
-				derType := uint8(4)            // PV inverter
+				maxW := sep2.ActivePower{Value: int16(inverter.Rating.RatedW)}
+				maxVAr := sep2.ReactivePower{Value: int16(inverter.Rating.RatedVAr)}
+				modesSupported := sep2.DERControlType(0xFF) // all modes
+				derType := uint8(4)                         // PV inverter
 
 				if der.DERCapabilityLink != nil {
 					if err := client.PutDERCapability(ctx, der.DERCapabilityLink.Href, sep2.DERCapability{
@@ -836,7 +836,7 @@ func main() {
 					log.Println("DER has no DERCapabilityLink; skipping DERCapability PUT")
 				}
 
-				setMaxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
+				setMaxW := sep2.ActivePower{Value: int16(inverter.Rating.RatedW)}
 				if der.DERSettingsLink != nil {
 					// Outbound timestamp: use the server-synced clock
 					// rather than local wall-clock. Before any TimeLink sync runs
@@ -882,26 +882,14 @@ func main() {
 			log.Println("MirrorUsagePoint POST returned empty Location; metering disabled")
 		} else {
 			log.Printf("MirrorUsagePoint: %s", mupLoc)
-			// Read back the created resource to discover its
-			// MirrorMeterReadingListLink : we do not assume the URL.
-			// On 301 client.Get surfaces the new MUP URL; update
-			// mupLoc so any future reference (none in the current code,
-			// but the var is the canonical hold-point) targets the new
-			// URL.
-			var mup sep2.MirrorUsagePoint
-			newMupLoc, err := client.Get(ctx, mupLoc, &mup)
-			if newMupLoc != "" {
-				log.Printf("Phase 4 MUP read-back: 301 follow : cached mupLoc %s -> %s",
-					mupLoc, newMupLoc)
-				mupLoc = newMupLoc
-			}
-			if err != nil {
-				log.Printf("GET MirrorUsagePoint %s: %v (metering disabled)", mupLoc, err)
-			} else if mup.MirrorMeterReadingListLink == nil {
-				log.Println("MirrorUsagePoint has no MirrorMeterReadingListLink; metering disabled")
-			} else {
-				mmrHref = mup.MirrorMeterReadingListLink.Href
-			}
+			// core removed MirrorMeterReadingListLink: sep.xsd has no such
+			// child (MirrorUsagePoint carries MirrorMeterReading inline,
+			// repeated, not a link to a list). The server mounts the
+			// reading list at mupLoc+"/mr" by CSIP convention, matching
+			// PostMeterReading's own doc and this package's test fixtures,
+			// so derive it directly rather than reading a link that no
+			// longer exists on the wire.
+			mmrHref = mupLoc + "/mr"
 		}
 	}
 

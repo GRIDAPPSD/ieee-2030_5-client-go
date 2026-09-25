@@ -336,7 +336,7 @@ func (f *fakePoster) Calls() []recordedPost {
 // buildControl returns a DERControl with the given mRID, replyTo,
 // responseRequired (nil-able), startOffset (added to fixedTestNow), and
 // duration.
-func buildControl(mrid, replyTo string, mask *uint8, startOffset time.Duration, durationSec uint32) sep2.DERControl {
+func buildControl(mrid, replyTo string, mask *sep2.HexBinary8, startOffset time.Duration, durationSec uint32) sep2.DERControl {
 	dc := sep2.DERControl{}
 	dc.MRID = mrid
 	dc.ReplyTo = replyTo
@@ -369,7 +369,7 @@ func TestResponsePOSTHook_FullLifecycleEmitsThreePOSTs(t *testing.T) {
 	const lfdi = "0011223344556677889900aabbccddeeff001122"
 	poster := &fakePoster{}
 
-	mask := uint8(0x07) // bits 0,1,2 -> received, started, completed.
+	mask := sep2.HexBinary8(0x07) // bits 0,1,2 -> received, started, completed.
 	dc := buildControl("EVT-E2E-A", replyTo, &mask, 1*time.Minute, 60)
 
 	tnow := fixedTestNow
@@ -430,7 +430,7 @@ func TestResponsePOSTHook_CancellationEmitsTwoPOSTs(t *testing.T) {
 	const lfdi = "lfdi-cancel-test"
 	poster := &fakePoster{}
 
-	mask := uint8(0x27) // received + started + completed + cancelled.
+	mask := sep2.HexBinary8(0x27) // received + started + completed + cancelled.
 	dc := buildControl("EVT-E2E-B", replyTo, &mask, 5*time.Minute, 60)
 
 	tnow := fixedTestNow
@@ -474,7 +474,7 @@ func TestResponsePOSTHook_EmptyReplyToEmitsZeroPOSTs(t *testing.T) {
 	t.Parallel()
 	poster := &fakePoster{}
 
-	mask := uint8(0x07)
+	mask := sep2.HexBinary8(0x07)
 	dc := buildControl("EVT-NO-REPLYTO", "", &mask, 1*time.Minute, 60) // empty ReplyTo
 
 	tnow := fixedTestNow
@@ -530,7 +530,7 @@ func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
 	transient := fmt.Errorf("simulated 500: %w", inverter.ErrResponseTransient)
 	poster := &fakePoster{errsLeft: []error{transient}}
 
-	mask := uint8(0x07)
+	mask := sep2.HexBinary8(0x07)
 	dc := buildControl("EVT-500-RECOVER", "https://server.example/rsps", &mask, 1*time.Minute, 60)
 
 	tnow := fixedTestNow
@@ -600,7 +600,7 @@ func TestResponsePOSTHook_DeadLetterOnPersistentTransient(t *testing.T) {
 	// transition succeeds in one shot.
 	poster := &fakePoster{errsLeft: []error{transient, transient, transient}}
 
-	mask := uint8(0x07)
+	mask := sep2.HexBinary8(0x07)
 	dc := buildControl("EVT-DL-001", "https://server.example/rsps", &mask, 1*time.Minute, 60)
 
 	tnow := fixedTestNow

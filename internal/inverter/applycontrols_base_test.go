@@ -18,10 +18,10 @@ func TestActiveControlBase(t *testing.T) {
 
 	// Common fixtures : distinct pointer identities let the assertions
 	// distinguish "returned the event base" from "returned the default base."
-	eventW := sep2.ActivePower{Value: 750}
+	eventW := sep2.SignedPerCent(750)
 	eventBase := &sep2.DERControlBase{OpModFixedW: &eventW}
 
-	defaultW := sep2.ActivePower{Value: 250}
+	defaultW := sep2.SignedPerCent(250)
 	defaultBase := &sep2.DERControlBase{OpModFixedW: &defaultW}
 
 	defaultCtl := &sep2.DefaultDERControl{DERControlBase: defaultBase}
@@ -177,7 +177,7 @@ func TestActiveControlBase(t *testing.T) {
 func TestActiveControlBase_DrivesApplyControls(t *testing.T) {
 	t.Parallel()
 
-	fixedW := sep2.ActivePower{Value: 500}
+	fixedW := sep2.SignedPerCent(500)
 	defaultBase := &sep2.DERControlBase{OpModFixedW: &fixedW}
 	defaultCtl := &sep2.DefaultDERControl{DERControlBase: defaultBase}
 

@@ -274,7 +274,7 @@ func (s *Scheduler) computeWindow(ev sep2.DERControl) (fireAt, expireAt time.Tim
 // representation of randomizeStart.
 //
 // Caller (computeWindow) holds the scheduler mutex; rng calls are safe.
-func applyRandomizeStart(start time.Time, randomizeStart *int32, rng *rand.Rand) time.Time {
+func applyRandomizeStart(start time.Time, randomizeStart *sep2.OneHourRange, rng *rand.Rand) time.Time {
 	if randomizeStart == nil || *randomizeStart == 0 {
 		return start
 	}
@@ -302,7 +302,7 @@ func applyRandomizeStart(start time.Time, randomizeStart *int32, rng *rand.Rand)
 // rng.Int64N gives [0, |rd|+1) so we shift by |rd|/2 to center the window.
 // The resulting duration may be negative if duration is small and |rd| is
 // large; the caller clamps to zero. Documented for state-machine reviewers.
-func applyRandomizeDuration(duration time.Duration, randomizeDuration *int32, rng *rand.Rand) time.Duration {
+func applyRandomizeDuration(duration time.Duration, randomizeDuration *sep2.OneHourRange, rng *rand.Rand) time.Duration {
 	if randomizeDuration == nil || *randomizeDuration == 0 {
 		return duration
 	}

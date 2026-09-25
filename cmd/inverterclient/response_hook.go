@@ -122,7 +122,7 @@ func responsePOSTHook(client responsePoster, lfdi string, now nowFunc, retryCfg 
 			// at all; spec default is "no Response required" (Table 32).
 			return
 		}
-		mask = *evt.ResponseRequired
+		mask = uint8(*evt.ResponseRequired)
 		if !responseRequiredOn(mask, status) {
 			return
 		}

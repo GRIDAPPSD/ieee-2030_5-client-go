@@ -97,13 +97,13 @@ func ApplyControlsWithCurves(
 
 	// Priority d: active power limit
 	if base.OpModMaxLimW != nil {
-		limitW := float64(base.OpModMaxLimW.Value)
+		limitW := float64(*base.OpModMaxLimW)
 		if limitW < out.ActivePowerW {
 			out.ActivePowerW = limitW
 		}
 	}
 	if base.OpModFixedW != nil {
-		out.ActivePowerW = float64(base.OpModFixedW.Value)
+		out.ActivePowerW = float64(*base.OpModFixedW)
 	}
 	if base.OpModTargetW != nil {
 		out.ActivePowerW = float64(base.OpModTargetW.Value)

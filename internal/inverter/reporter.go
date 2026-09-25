@@ -55,7 +55,7 @@ func (r *Reporter) ReportStatus(ctx context.Context, state InverterState) error 
 	status := sep2.DERStatus{
 		GenConnectStatus: &sep2.ConnectStatusType{
 			DateTime: state.Time.Unix(),
-			Value:    connectValue,
+			Value:    sep2.HexBinary8(connectValue),
 		},
 		OperationalModeStatus: &sep2.OperationalModeStatusType{
 			DateTime: state.Time.Unix(),

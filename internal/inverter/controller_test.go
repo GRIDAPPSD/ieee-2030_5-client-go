@@ -38,7 +38,7 @@ func TestApplyControlsDisconnect(t *testing.T) {
 }
 
 func TestApplyControlsMaxLimW(t *testing.T) {
-	maxW := sep2.ActivePower{Value: 5000}
+	maxW := sep2.PerCent(5000)
 	base := &sep2.DERControlBase{OpModMaxLimW: &maxW}
 	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
 
@@ -50,7 +50,7 @@ func TestApplyControlsMaxLimW(t *testing.T) {
 }
 
 func TestApplyControlsFixedW(t *testing.T) {
-	fixedW := sep2.ActivePower{Value: 3000}
+	fixedW := sep2.SignedPerCent(3000)
 	base := &sep2.DERControlBase{OpModFixedW: &fixedW}
 	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
 
@@ -95,11 +95,11 @@ func TestApplyControlsConstantQ(t *testing.T) {
 
 func TestApplyControlsPriorityDisconnectOverAll(t *testing.T) {
 	connected := false
-	maxW := sep2.ActivePower{Value: 5000}
+	maxWPct := sep2.PerCent(5000)
 	voltVar := int32(0)
 	base := &sep2.DERControlBase{
 		OpModConnect: &connected,
-		OpModMaxLimW: &maxW,
+		OpModMaxLimW: &maxWPct,
 		OpModVoltVar: &voltVar,
 	}
 	grid := GridState{VoltsPU: 1.05, FreqHz: 60.0}
