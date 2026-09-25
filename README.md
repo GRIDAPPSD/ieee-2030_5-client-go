@@ -101,12 +101,9 @@ Run `--list-scenarios` for the authoritative list. Current scenarios:
 
 ## Dependency
 
-This module depends on
-`gitlab.pnnl.gov/arista/ieee-2030_5/ieee-2030_5-core`. During the pre-1.0
-window the `go.mod` carries a `replace` directive pointing to a local clone
-of that module. The CI pipeline clones core before building; see
-`.gitlab-ci.yml`. Both the replace directive and the CI clone step are
-removed when core publishes its first versioned release.
+This module depends on `github.com/GRIDAPPSD/ieee-2030_5-core-go`, pinned in
+`go.mod` at `v0.6.0`. It is an ordinary versioned Go module import; no
+`replace` directive is used.
 
 ## License
 
