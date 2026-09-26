@@ -289,8 +289,8 @@ func TestFetchProgramCurves_NilClient(t *testing.T) {
 	}
 }
 
-// TestFetchProgramCurves_DuplicateTypeLastWins pins the IEEE 2030.5 §10.1.3
-// list-ordering "later resource shadows earlier" semantic for curves
+// TestFetchProgramCurves_DuplicateTypeLastWins pins the IEEE 2030.5 section
+// 10.1.3 list-ordering "later resource shadows earlier" semantic for curves
 // sharing a CurveType.
 func TestFetchProgramCurves_DuplicateTypeLastWins(t *testing.T) {
 	t.Parallel()
@@ -406,12 +406,12 @@ func TestApplyControlsWithCurves_MultiModeDispatch(t *testing.T) {
 	t.Parallel()
 
 	cache := NewDERCurveCache()
-	// V/V curve: Y=0.25 across the band → expected Q = 0.25 * RatedVAr.
+	// V/V curve: Y=0.25 across the band -> expected Q = 0.25 * RatedVAr.
 	cache.Set(sep2.CurveTypeOpModVoltVar, []CurvePoint{
 		{X: 0.92, Y: 0.25},
 		{X: 1.08, Y: 0.25},
 	})
-	// V/W curve: Y=0.40 across the band → expected V/W limit = 0.40 * RatedW.
+	// V/W curve: Y=0.40 across the band -> expected V/W limit = 0.40 * RatedW.
 	cache.Set(sep2.CurveTypeOpModVoltWatt, []CurvePoint{
 		{X: 0.92, Y: 0.40},
 		{X: 1.08, Y: 0.40},

@@ -153,7 +153,7 @@ func notifyURL(t *testing.T, rcv *inverter.NotifyReceiver, path string) string {
 // sampleNotificationXML returns a minimal well-formed Notification body. The
 // CORE-018 step-4 payload carries subscribedResource (the resource the
 // inverter subscribed to), newResourceURI (the actual changed item : usually
-// the same), and status. mRID is required on Resource per IEEE 2030.5 §10.
+// the same), and status. mRID is required on Resource per IEEE 2030.5 section 10.
 func sampleNotificationXML(t *testing.T, status uint8, newURI string) []byte {
 	t.Helper()
 	n := sep2.Notification{
@@ -613,7 +613,7 @@ func TestHMI_NotifyAddrHandler(t *testing.T) {
 	srv := httpServerForHMI(h)
 	defer srv.Close()
 
-	// Empty → "disabled\n"
+	// Empty -> "disabled\n"
 	body := getBody(t, srv.URL+"/notify-addr")
 	if body != "disabled\n" {
 		t.Errorf("empty: body = %q, want \"disabled\\n\"", body)
