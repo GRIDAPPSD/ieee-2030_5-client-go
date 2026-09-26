@@ -287,6 +287,13 @@ func main() {
 		log.Printf("WARNING: role=%q paired with backend=%q (production role with a non-realdevice backend is a dry-run commissioning combination, not the normal production path)", cfg.Role, cfg.Backend)
 	}
 
+	// Fail fast on an out-of-range nameplate before any listener binds or
+	// any registration happens: an operator would otherwise see Phase 3
+	// DER setup silently omit devices deep into the run instead of a
+	// client that refused to start. Reused at the Phase 3 PUT sites below.
+	ratedWInt16 := ratingInt16(inverter.Rating.RatedW)
+	ratedVArInt16 := ratingInt16(inverter.Rating.RatedVAr)
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -831,8 +838,8 @@ func main() {
 				// First DER only : multi-DER inverters are a follow-up.
 				der := derList.DER[0]
 
-				maxW := sep2.ActivePower{Value: ratingInt16(inverter.Rating.RatedW)}
-				maxVAr := sep2.ReactivePower{Value: ratingInt16(inverter.Rating.RatedVAr)}
+				maxW := sep2.ActivePower{Value: ratedWInt16}
+				maxVAr := sep2.ReactivePower{Value: ratedVArInt16}
 				modesSupported := sep2.DERControlType(0xFF) // all modes
 				derType := uint8(4)                         // PV inverter
 
@@ -849,7 +856,7 @@ func main() {
 					log.Println("DER has no DERCapabilityLink; skipping DERCapability PUT")
 				}
 
-				setMaxW := sep2.ActivePower{Value: ratingInt16(inverter.Rating.RatedW)}
+				setMaxW := sep2.ActivePower{Value: ratedWInt16}
 				if der.DERSettingsLink != nil {
 					// Outbound timestamp: use the server-synced clock
 					// rather than local wall-clock. Before any TimeLink sync runs
