@@ -111,9 +111,9 @@ func newCCMTestEnv(t *testing.T) *ccmTestEnv {
 // cipher list. It reuses the production NewCCMServerConfig so the verify hook
 // that tolerates IEEE 2030.5 device certs' critical HardwareModuleName SAN is
 // in play, then overrides the cipher suite list to control negotiation. It
-// returns the listening URL and captures the cipher suite the most recent
-// connection actually negotiated.
-func startGotlsListener(t *testing.T, env *ccmTestEnv, cipherSuites []uint16) (serverURL string, negotiated *atomic.Uint32, stop func()) {
+// returns the listening URL and captures the version and cipher suite the
+// most recent connection actually negotiated.
+func startGotlsListener(t *testing.T, env *ccmTestEnv, cipherSuites []uint16) (serverURL string, negotiatedVersion, negotiatedSuite *atomic.Uint32, stop func()) {
 	t.Helper()
 
 	cfg, err := sepTLS.NewCCMServerConfig(env.serverCertPath, env.serverKeyPath, env.caCertPath)
@@ -128,7 +128,8 @@ func startGotlsListener(t *testing.T, env *ccmTestEnv, cipherSuites []uint16) (s
 	}
 	tlsL := gotls.NewListener(tcpL, cfg)
 
-	negotiated = new(atomic.Uint32)
+	negotiatedVersion = new(atomic.Uint32)
+	negotiatedSuite = new(atomic.Uint32)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/dcap", func(w http.ResponseWriter, _ *http.Request) {
@@ -142,10 +143,12 @@ func startGotlsListener(t *testing.T, env *ccmTestEnv, cipherSuites []uint16) (s
 		ReadHeaderTimeout: 5 * time.Second,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			if gc, ok := c.(*gotls.Conn); ok {
-				// Force the handshake so the negotiated cipher is observable
-				// before any request handlers run.
+				// Force the handshake so the negotiated version and cipher
+				// are observable before any request handlers run.
 				if err := gc.Handshake(); err == nil {
-					negotiated.Store(uint32(gc.ConnectionState().CipherSuite))
+					state := gc.ConnectionState()
+					negotiatedVersion.Store(uint32(state.Version))
+					negotiatedSuite.Store(uint32(state.CipherSuite))
 				}
 			}
 			return ctx
@@ -158,7 +161,7 @@ func startGotlsListener(t *testing.T, env *ccmTestEnv, cipherSuites []uint16) (s
 		_ = tlsL.Close()
 	})
 
-	return "https://" + tlsL.Addr().String(), negotiated, func() {
+	return "https://" + tlsL.Addr().String(), negotiatedVersion, negotiatedSuite, func() {
 		_ = srv.Close()
 		_ = tlsL.Close()
 	}
@@ -166,15 +169,17 @@ func startGotlsListener(t *testing.T, env *ccmTestEnv, cipherSuites []uint16) (s
 
 // TestInverterNegotiatesCCM8 asserts the inverter client successfully
 // completes a TLS handshake against a CCM-8-only gotls server and that the
-// negotiated cipher suite is TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8 (0xC0AE).
+// negotiated version is TLS 1.2 and cipher suite is
+// TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8 (0xC0AE), both read from the real
+// connection state rather than assumed.
 //
 // RED: with the stdlib crypto/tls client this fails at handshake : stdlib
 // does not implement CCM-8. GREEN: once the inverter client is on the
-// vendored gotls stack, handshake completes and the cipher matches.
+// vendored gotls stack, handshake completes and version/cipher match.
 func TestInverterNegotiatesCCM8(t *testing.T) {
 	env := newCCMTestEnv(t)
 
-	serverURL, negotiated, stop := startGotlsListener(t, env, []uint16{
+	serverURL, negotiatedVersion, negotiatedSuite, stop := startGotlsListener(t, env, []uint16{
 		gotls.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8,
 	})
 	defer stop()
@@ -200,31 +205,34 @@ func TestInverterNegotiatesCCM8(t *testing.T) {
 		t.Errorf("PollRate = %d, want 30", dcap.PollRate)
 	}
 
-	got := uint16(negotiated.Load())
-	if got != gotls.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8 {
-		t.Errorf("negotiated cipher = 0x%04X, want 0xC0AE (TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8)", got)
+	gotVersion := uint16(negotiatedVersion.Load())
+	if gotVersion != gotls.VersionTLS12 {
+		t.Errorf("negotiated version = 0x%04X, want 0x0303 (TLS 1.2)", gotVersion)
+	}
+	gotSuite := uint16(negotiatedSuite.Load())
+	if gotSuite != gotls.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8 {
+		t.Errorf("negotiated cipher = 0x%04X, want 0xC0AE (TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8)", gotSuite)
 	}
 }
 
-// TestInverterStrictRejectsGCMOnlyServer asserts that when CSIPStrict is set
-// the inverter client refuses to fall back to GCM and the handshake fails
-// cleanly (an error from Do, not a panic or a hang).
-func TestInverterStrictRejectsGCMOnlyServer(t *testing.T) {
+// TestInverterRejectsGCMOnlyServer asserts that the inverter client refuses
+// to negotiate GCM and the handshake fails cleanly (an error from Do, not a
+// panic or a hang). Core offers CCM-8 only with no opt-out, so this holds
+// unconditionally now rather than behind a strict-mode flag.
+func TestInverterRejectsGCMOnlyServer(t *testing.T) {
 	env := newCCMTestEnv(t)
 
-	serverURL, _, stop := startGotlsListener(t, env, []uint16{
-		// GCM only : no CCM-8 on offer. A strict CSIP client must NOT
-		// negotiate.
+	serverURL, _, _, stop := startGotlsListener(t, env, []uint16{
+		// GCM only : no CCM-8 on offer. The client must NOT negotiate.
 		0xC02B, // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
 	})
 	defer stop()
 
 	client, err := inverter.NewSEP2Client(inverter.SimConfig{
-		ServerURL:  serverURL,
-		CertFile:   env.deviceCertPath,
-		KeyFile:    env.deviceKeyPath,
-		CAFile:     env.caCertPath,
-		CSIPStrict: true,
+		ServerURL: serverURL,
+		CertFile:  env.deviceCertPath,
+		KeyFile:   env.deviceKeyPath,
+		CAFile:    env.caCertPath,
 	})
 	if err != nil {
 		t.Fatalf("NewSEP2Client: %v", err)
@@ -235,7 +243,7 @@ func TestInverterStrictRejectsGCMOnlyServer(t *testing.T) {
 
 	_, err = client.Discover(ctx)
 	if err == nil {
-		t.Fatal("Discover succeeded against GCM-only server in strict mode; want handshake failure")
+		t.Fatal("Discover succeeded against GCM-only server; want handshake failure")
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Discover hung until context deadline: %v", err)

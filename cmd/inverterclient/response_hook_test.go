@@ -15,13 +15,13 @@
 //   - mapTransitionToStatus table (5 documented edges + the silent edges)
 //   - responseRequiredOn bitmask (0x00, 0x01, 0x07, nil-mask handled)
 //   - deriveResponseHref determinism (1000 calls identical)
-//   - End-to-end happy path: DEFAULT→RECEIVED→STARTED→COMPLETED→DEFAULT
+//   - End-to-end happy path: DEFAULT->RECEIVED->STARTED->COMPLETED->DEFAULT
 //     with responseRequired=0x07 produces exactly 3 POSTs
-//   - Cancellation: DEFAULT→RECEIVED→CANCELLED→DEFAULT with mask=0x27
+//   - Cancellation: DEFAULT->RECEIVED->CANCELLED->DEFAULT with mask=0x27
 //     produces 2 POSTs (status 1 + status 6)
-//   - Empty ReplyTo → 0 POSTs
-//   - nil ResponseRequired → 0 POSTs
-//   - POST 500 → log, next transition fires
+//   - Empty ReplyTo -> 0 POSTs
+//   - nil ResponseRequired -> 0 POSTs
+//   - POST 500 -> log, next transition fires
 //
 // Tests use a hand-rolled `fakePoster` to record PostResponse calls
 // directly at the consumer-side interface boundary. The full SEP2Client
@@ -271,7 +271,7 @@ func TestDeriveResponseHref_Deterministic(t *testing.T) {
 
 // TestDeriveResponseHref_StatusSensitive confirms different statuses for
 // the same mRID derive distinct hrefs : protects the server-side router
-// from collisions when an event walks through Received → Started →
+// from collisions when an event walks through Received -> Started ->
 // Completed.
 func TestDeriveResponseHref_StatusSensitive(t *testing.T) {
 	t.Parallel()
@@ -336,7 +336,7 @@ func (f *fakePoster) Calls() []recordedPost {
 // buildControl returns a DERControl with the given mRID, replyTo,
 // responseRequired (nil-able), startOffset (added to fixedTestNow), and
 // duration.
-func buildControl(mrid, replyTo string, mask *uint8, startOffset time.Duration, durationSec uint32) sep2.DERControl {
+func buildControl(mrid, replyTo string, mask *sep2.HexBinary8, startOffset time.Duration, durationSec uint32) sep2.DERControl {
 	dc := sep2.DERControl{}
 	dc.MRID = mrid
 	dc.ReplyTo = replyTo
@@ -369,7 +369,7 @@ func TestResponsePOSTHook_FullLifecycleEmitsThreePOSTs(t *testing.T) {
 	const lfdi = "0011223344556677889900aabbccddeeff001122"
 	poster := &fakePoster{}
 
-	mask := uint8(0x07) // bits 0,1,2 → received, started, completed.
+	mask := sep2.HexBinary8(0x07) // bits 0,1,2 -> received, started, completed.
 	dc := buildControl("EVT-E2E-A", replyTo, &mask, 1*time.Minute, 60)
 
 	tnow := fixedTestNow
@@ -377,12 +377,12 @@ func TestResponsePOSTHook_FullLifecycleEmitsThreePOSTs(t *testing.T) {
 	sm, sched := newTestStateMachine(clock)
 	sm.AddTransitionHook(responsePOSTHook(poster, lfdi, fixedNowFn))
 
-	// Tick 1: add → DEFAULT→RECEIVED (status 1).
+	// Tick 1: add -> DEFAULT->RECEIVED (status 1).
 	sm.Tick(clock(), []sep2.DERControl{dc}, nil, sched)
-	// Tick 2: clock past start → RECEIVED→STARTED (status 2).
+	// Tick 2: clock past start -> RECEIVED->STARTED (status 2).
 	tnow = fixedTestNow.Add(90 * time.Second)
 	sm.Tick(clock(), nil, nil, sched)
-	// Tick 3: clock past expire → STARTED→COMPLETED→DEFAULT
+	// Tick 3: clock past expire -> STARTED->COMPLETED->DEFAULT
 	// (status 3; DEFAULT auto-revert is silent).
 	tnow = fixedTestNow.Add(5 * time.Minute)
 	sm.Tick(clock(), nil, nil, sched)
@@ -421,7 +421,7 @@ func TestResponsePOSTHook_FullLifecycleEmitsThreePOSTs(t *testing.T) {
 }
 
 // =============================================================================
-// (f) cancellation: RECEIVED→CANCELLED→DEFAULT with mask=0x27, 2 POSTs.
+// (f) cancellation: RECEIVED->CANCELLED->DEFAULT with mask=0x27, 2 POSTs.
 // =============================================================================
 
 func TestResponsePOSTHook_CancellationEmitsTwoPOSTs(t *testing.T) {
@@ -430,7 +430,7 @@ func TestResponsePOSTHook_CancellationEmitsTwoPOSTs(t *testing.T) {
 	const lfdi = "lfdi-cancel-test"
 	poster := &fakePoster{}
 
-	mask := uint8(0x27) // received + started + completed + cancelled.
+	mask := sep2.HexBinary8(0x27) // received + started + completed + cancelled.
 	dc := buildControl("EVT-E2E-B", replyTo, &mask, 5*time.Minute, 60)
 
 	tnow := fixedTestNow
@@ -438,9 +438,9 @@ func TestResponsePOSTHook_CancellationEmitsTwoPOSTs(t *testing.T) {
 	sm, sched := newTestStateMachine(clock)
 	sm.AddTransitionHook(responsePOSTHook(poster, lfdi, fixedNowFn))
 
-	// Tick 1: add → DEFAULT→RECEIVED (status 1, mask bit 0).
+	// Tick 1: add -> DEFAULT->RECEIVED (status 1, mask bit 0).
 	sm.Tick(clock(), []sep2.DERControl{dc}, nil, sched)
-	// Tick 2: cancel before fire → RECEIVED→CANCELLED→DEFAULT
+	// Tick 2: cancel before fire -> RECEIVED->CANCELLED->DEFAULT
 	// (status 6, mask bit 5; DEFAULT auto-revert silent).
 	cancelled := dc.Copy()
 	cancelled.EventStatus = &sep2.EventStatus{CurrentStatus: sep2.EventStatusCancelled}
@@ -467,14 +467,14 @@ func TestResponsePOSTHook_CancellationEmitsTwoPOSTs(t *testing.T) {
 }
 
 // =============================================================================
-// (g) empty ReplyTo → 0 POSTs.
+// (g) empty ReplyTo -> 0 POSTs.
 // =============================================================================
 
 func TestResponsePOSTHook_EmptyReplyToEmitsZeroPOSTs(t *testing.T) {
 	t.Parallel()
 	poster := &fakePoster{}
 
-	mask := uint8(0x07)
+	mask := sep2.HexBinary8(0x07)
 	dc := buildControl("EVT-NO-REPLYTO", "", &mask, 1*time.Minute, 60) // empty ReplyTo
 
 	tnow := fixedTestNow
@@ -492,7 +492,7 @@ func TestResponsePOSTHook_EmptyReplyToEmitsZeroPOSTs(t *testing.T) {
 }
 
 // =============================================================================
-// (h) nil ResponseRequired → 0 POSTs.
+// (h) nil ResponseRequired -> 0 POSTs.
 // =============================================================================
 
 func TestResponsePOSTHook_NilResponseRequiredEmitsZeroPOSTs(t *testing.T) {
@@ -516,7 +516,7 @@ func TestResponsePOSTHook_NilResponseRequiredEmitsZeroPOSTs(t *testing.T) {
 }
 
 // =============================================================================
-// (i) POST error on first transition → log, next transition still fires.
+// (i) POST error on first transition -> log, next transition still fires.
 // =============================================================================
 
 func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
@@ -530,7 +530,7 @@ func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
 	transient := fmt.Errorf("simulated 500: %w", inverter.ErrResponseTransient)
 	poster := &fakePoster{errsLeft: []error{transient}}
 
-	mask := uint8(0x07)
+	mask := sep2.HexBinary8(0x07)
 	dc := buildControl("EVT-500-RECOVER", "https://server.example/rsps", &mask, 1*time.Minute, 60)
 
 	tnow := fixedTestNow
@@ -546,20 +546,20 @@ func TestResponsePOSTHook_PostErrorDoesNotAbortNextTransition(t *testing.T) {
 	}
 	sm.AddTransitionHook(responsePOSTHook(poster, "lfdi-500", fixedNowFn, tightRetry))
 
-	// Transition 1: DEFAULT→RECEIVED : attempt 1 transient, attempt 2 OK.
+	// Transition 1: DEFAULT->RECEIVED : attempt 1 transient, attempt 2 OK.
 	sm.Tick(clock(), []sep2.DERControl{dc}, nil, sched)
 	if got := len(poster.Calls()); got != 2 {
 		t.Errorf("after RECEIVED transition: calls = %d, want 2 (one transient retry, then success)", got)
 	}
 
-	// Transition 2: RECEIVED→STARTED : hook MUST still fire.
+	// Transition 2: RECEIVED->STARTED : hook MUST still fire.
 	tnow = fixedTestNow.Add(90 * time.Second)
 	sm.Tick(clock(), nil, nil, sched)
 	if got := len(poster.Calls()); got != 3 {
 		t.Errorf("after STARTED transition: calls = %d, want 3 (next transition must fire)", got)
 	}
 
-	// Transition 3: STARTED→COMPLETED + silent revert.
+	// Transition 3: STARTED->COMPLETED + silent revert.
 	tnow = fixedTestNow.Add(5 * time.Minute)
 	sm.Tick(clock(), nil, nil, sched)
 	if got := len(poster.Calls()); got != 4 {
@@ -596,11 +596,11 @@ func TestResponsePOSTHook_DeadLetterOnPersistentTransient(t *testing.T) {
 	// resuming parallel tests, so this captures cleanly.
 	transient := fmt.Errorf("simulated 500: %w", inverter.ErrResponseTransient)
 	// Queue MaxAttempts transients so attempt 1 + 2 + 3 all fail on the
-	// first transition. Anything after that returns nil → the second
+	// first transition. Anything after that returns nil -> the second
 	// transition succeeds in one shot.
 	poster := &fakePoster{errsLeft: []error{transient, transient, transient}}
 
-	mask := uint8(0x07)
+	mask := sep2.HexBinary8(0x07)
 	dc := buildControl("EVT-DL-001", "https://server.example/rsps", &mask, 1*time.Minute, 60)
 
 	tnow := fixedTestNow
@@ -620,8 +620,8 @@ func TestResponsePOSTHook_DeadLetterOnPersistentTransient(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(prev)
 
-	// Transition 1: DEFAULT→RECEIVED : 3 PostResponse attempts, all fail
-	// transiently → dead-letter log emitted.
+	// Transition 1: DEFAULT->RECEIVED : 3 PostResponse attempts, all fail
+	// transiently -> dead-letter log emitted.
 	sm.Tick(clock(), []sep2.DERControl{dc}, nil, sched)
 	if got := len(poster.Calls()); got != tightRetry.MaxAttempts {
 		t.Errorf("after RECEIVED transition: calls = %d, want %d (all retry attempts exhausted)", got, tightRetry.MaxAttempts)
@@ -638,7 +638,7 @@ func TestResponsePOSTHook_DeadLetterOnPersistentTransient(t *testing.T) {
 		t.Errorf("dead-letter log missing status=%d; got:\n%s", sep2.ResponseStatusEventReceived, logs)
 	}
 
-	// Transition 2: RECEIVED→STARTED : no queued errs left → succeeds
+	// Transition 2: RECEIVED->STARTED : no queued errs left -> succeeds
 	// on the first attempt. Proves the state machine kept advancing.
 	tnow = fixedTestNow.Add(90 * time.Second)
 	sm.Tick(clock(), nil, nil, sched)

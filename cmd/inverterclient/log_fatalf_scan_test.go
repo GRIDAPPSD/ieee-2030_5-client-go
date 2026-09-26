@@ -37,6 +37,10 @@ import (
 // If a new fatal call site is added, add its prefix here AND justify it
 // in code comments at the call site.
 var expectedFatalfSitePrefixes = []string{
+	// ratingInt16 guards the nameplate-to-wire-int16 cast at DER
+	// capability/settings PUT time : a startup-config problem, not a
+	// transient network error, so it is fatal rather than "continuing".
+	`log.Fatalf("nameplate rating %.0f exceeds sep2 ActivePower/ReactivePower int16 range [%d, %d]", w, math.MinInt16, math.MaxInt16)`,
 	`log.Fatalf("create client: %v", err)`,
 	`log.Fatalf("discover: %v", err)`,
 	`log.Fatalf("wait for advertised links: %v", err)`,

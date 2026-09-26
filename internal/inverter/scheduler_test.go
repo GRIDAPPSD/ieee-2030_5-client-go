@@ -46,9 +46,9 @@ var fixedNow = time.Date(2026, 5, 12, 12, 0, 0, 0, time.UTC)
 // makeControl builds a DERControl with Interval and optional randomize
 // pointers. startOffset is added to fixedNow; pass negative for past-due.
 // duration is in seconds. randomizeStart/randomizeDuration are pointers so
-// nil means "field absent" (omit-equals-zero per §10.1.4). 0-valued
+// nil means "field absent" (omit-equals-zero per section 10.1.4). 0-valued
 // pointers are also accepted and tested.
-func makeControl(mrid string, startOffset time.Duration, durationSec uint32, rs, rd *int32) sep2.DERControl {
+func makeControl(mrid string, startOffset time.Duration, durationSec uint32, rs, rd *sep2.OneHourRange) sep2.DERControl {
 	start := fixedNow.Add(startOffset).Unix()
 	dc := sep2.DERControl{}
 	dc.MRID = mrid
@@ -61,9 +61,10 @@ func makeControl(mrid string, startOffset time.Duration, durationSec uint32, rs,
 	return dc
 }
 
-// ptrInt32 returns a pointer to the int32 literal v. Convenience for
-// table-driven tests where inlining &v on a literal is illegal.
-func ptrInt32(v int32) *int32 {
+// ptrOneHourRange returns a pointer to the OneHourRange literal v.
+// Convenience for table-driven tests where inlining &v on a literal is
+// illegal.
+func ptrOneHourRange(v sep2.OneHourRange) *sep2.OneHourRange {
 	return &v
 }
 
@@ -143,7 +144,7 @@ func TestScheduler_RandomizeStartDeterministic(t *testing.T) {
 
 	start := fixedNow.Add(3 * time.Minute)
 	s.OnEventsAdded([]sep2.DERControl{
-		makeControl("A", 3*time.Minute, 60, ptrInt32(30), nil),
+		makeControl("A", 3*time.Minute, 60, ptrOneHourRange(30), nil),
 	})
 
 	fireAt := inverter.EventFireAtForTesting(s)
@@ -157,7 +158,7 @@ func TestScheduler_RandomizeStartDeterministic(t *testing.T) {
 	// FireAt" : which proves determinism end-to-end.
 	s2 := inverter.NewSchedulerForTesting(fixedNow)
 	s2.OnEventsAdded([]sep2.DERControl{
-		makeControl("A", 3*time.Minute, 60, ptrInt32(30), nil),
+		makeControl("A", 3*time.Minute, 60, ptrOneHourRange(30), nil),
 	})
 	if got, want := inverter.EventFireAtForTesting(s2), fireAt; !got.Equal(want) {
 		t.Errorf("replayed FireAt = %s, want %s (RNG non-deterministic?)", got, want)
@@ -173,7 +174,7 @@ func TestScheduler_RandomizeStartDistribution(t *testing.T) {
 	s := inverter.NewSchedulerForTesting(fixedNow)
 
 	const n = 1000
-	const rs int32 = 30
+	const rs sep2.OneHourRange = 30
 
 	events := make([]sep2.DERControl, n)
 	start := fixedNow.Add(3 * time.Minute)
@@ -181,7 +182,7 @@ func TestScheduler_RandomizeStartDistribution(t *testing.T) {
 		// Unique mRIDs : duplicates would replace each other (test #11
 		// covers that path). Use a deterministic format that won't collide.
 		mrid := mridFromIndex(i)
-		events[i] = makeControl(mrid, 3*time.Minute, 60, ptrInt32(rs), nil)
+		events[i] = makeControl(mrid, 3*time.Minute, 60, ptrOneHourRange(rs), nil)
 	}
 	s.OnEventsAdded(events)
 
@@ -232,7 +233,7 @@ func TestScheduler_RandomizeDuration(t *testing.T) {
 	s := inverter.NewSchedulerForTesting(fixedNow)
 
 	s.OnEventsAdded([]sep2.DERControl{
-		makeControl("A", 3*time.Minute, 120, nil, ptrInt32(20)),
+		makeControl("A", 3*time.Minute, 120, nil, ptrOneHourRange(20)),
 	})
 
 	fireAt := inverter.EventFireAtForTesting(s)
@@ -248,7 +249,7 @@ func TestScheduler_RandomizeDuration(t *testing.T) {
 	// Determinism check: replay with the same seed.
 	s2 := inverter.NewSchedulerForTesting(fixedNow)
 	s2.OnEventsAdded([]sep2.DERControl{
-		makeControl("A", 3*time.Minute, 120, nil, ptrInt32(20)),
+		makeControl("A", 3*time.Minute, 120, nil, ptrOneHourRange(20)),
 	})
 	want := inverter.EventExpireAtForTesting(s2).Sub(inverter.EventFireAtForTesting(s2))
 	if got != want {
@@ -512,7 +513,7 @@ func TestScheduler_RandomizeStartNegativeWindow(t *testing.T) {
 	// randomizeStart = -10s : window [start-10s, start].
 	start := fixedNow.Add(3 * time.Minute)
 	s.OnEventsAdded([]sep2.DERControl{
-		makeControl("A", 3*time.Minute, 60, ptrInt32(-10), nil),
+		makeControl("A", 3*time.Minute, 60, ptrOneHourRange(-10), nil),
 	})
 
 	got := inverter.EventFireAtForTesting(s)
@@ -538,7 +539,7 @@ func TestScheduler_RandomizeDurationNegativeIsAbs(t *testing.T) {
 			inverter.SeededRandForTesting(seed, seed+1),
 		)
 		s.OnEventsAdded([]sep2.DERControl{
-			makeControl("A", 3*time.Minute, 120, nil, ptrInt32(-20)),
+			makeControl("A", 3*time.Minute, 120, nil, ptrOneHourRange(-20)),
 		})
 		fireAt := inverter.EventFireAtForTesting(s)
 		expireAt := inverter.EventExpireAtForTesting(s)
@@ -572,7 +573,7 @@ func TestScheduler_RandomizeDurationClampsToZero(t *testing.T) {
 			inverter.SeededRandForTesting(seed, seed+1),
 		)
 		s.OnEventsAdded([]sep2.DERControl{
-			makeControl("A", 0, 2, nil, ptrInt32(100)),
+			makeControl("A", 0, 2, nil, ptrOneHourRange(100)),
 		})
 		fireAt := inverter.EventFireAtForTesting(s)
 		expireAt := inverter.EventExpireAtForTesting(s)

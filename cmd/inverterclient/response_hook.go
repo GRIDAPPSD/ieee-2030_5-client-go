@@ -7,7 +7,7 @@
 //  1. Skips when the event has no replyTo, or is the synthetic
 //     EVENT_COMPLETED -> DEFAULT / EVENT_CANCELLED -> DEFAULT auto-revert
 //     (which carry evt == nil, per the state machine's contract).
-//  2. Maps (prev, next) to an IEEE 2030.5-2023 §10.10 Table 31 Response
+//  2. Maps (prev, next) to an IEEE 2030.5-2023 section 10.10 Table 31 Response
 //     status (1/2/3/6) via mapTransitionToStatus. A return of 0 means "no
 //     wire status applies to this edge" -> skip.
 //  3. Honors the event's responseRequired bitmap (Table 32) via
@@ -24,7 +24,7 @@
 // The hook never blocks the state-machine Tick : PostResponseWithRetry
 // is synchronous, but its 30s ctx bounds total elapsed time. Async
 // dispatch is intentionally out of scope (the retry schedule worst case
-// : 500ms + 1s ≈ 1.5s of waits plus three in-flight HTTP requests :
+// : 500ms + 1s ~ 1.5s of waits plus three in-flight HTTP requests :
 // fits comfortably inside Tick's cadence).
 //
 // Pike rules satisfied:
@@ -90,7 +90,7 @@ type nowFunc func() time.Time
 // retryCfg is the optional retry schedule. When zero / omitted,
 // the documented production defaults from
 // inverter.DefaultResponseRetryConfig() apply (3 attempts, 500ms initial,
-// 30s cap, 2.0× multiplier). Tests pass a tight schedule so the suite
+// 30s cap, 2.0x multiplier). Tests pass a tight schedule so the suite
 // stays fast.
 func responsePOSTHook(client responsePoster, lfdi string, now nowFunc, retryCfg ...inverter.ResponseRetryConfig) inverter.TransitionHook {
 	cfg := defaultResponseRetryConfig
@@ -104,7 +104,7 @@ func responsePOSTHook(client responsePoster, lfdi string, now nowFunc, retryCfg 
 		if evt == nil {
 			return
 		}
-		// No replyTo → server did not invite a Response on this event.
+		// No replyTo -> server did not invite a Response on this event.
 		// Spec-compliant servers may still set responseRequired bits in this
 		// case, but without a target URI the client cannot deliver.
 		if evt.ReplyTo == "" {
@@ -122,7 +122,7 @@ func responsePOSTHook(client responsePoster, lfdi string, now nowFunc, retryCfg 
 			// at all; spec default is "no Response required" (Table 32).
 			return
 		}
-		mask = *evt.ResponseRequired
+		mask = uint8(*evt.ResponseRequired)
 		if !responseRequiredOn(mask, status) {
 			return
 		}
@@ -158,18 +158,18 @@ func responsePOSTHook(client responsePoster, lfdi string, now nowFunc, retryCfg 
 }
 
 // mapTransitionToStatus reduces a state-machine edge to its IEEE 2030.5-2023
-// §10.10 Table 31 wire-value Response status. Returns 0 ("no wire status
+// section 10.10 Table 31 wire-value Response status. Returns 0 ("no wire status
 // applies") for edges the spec does not require an acknowledgement on :
-// notably the auto-revert from EVENT_COMPLETED → DEFAULT and
-// EVENT_CANCELLED → DEFAULT (those acknowledgements fire on the
+// notably the auto-revert from EVENT_COMPLETED -> DEFAULT and
+// EVENT_CANCELLED -> DEFAULT (those acknowledgements fire on the
 // COMPLETED / CANCELLED record itself, one transition earlier).
 //
 // Edges that DO produce a wire status:
 //
-//   - → EVENT_RECEIVED   ⇒ ResponseStatusEventReceived  (1)
-//     EVENT_RECEIVED    → EVENT_STARTED    ⇒ ResponseStatusEventStarted   (2)
-//     EVENT_STARTED     → EVENT_COMPLETED  ⇒ ResponseStatusEventCompleted (3)
-//   - → EVENT_CANCELLED  ⇒ ResponseStatusEventCancelled (6)
+//   - -> EVENT_RECEIVED   => ResponseStatusEventReceived  (1)
+//     EVENT_RECEIVED    -> EVENT_STARTED    => ResponseStatusEventStarted   (2)
+//     EVENT_STARTED     -> EVENT_COMPLETED  => ResponseStatusEventCompleted (3)
+//   - -> EVENT_CANCELLED  => ResponseStatusEventCancelled (6)
 //
 // Pure function. No state, no side effects.
 func mapTransitionToStatus(prev, next inverter.EventState) uint8 {
@@ -191,7 +191,7 @@ func mapTransitionToStatus(prev, next inverter.EventState) uint8 {
 }
 
 // responseRequiredOn tests whether the responseRequired bitmap selects a
-// given Table 31 wire status. IEEE 2030.5-2023 §10.10 Table 32 defines
+// given Table 31 wire status. IEEE 2030.5-2023 section 10.10 Table 32 defines
 // the bit layout (HexBinary8 : one octet, eight bits):
 //
 //	bit 0 (0x01) : Response required on receipt        (status 1)
@@ -229,14 +229,14 @@ func responseRequiredOn(mask uint8, status uint8) bool {
 // href, so a transient retry that re-POSTs against a server already
 // holding the resource sees a 200 (or 201 with the same Location) rather
 // than allocating a duplicate Response. Servers that ignore client-set
-// hrefs allocate their own : IEEE 2030.5 §10.1.1 leaves the choice to
+// hrefs allocate their own : IEEE 2030.5 section 10.1.1 leaves the choice to
 // the server. The client-suggested href is a hint, never a contract.
 //
 // Non-cryptographic uses of SHA-256 are idiomatic in Go for opaque
 // identifiers; this is not a security boundary.
 func deriveResponseHref(eventMRID string, status uint8) string {
 	sum := sha256.Sum256([]byte(eventMRID + ":" + responseStatusName(status)))
-	return "/response/" + hex.EncodeToString(sum[:16]) // 16 bytes → 32 hex chars
+	return "/response/" + hex.EncodeToString(sum[:16]) // 16 bytes -> 32 hex chars
 }
 
 // responseStatusName maps Table 31 wire values to their spec names for

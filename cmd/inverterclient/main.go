@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	mathrand "math/rand/v2"
 	"net/http"
 	"os"
@@ -25,6 +26,18 @@ import (
 // so invoking the binary directly behaves the same as `make run-inverter`.
 // See GRIDAPPSD/ieee-2030_5-server-go#29.
 const defaultServerURL = "https://localhost:8443"
+
+// ratingInt16 converts a nameplate rating to sep2's wire int16 and fails
+// loud rather than silently wrapping if the rating ever exceeds the
+// ActivePower/ReactivePower Value range. internal/inverter.Rating is a
+// fixed 10 kW simulated nameplate today, well inside range; this guard is
+// for the day that constant changes to something the wire type can't hold.
+func ratingInt16(w float64) int16 {
+	if w > math.MaxInt16 || w < math.MinInt16 {
+		log.Fatalf("nameplate rating %.0f exceeds sep2 ActivePower/ReactivePower int16 range [%d, %d]", w, math.MinInt16, math.MaxInt16)
+	}
+	return int16(w)
+}
 
 // HMI server timeout defaults. The HMI is a local dashboard, but zero
 // timeouts still allow Slowloris exhaustion against an unprotected port.
@@ -48,7 +61,7 @@ func newHMIServer(port int) *http.Server {
 	}
 }
 
-// redactPIN masks all but the last 2 digits of a PIN. Per IEEE 2030.5 §8.2.1
+// redactPIN masks all but the last 2 digits of a PIN. Per IEEE 2030.5 section 8.2.1
 // the last digit is a check digit; the trailing 2 digits are conventional
 // in security UIs for redaction that preserves the check-digit signature
 // without exposing the full secret.
@@ -112,7 +125,7 @@ func diffSnapshots(prev, curr map[string]sep2.DERControl) (added, cancelled []se
 // fetch each DERProgram's DefaultDERControl / DERControlList / DERCurveList
 // subtrees (when those links are non-nil). Programs are cached into `out`
 // keyed by mRID; if the same DERProgram is reachable from multiple FSAs the
-// later GET wins (DERProgram identity is its mRID per IEEE 2030.5 §10.1.3).
+// later GET wins (DERProgram identity is its mRID per IEEE 2030.5 section 10.1.3).
 //
 // Per-FSA missing-DERProgramListLink and per-DERProgram missing-subtree-link
 // are tolerated : the walker skips that level and continues. Transport / decode
@@ -177,7 +190,6 @@ func main() {
 
 	hmiPort := flag.Int("hmi-port", 8080, "HMI web dashboard port (0 to disable)")
 	listScenarios := flag.Bool("list-scenarios", false, "List available scenarios and exit")
-	flag.BoolVar(&cfg.CSIPStrict, "csip-strict", false, "Strict CSIP TLS: drop GCM fallback, only offer TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8")
 	flag.BoolVar(&cfg.CSIP, "csip", false, "CSIP mode: lookup own EndDevice in server's /edev list instead of POST-registering")
 	flag.UintVar(&cfg.ExpectedPIN, "pin", 0, "expected Registration PIN (0 = skip match check; nonzero mismatch is fatal)")
 	flag.BoolVar(&cfg.AllowUnregistered, "allow-unregistered", false, "bypass missing-RegistrationLink check in CSIP mode (dev/test only)")
@@ -275,6 +287,13 @@ func main() {
 		log.Printf("WARNING: role=%q paired with backend=%q (production role with a non-realdevice backend is a dry-run commissioning combination, not the normal production path)", cfg.Role, cfg.Backend)
 	}
 
+	// Fail fast on an out-of-range nameplate before any listener binds or
+	// any registration happens: an operator would otherwise see Phase 3
+	// DER setup silently omit devices deep into the run instead of a
+	// client that refused to start. Reused at the Phase 3 PUT sites below.
+	ratedWInt16 := ratingInt16(inverter.Rating.RatedW)
+	ratedVArInt16 := ratingInt16(inverter.Rating.RatedVAr)
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -343,7 +362,7 @@ func main() {
 		log.Printf("  EndDeviceListLink: %s", dcap.EndDeviceListLink.Href)
 	}
 
-	// Per CSIP §6.6 / IEEE 2030.5 §10.3, when DeviceCapability
+	// Per CSIP section 6.6 / IEEE 2030.5 section 10.3, when DeviceCapability
 	// advertises no function-set links the device MUST idle-re-poll at the
 	// advertised pollRate rather than crash forward into Phase 2 against
 	// paths the server has not provisioned. WaitForAdvertisedLinks returns
@@ -354,7 +373,7 @@ func main() {
 		log.Fatalf("wait for advertised links: %v", err)
 	}
 
-	// Phase 1b: Server-time sync. Per IEEE 2030.5 §10 / CSIP,
+	// Phase 1b: Server-time sync. Per IEEE 2030.5 section 10 / CSIP,
 	// devices source time from the server's Time resource advertised by
 	// DeviceCapability.TimeLink and use it : not local wall-clock : for
 	// every server-consumed timestamp. We do a synchronous initial sync
@@ -387,7 +406,7 @@ func main() {
 	// off, the default) keeps the self-registration POST /edev path.
 	// See GRIDAPPSD/ieee-2030_5-server-go#36.
 	// Phase 2 / 3 / 4 walk the link graph reachable from /dcap rather than
-	// hardcoding URLs. Per IEEE 2030.5 §10.3 / CSIP §6.6 the client MUST
+	// hardcoding URLs. Per IEEE 2030.5 section 10.3 / CSIP section 6.6 the client MUST
 	// derive every endpoint from advertised links : the server is free to
 	// host resources at any path. Each phase skips with a log line if the
 	// upstream link is absent (server did not advertise that function set).
@@ -410,7 +429,7 @@ func main() {
 			var newEdevListHref string
 			edev, newEdevListHref, err = client.LookupOwnEndDevice(ctx, edevListHref)
 			if newEdevListHref != "" {
-				log.Printf("Phase 2 lookup: 301 follow : cached edev-list href %s → %s",
+				log.Printf("Phase 2 lookup: 301 follow : cached edev-list href %s -> %s",
 					edevListHref, newEdevListHref)
 				edevListHref = newEdevListHref
 			}
@@ -446,7 +465,7 @@ func main() {
 			log.Fatalf("register: %v", err)
 		}
 		if newEdevListHref != "" {
-			log.Printf("Phase 2 register: 301 follow : cached edev-list href %s → %s",
+			log.Printf("Phase 2 register: 301 follow : cached edev-list href %s -> %s",
 				edevListHref, newEdevListHref)
 			edevListHref = newEdevListHref
 		}
@@ -500,7 +519,7 @@ func main() {
 	// See GRIDAPPSD/ieee-2030_5-server-go#186.
 	// Polling for the affected resource continues unaffected : the hook
 	// only cleans local state so a future re-subscription attempt can fire
-	// again. Safe to wire even when the registry is empty (no entries →
+	// again. Safe to wire even when the registry is empty (no entries ->
 	// cancel is a no-op).
 	notifyDispatcher.RegisterCancelHook(subscriptionsByResource.CancelHookFunc())
 
@@ -543,7 +562,7 @@ func main() {
 	// walk-error fatal path live in cmd/inverterclient/phase2c_derprogram.go.
 	//
 	// The cache `derProgramsByMRID` is the seam the Primacy selection below
-	// consumes. Keying on mRID matches the IEEE 2030.5 §10.1.3 list-ordering
+	// consumes. Keying on mRID matches the IEEE 2030.5 section 10.1.3 list-ordering
 	// tie-break field; if
 	// the same DERProgram is reachable from multiple FSAs the later GET wins
 	// (acceptable per the spec : DERProgram resources are identified by mRID,
@@ -570,9 +589,9 @@ func main() {
 		}
 		derProgramsByMRID = cache
 	}
-	// Phase 2c (continued): apply IEEE 2030.5 §10.1.3 list-ordering
+	// Phase 2c (continued): apply IEEE 2030.5 section 10.1.3 list-ordering
 	// + CSIP V1.2 CORE-012 step 2 selection over the cache built above. Lowest
-	// Primacy wins; ties on Primacy broken by MRID lex-min. Empty cache →
+	// Primacy wins; ties on Primacy broken by MRID lex-min. Empty cache ->
 	// no selection; the simulation tick loop's ApplyControls call falls back
 	// to nil base via inverter.ActiveControlBase's rule-3 (no-op semantics).
 	// See GRIDAPPSD/ieee-2030_5-server-go#80.
@@ -615,7 +634,7 @@ func main() {
 				selectedDefaultControlHref, err)
 		} else {
 			if newDefaultDERControlHref != "" {
-				log.Printf("Phase 2c: 301 follow : DefaultDERControl href %s → %s (one-shot; not re-cached)",
+				log.Printf("Phase 2c: 301 follow : DefaultDERControl href %s -> %s (one-shot; not re-cached)",
 					selectedDefaultControlHref, newDefaultDERControlHref)
 			}
 			ddcCopy := ddc.Copy()
@@ -671,8 +690,8 @@ func main() {
 		log.Println("Phase 5: no DERControlListLink on selected program; polling skipped")
 	}
 	// Phase 5 entry: state machine that ties the DERControlList cache and
-	// the scheduler together. Drives DEFAULT ↔ EVENT_RECEIVED ↔
-	// EVENT_STARTED ↔ (EVENT_COMPLETED | EVENT_CANCELLED) → DEFAULT.
+	// the scheduler together. Drives DEFAULT <-> EVENT_RECEIVED <->
+	// EVENT_STARTED <-> (EVENT_COMPLETED | EVENT_CANCELLED) -> DEFAULT.
 	// See GRIDAPPSD/ieee-2030_5-server-go#92.
 	//
 	// The state-machine tick goroutine runs at the same cadence as the cache
@@ -687,7 +706,7 @@ func main() {
 	// 30min default-on-zero).
 	//
 	// This hook fetches the active DERProgram's DERCurveList on every
-	// EVENT_RECEIVED → EVENT_STARTED transition (CSIP V1.2 CORE-012 step 6:
+	// EVENT_RECEIVED -> EVENT_STARTED transition (CSIP V1.2 CORE-012 step 6:
 	// curves are part of "apply," not "discover"). Phase 6 layers the
 	// Response Function Set emitter on top of this same hook surface.
 	// See GRIDAPPSD/ieee-2030_5-server-go#102.
@@ -695,7 +714,7 @@ func main() {
 	stateMachine := inverter.NewStateMachine()
 
 	// Curve cache populated by the state-machine hook on
-	// EVENT_RECEIVED → EVENT_STARTED. ApplyControlsWithCurves reads from
+	// EVENT_RECEIVED -> EVENT_STARTED. ApplyControlsWithCurves reads from
 	// it on every sim tick; cache miss falls back to IEEE 1547 default
 	// curves (see internal/inverter/controller.go).
 	//
@@ -810,7 +829,7 @@ func main() {
 			// through to the rest of main() with Phase 3 skipped.
 		default:
 			if newDERListHref != "" {
-				log.Printf("Phase 3 DER list: 301 follow : original %s → %s (one-shot; not cached)",
+				log.Printf("Phase 3 DER list: 301 follow : original %s -> %s (one-shot; not cached)",
 					edev.DERListLink.Href, newDERListHref)
 			}
 			if len(derList.DER) == 0 {
@@ -819,10 +838,10 @@ func main() {
 				// First DER only : multi-DER inverters are a follow-up.
 				der := derList.DER[0]
 
-				maxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
-				maxVAr := sep2.ReactivePower{Value: int64(inverter.Rating.RatedVAr)}
-				modesSupported := uint32(0xFF) // all modes
-				derType := uint8(4)            // PV inverter
+				maxW := sep2.ActivePower{Value: ratedWInt16}
+				maxVAr := sep2.ReactivePower{Value: ratedVArInt16}
+				modesSupported := sep2.DERControlType(0xFF) // all modes
+				derType := uint8(4)                         // PV inverter
 
 				if der.DERCapabilityLink != nil {
 					if err := client.PutDERCapability(ctx, der.DERCapabilityLink.Href, sep2.DERCapability{
@@ -837,7 +856,7 @@ func main() {
 					log.Println("DER has no DERCapabilityLink; skipping DERCapability PUT")
 				}
 
-				setMaxW := sep2.ActivePower{Value: int64(inverter.Rating.RatedW)}
+				setMaxW := sep2.ActivePower{Value: ratedWInt16}
 				if der.DERSettingsLink != nil {
 					// Outbound timestamp: use the server-synced clock
 					// rather than local wall-clock. Before any TimeLink sync runs
@@ -883,26 +902,14 @@ func main() {
 			log.Println("MirrorUsagePoint POST returned empty Location; metering disabled")
 		} else {
 			log.Printf("MirrorUsagePoint: %s", mupLoc)
-			// Read back the created resource to discover its
-			// MirrorMeterReadingListLink : we do not assume the URL.
-			// On 301 client.Get surfaces the new MUP URL; update
-			// mupLoc so any future reference (none in the current code,
-			// but the var is the canonical hold-point) targets the new
-			// URL.
-			var mup sep2.MirrorUsagePoint
-			newMupLoc, err := client.Get(ctx, mupLoc, &mup)
-			if newMupLoc != "" {
-				log.Printf("Phase 4 MUP read-back: 301 follow : cached mupLoc %s → %s",
-					mupLoc, newMupLoc)
-				mupLoc = newMupLoc
-			}
-			if err != nil {
-				log.Printf("GET MirrorUsagePoint %s: %v (metering disabled)", mupLoc, err)
-			} else if mup.MirrorMeterReadingListLink == nil {
-				log.Println("MirrorUsagePoint has no MirrorMeterReadingListLink; metering disabled")
-			} else {
-				mmrHref = mup.MirrorMeterReadingListLink.Href
-			}
+			// core removed MirrorMeterReadingListLink: sep.xsd has no such
+			// child (MirrorUsagePoint carries MirrorMeterReading inline,
+			// repeated, not a link to a list). The server mounts the
+			// reading list at mupLoc+"/mr" by CSIP convention, matching
+			// PostMeterReading's own doc and this package's test fixtures,
+			// so derive it directly rather than reading a link that no
+			// longer exists on the wire.
+			mmrHref = mupLoc + "/mr"
 		}
 	}
 
@@ -1004,7 +1011,7 @@ func main() {
 			// server-supplied Volt/Var and Volt/Watt curves; misses fall
 			// back to IEEE 1547 defaults inside the controller.
 			base := inverter.ActiveControlBase(stateMachine.Current(), defaultCtl)
-			controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, curveCache)
+			controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, inverter.RatedW(inverter.Rating.RatedW), curveCache)
 
 			// ApplySetpoint: push the commanded control output to the device
 			// and get back the achieved InverterState.

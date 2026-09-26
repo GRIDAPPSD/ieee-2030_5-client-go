@@ -79,16 +79,21 @@ func TestNewSEP2Client_CertLoadErrors(t *testing.T) {
 			wantSub:  "missing.crt",
 		},
 		{
+			// core's NewCCMClientConfig parses the PEM bytes without the
+			// source path in scope, so the error names the failure
+			// (no PEM data found) rather than the file; the read-error
+			// case above still carries the path, since that comes from
+			// os.ReadFile before the parse step.
 			name:     "malformed PEM (no BEGIN line)",
 			certFile: noBeginCertPath,
 			wantErr:  true,
-			wantSub:  "no-begin.crt",
+			wantSub:  "failed to find any PEM data",
 		},
 		{
 			name:     "truncated PEM",
 			certFile: truncatedCertPath,
 			wantErr:  true,
-			wantSub:  "truncated.crt",
+			wantSub:  "failed to find any PEM data",
 		},
 		{
 			name:     "valid PEM",

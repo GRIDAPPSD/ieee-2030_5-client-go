@@ -85,12 +85,6 @@ type SimConfig struct {
 	TickInterval   time.Duration // simulation tick
 	ReportInterval time.Duration // status/metering report interval
 
-	// CSIPStrict, when true, drops the GCM cipher-suite fallback from the
-	// TLS handshake so connections to non-CCM-8 peers fail loudly instead
-	// of silently degrading. Default false retains GCM for interop with
-	// the in-tree test/dev server (see internal/tls/ccmserver.go).
-	CSIPStrict bool
-
 	// CSIP, when true, selects CSIP-mode EndDevice discovery: the inverter
 	// GETs the server's EndDeviceList and finds its own EndDevice by LFDI
 	// match instead of POSTing to /edev to self-register. CSIP devices are
@@ -102,7 +96,7 @@ type SimConfig struct {
 
 	// ExpectedPIN is the out-of-band-provisioned PIN that the device should
 	// see echoed by the server's Registration resource (CSIP V1.2 BASIC-001
-	// step 5 / IEEE 2030.5 §10). The value is logged alongside the
+	// step 5 / IEEE 2030.5 section 10). The value is logged alongside the
 	// server-presented PIN for comparison: rg.PIN==0 means skip (stay idle),
 	// but a nonzero mismatch is a wrong-device/server-pair condition and
 	// must fail loud (fatal), not idle.
@@ -118,10 +112,10 @@ type SimConfig struct {
 	AllowUnregistered bool
 
 	// LogEventPEN is the IANA-registered Private Enterprise Number stamped
-	// into every LogEvent the inverter POSTs (IEEE 2030.5 §9.5 logEventPEN).
+	// into every LogEvent the inverter POSTs (IEEE 2030.5 section 9.5 logEventPEN).
 	// Production deployments must register their own PEN with IANA and
 	// configure it here (--pen flag / SEP2_PEN env). Zero (default) means
-	// "no manufacturer namespace" -- acceptable for test / interop, but
+	// "no manufacturer namespace": acceptable for test / interop, but
 	// downstream operators reading log archives cannot disambiguate codes
 	// across vendors without a real PEN.
 	LogEventPEN uint32

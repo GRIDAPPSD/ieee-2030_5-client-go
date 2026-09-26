@@ -200,14 +200,14 @@ func runGoldenScenario(t *testing.T, sc inverter.Scenario, tick time.Duration, t
 		}
 		irr := inverter.Irradiance(refSimTime)
 		maxP := inverter.MaxPowerW(irr)
-		controls := inverter.ApplyControlsWithCurves(nil, refGrid, maxP, nil)
+		controls := inverter.ApplyControlsWithCurves(nil, refGrid, maxP, inverter.RatedW(inverter.Rating.RatedW), nil)
 		refState := inverter.ComputeOutput(controls, refGrid)
 
 		reading, err := s.ReadState(ctx)
 		if err != nil {
 			t.Fatalf("tick %d ReadState: %v", i, err)
 		}
-		controls2 := inverter.ApplyControlsWithCurves(nil, reading.Grid, reading.MaxPowerW, nil)
+		controls2 := inverter.ApplyControlsWithCurves(nil, reading.Grid, reading.MaxPowerW, inverter.RatedW(inverter.Rating.RatedW), nil)
 		state, err := s.ApplySetpoint(ctx, controls2)
 		if err != nil {
 			t.Fatalf("tick %d ApplySetpoint: %v", i, err)

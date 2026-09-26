@@ -16,7 +16,7 @@ import (
 // file consumes them to build a randomization-aware event scheduler:
 //
 //   - For each polled DERControl, parse Interval.Start + Interval.Duration,
-//     apply RandomizeStart and RandomizeDuration per IEEE 2030.5 §10.1.4,
+//     apply RandomizeStart and RandomizeDuration per IEEE 2030.5 section 10.1.4,
 //     queue a scheduledEvent keyed by mRID, sorted ascending by FireAt.
 //   - Expose Next() (peek) and PopExpired(now) so the state machine
 //     can drive EVENT_RECEIVED -> EVENT_STARTED transitions without coupling
@@ -32,7 +32,7 @@ import (
 //   - DERCurve retrieval.
 //   - Response Function Set / replyTo POSTs : Phase 6.
 //
-// IEEE 2030.5 §10.1.4 randomization interpretation (Phase 5 doc exit criterion 3):
+// IEEE 2030.5 section 10.1.4 randomization interpretation (Phase 5 doc exit criterion 3):
 //
 //   - randomizeStart jitters the start time within [start, start+|rs|].
 //     Phase 5 doc states: "start time is jittered uniformly within
@@ -102,7 +102,7 @@ func NewScheduler(nowFunc func() time.Time, rng *rand.Rand) *Scheduler {
 // ascending. Caller obtains `events` from DERControlCache.Diff's `added`
 // bucket; the state machine routes updated/cancelled to the matching method.
 //
-// Events with a nil Interval are skipped : IEEE 2030.5 §10.7 requires
+// Events with a nil Interval are skipped : IEEE 2030.5 section 10.7 requires
 // DERControl to carry an interval, but server-side garbage shouldn't crash
 // the scheduler. Skip count is logged.
 //
@@ -242,7 +242,7 @@ func (s *Scheduler) removeByMRIDLocked(mRID string) bool {
 }
 
 // computeWindow turns a parsed DERControl into a (FireAt, ExpireAt) pair,
-// applying §10.1.4 randomization. Caller MUST hold s.mu (because we touch
+// applying section 10.1.4 randomization. Caller MUST hold s.mu (because we touch
 // s.rng : math/rand/v2 *rand.Rand is NOT safe for concurrent use without
 // external synchronization).
 //
@@ -270,11 +270,12 @@ func (s *Scheduler) computeWindow(ev sep2.DERControl) (fireAt, expireAt time.Tim
 //
 // Documented in the package header. Positive-window is the Phase 5 doc
 // exit-criterion-3 default. We use rng.Int64N for an inclusive upper bound
-// in seconds; the per-second granularity matches the spec's int32-seconds
-// representation of randomizeStart.
+// in seconds; the per-second granularity matches OneHourRange, which core
+// declares as an int16 bounded to +/-3600 seconds (IEEE 2030.5-2018 Annex
+// B.2.3.4).
 //
 // Caller (computeWindow) holds the scheduler mutex; rng calls are safe.
-func applyRandomizeStart(start time.Time, randomizeStart *int32, rng *rand.Rand) time.Time {
+func applyRandomizeStart(start time.Time, randomizeStart *sep2.OneHourRange, rng *rand.Rand) time.Time {
 	if randomizeStart == nil || *randomizeStart == 0 {
 		return start
 	}
@@ -302,7 +303,7 @@ func applyRandomizeStart(start time.Time, randomizeStart *int32, rng *rand.Rand)
 // rng.Int64N gives [0, |rd|+1) so we shift by |rd|/2 to center the window.
 // The resulting duration may be negative if duration is small and |rd| is
 // large; the caller clamps to zero. Documented for state-machine reviewers.
-func applyRandomizeDuration(duration time.Duration, randomizeDuration *int32, rng *rand.Rand) time.Duration {
+func applyRandomizeDuration(duration time.Duration, randomizeDuration *sep2.OneHourRange, rng *rand.Rand) time.Duration {
 	if randomizeDuration == nil || *randomizeDuration == 0 {
 		return duration
 	}

@@ -6,6 +6,17 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
+// percentFullScale is the PerCent/SignedPerCent divisor: IEEE 2030.5-2018
+// Annex B.2.3.4 defines both as hundredths of a percent, 10000 = 100%.
+const percentFullScale = 10000.0
+
+// RatedW is the device's own %setMaxW basis, in watts: the same value
+// published as DERSettings.SetMaxW, against which OpModMaxLimW and
+// OpModFixedW are scaled as percentages. A named type, rather than a second
+// float64 parameter, so it cannot be swapped with maxPW (the instantaneously
+// available power ceiling, e.g. irradiance-limited) without a compile error.
+type RatedW float64
+
 // ApplyControls processes a DERControlBase and grid state to determine
 // the inverter's output. Implements IEEE 1547 priority ordering per section 4.7:
 //
@@ -15,11 +26,17 @@ import (
 //	d) active power limit
 //	e) volt-var / watt-var / constant-PF / constant-Q
 //
+// ratedW is the device's own %setMaxW basis (the same value published as
+// DERSettings.SetMaxW): OpModMaxLimW and OpModFixedW are percentages of it,
+// not watts, per core's field docs. It is distinct from maxPW, which is the
+// instantaneously available power ceiling (e.g. irradiance-limited), not the
+// nameplate.
+//
 // Curve-typed modes (Volt/Var, Volt/Watt) use the compiled-in IEEE 1547
 // default curves. Callers that have fetched server-supplied curves should
 // use ApplyControlsWithCurves instead.
-func ApplyControls(base *sep2.DERControlBase, grid GridState, maxPW float64) ControlOutputs {
-	return ApplyControlsWithCurves(base, grid, maxPW, nil)
+func ApplyControls(base *sep2.DERControlBase, grid GridState, maxPW float64, ratedW RatedW) ControlOutputs {
+	return ApplyControlsWithCurves(base, grid, maxPW, ratedW, nil)
 }
 
 // ApplyControlsWithCurves is ApplyControls with optional server-supplied
@@ -38,6 +55,7 @@ func ApplyControlsWithCurves(
 	base *sep2.DERControlBase,
 	grid GridState,
 	maxPW float64,
+	ratedW RatedW,
 	curves *DERCurveCache,
 ) ControlOutputs {
 	out := ControlOutputs{
@@ -95,18 +113,24 @@ func ApplyControlsWithCurves(
 		}
 	}
 
-	// Priority d: active power limit
+	// Priority d: active power limit. OpModMaxLimW and OpModFixedW are
+	// percentages of ratedW (%setMaxW), not watts. OpModFixedW is signed
+	// over %setMaxChargeRateW when negative per core's field doc; this
+	// client has no separate charge-rate setting (PV-only, no battery) and
+	// publishes only SetMaxW, so both signs scale against ratedW.
 	if base.OpModMaxLimW != nil {
-		limitW := float64(base.OpModMaxLimW.Value)
+		limitW := float64(*base.OpModMaxLimW) / percentFullScale * float64(ratedW)
 		if limitW < out.ActivePowerW {
 			out.ActivePowerW = limitW
 		}
 	}
 	if base.OpModFixedW != nil {
-		out.ActivePowerW = float64(base.OpModFixedW.Value)
+		out.ActivePowerW = float64(*base.OpModFixedW) / percentFullScale * float64(ratedW)
 	}
 	if base.OpModTargetW != nil {
-		out.ActivePowerW = float64(base.OpModTargetW.Value)
+		// ActivePower is Value * 10^Multiplier watts (IEEE 2030.5-2018
+		// Annex B.2.3.4), already absolute, not a percentage of ratedW.
+		out.ActivePowerW = float64(base.OpModTargetW.Value) * math.Pow(10, float64(base.OpModTargetW.Multiplier))
 	}
 
 	// Priority e: reactive power modes (mutually exclusive)

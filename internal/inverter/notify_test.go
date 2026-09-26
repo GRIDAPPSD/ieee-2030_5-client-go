@@ -7,12 +7,14 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -153,7 +155,7 @@ func notifyURL(t *testing.T, rcv *inverter.NotifyReceiver, path string) string {
 // sampleNotificationXML returns a minimal well-formed Notification body. The
 // CORE-018 step-4 payload carries subscribedResource (the resource the
 // inverter subscribed to), newResourceURI (the actual changed item : usually
-// the same), and status. mRID is required on Resource per IEEE 2030.5 §10.
+// the same), and status. mRID is required on Resource per IEEE 2030.5 section 10.
 func sampleNotificationXML(t *testing.T, status uint8, newURI string) []byte {
 	t.Helper()
 	n := sep2.Notification{
@@ -496,19 +498,13 @@ func TestNotifyReceiver_AddrBound(t *testing.T) {
 	}
 }
 
-// TestNotifyReceiver_RejectsUnsignedClient asserts mTLS posture: a client
-// presenting a cert signed by a foreign CA fails the handshake against
-// the receiver. This is the security invariant : without it any host
-// could pose as the SEP2 server and inject Notifications.
-func TestNotifyReceiver_RejectsUnsignedClient(t *testing.T) {
-	t.Parallel()
+// foreignCAClient builds an http.Client presenting a device cert signed by a
+// freshly generated CA that env's receiver does not trust, so a handshake
+// against it fails on the client's own certificate rather than the
+// receiver's. Shared by the tests below that need a refused handshake.
+func foreignCAClient(t *testing.T, env *ccmTestEnv) *http.Client {
+	t.Helper()
 
-	env := newCCMTestEnv(t)
-	rcv, _ := newReceiverFromEnv(t, env, nil)
-
-	// Build a second, foreign CA and issue a device cert under it. The
-	// receiver's CA pool only trusts env's CA : this cert's chain will
-	// not validate.
 	foreignCAPEM, foreignCAKeyPEM, err := certs.GenerateCA(certs.CAOptions{
 		CommonName: "Foreign CA",
 		ValidYears: 1,
@@ -561,7 +557,7 @@ func TestNotifyReceiver_RejectsUnsignedClient(t *testing.T) {
 		CurvePreferences:   []gotls.CurveID{gotls.CurveP256},
 	}
 
-	client := &http.Client{
+	return &http.Client{
 		Transport: &http.Transport{
 			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return (&gotls.Dialer{Config: tlsCfg}).DialContext(ctx, network, addr)
@@ -569,6 +565,18 @@ func TestNotifyReceiver_RejectsUnsignedClient(t *testing.T) {
 		},
 		Timeout: 5 * time.Second,
 	}
+}
+
+// TestNotifyReceiver_RejectsUnsignedClient asserts mTLS posture: a client
+// presenting a cert signed by a foreign CA fails the handshake against
+// the receiver. This is the security invariant : without it any host
+// could pose as the SEP2 server and inject Notifications.
+func TestNotifyReceiver_RejectsUnsignedClient(t *testing.T) {
+	t.Parallel()
+
+	env := newCCMTestEnv(t)
+	rcv, _ := newReceiverFromEnv(t, env, nil)
+	client := foreignCAClient(t, env)
 
 	req, err := http.NewRequestWithContext(context.Background(),
 		http.MethodPost, notifyURL(t, rcv, "/notify"),
@@ -580,6 +588,80 @@ func TestNotifyReceiver_RejectsUnsignedClient(t *testing.T) {
 
 	if _, err := client.Do(req); err == nil {
 		t.Fatalf("expected handshake/connection error for foreign-CA client cert, got nil")
+	}
+}
+
+// syncBuf is a concurrency-safe io.Writer: the handshake failure this test
+// waits for is logged from a goroutine the receiver owns, not the test's own
+// goroutine, so Write and String need their own lock.
+type syncBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+// TestNotifyReceiver_HandshakeFailureLogged proves risk area 5: before
+// WrapCCMListener, net/http's "TLS handshake error" log path gates on
+// *tls.Conn and never fires for gotls's fork type, so a refused handshake
+// reached no log line at all (the security lane measured 0 bytes on the
+// captured standard logger). This asserts a log line now appears, read from
+// the receiver's own configured ErrorLog rather than global log state.
+func TestNotifyReceiver_HandshakeFailureLogged(t *testing.T) {
+	t.Parallel()
+
+	env := newCCMTestEnv(t)
+	var captured syncBuf
+	rcv, err := inverter.NewNotifyReceiver(inverter.NotifyReceiverConfig{
+		CertFile:   env.deviceCertPath,
+		KeyFile:    env.deviceKeyPath,
+		CAFile:     env.caCertPath,
+		ListenAddr: "127.0.0.1:0",
+		ErrorLog:   log.New(&captured, "", 0),
+	})
+	if err != nil {
+		t.Fatalf("NewNotifyReceiver: %v", err)
+	}
+	if err := rcv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = rcv.Stop(context.Background()) })
+
+	client := foreignCAClient(t, env)
+	req, err := http.NewRequestWithContext(context.Background(),
+		http.MethodPost, notifyURL(t, rcv, "/notify"),
+		bytes.NewReader(sampleNotificationXML(t, 0, "/edev/0/fsa")))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/sep+xml")
+
+	if _, err := client.Do(req); err == nil {
+		t.Fatalf("expected handshake/connection error for foreign-CA client cert, got nil")
+	}
+
+	// The server-side handshake failure is logged from a goroutine the
+	// client's own error return doesn't wait on; poll with a bound.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(captured.String(), "TLS handshake error") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	got := captured.String()
+	if !strings.Contains(got, "TLS handshake error") {
+		t.Fatalf("captured log = %q, want a line containing \"TLS handshake error\"", got)
 	}
 }
 
@@ -613,7 +695,7 @@ func TestHMI_NotifyAddrHandler(t *testing.T) {
 	srv := httpServerForHMI(h)
 	defer srv.Close()
 
-	// Empty → "disabled\n"
+	// Empty -> "disabled\n"
 	body := getBody(t, srv.URL+"/notify-addr")
 	if body != "disabled\n" {
 		t.Errorf("empty: body = %q, want \"disabled\\n\"", body)

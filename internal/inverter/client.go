@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -61,7 +60,7 @@ type SEP2Client struct {
 	serverTimeOffsetNanos atomic.Int64
 
 	// pen is the IANA Private Enterprise Number stamped into every LogEvent
-	// the client POSTs (IEEE 2030.5 §9.5 logEventPEN). Sourced from
+	// the client POSTs (IEEE 2030.5 section 9.5 logEventPEN). Sourced from
 	// SimConfig.LogEventPEN at construction. Zero means "no manufacturer
 	// namespace" : acceptable for test/interop, not for production. The
 	// field is read-only after NewSEP2Client returns;
@@ -81,80 +80,50 @@ type SEP2Client struct {
 
 // NewSEP2Client creates a client with mTLS persistent connections per IEEE 2030.5.
 //
-// The client uses the vendored gotls fork rather than stdlib crypto/tls so it
-// can negotiate TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8 (0xC0AE), the IEEE 2030.5
-// mandatory cipher. By default GCM is left in the cipher list as a fallback
-// so the simulator keeps working against permissive peers; setting
-// cfg.CSIPStrict drops the GCM entry and forces the handshake to fail
-// loudly against non-CSIP-conformant peers.
+// The client uses core's NewCCMClientConfig, which builds on the vendored
+// gotls fork rather than stdlib crypto/tls so it can negotiate
+// TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8 (0xC0AE), the IEEE 2030.5 mandatory
+// cipher (clause 6.7). Core offers CCM-8 only: a server that cannot speak
+// it is refused, not downgraded to GCM.
 func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
-	certPEM, err := os.ReadFile(cfg.CertFile)
+	tlsCfg, err := sepTLS.NewCCMClientConfig(cfg.CertFile, cfg.KeyFile, cfg.CAFile)
 	if err != nil {
-		return nil, fmt.Errorf("read client cert %q: %w", cfg.CertFile, err)
-	}
-	keyPEM, err := os.ReadFile(cfg.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("read client key %q: %w", cfg.KeyFile, err)
-	}
-	cert, err := gotls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("load client cert %q: %w", cfg.CertFile, err)
+		return nil, fmt.Errorf("build CCM-8 client TLS config: %w", err)
 	}
 
-	caPEM, err := os.ReadFile(cfg.CAFile)
-	if err != nil {
-		return nil, fmt.Errorf("read CA cert %q: %w", cfg.CAFile, err)
-	}
-	caPool := x509.NewCertPool()
-	if !caPool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("parse CA cert %q: no PEM data", cfg.CAFile)
-	}
-
-	cipherSuites := []uint16{gotls.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8}
-	if !cfg.CSIPStrict {
-		// 0xC02B is TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256. Mirrors the
-		// fallback the server registers in internal/tls/ccmserver.go so
-		// `make run-inverter` against `make run-ccm` keeps interoperating.
-		cipherSuites = append(cipherSuites, gotls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
-	}
-
-	tlsCfg := &gotls.Config{
-		Certificates: []gotls.Certificate{cert},
-		RootCAs:      caPool,
-		MinVersion:   gotls.VersionTLS12,
-		MaxVersion:   gotls.VersionTLS12,
-		CipherSuites: cipherSuites,
-		// IEEE 2030.5 / CSIP §6.11 server certs carry a critical
-		// HardwareModuleName SAN (otherName OID 1.3.6.1.5.5.7.8.4) that the
-		// stdlib x509 parser leaves in UnhandledCriticalExtensions. The
-		// gotls client-side handshake always runs stdlib Verify before
-		// invoking VerifyPeerCertificate (handshake_client.go:985-1002), so
-		// merely adding the hook is not enough : stdlib's pre-verify is
-		// what trips `unhandled critical extension`. Set InsecureSkipVerify
-		// to bypass that pre-verify, and do the chain walk ourselves in the
-		// hook via the shared HMN-tolerant helper. This is NOT
-		// `--insecure-skip-verify`; the hook performs full chain validation
-		// against RootCAs. CSIP §6.11 device-profile certs have empty
-		// Subject and an otherName-only SAN, so stdlib hostname
-		// verification cannot succeed against them in any case; the helper
-		// matches the existing server-side enforcement scope.
-		// See GRIDAPPSD/ieee-2030_5-server-go#32.
-		InsecureSkipVerify: true, //nolint:gosec // see comment above
-		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			return sepTLS.VerifyPeerCertWithHardwareModuleSAN(rawCerts, caPool)
-		},
-		CurvePreferences: []gotls.CurveID{gotls.CurveP256},
+	// IEEE 2030.5 / CSIP section 6.11 server certs carry a critical
+	// HardwareModuleName SAN (otherName OID 1.3.6.1.5.5.7.8.4) that the
+	// stdlib x509 parser leaves in UnhandledCriticalExtensions. core's
+	// NewCCMClientConfig runs gotls's normal chain-and-hostname verify,
+	// which is correct for a bare IEEE 2030.5 server cert but trips the
+	// same way stdlib does against this deployment's HMN-SAN-bearing
+	// server certs. The gotls client-side handshake always runs stdlib
+	// Verify before invoking VerifyPeerCertificate
+	// (handshake_client.go:985-1002), so merely adding the hook is not
+	// enough: stdlib's pre-verify is what trips `unhandled critical
+	// extension`. Set InsecureSkipVerify to bypass that pre-verify, and do
+	// the chain walk ourselves in the hook via the shared HMN-tolerant
+	// helper, against the RootCAs pool core's constructor already built.
+	// This is NOT `--insecure-skip-verify`; the hook performs full chain
+	// validation. CSIP section 6.11 device-profile certs have empty
+	// Subject and an otherName-only SAN, so stdlib hostname verification
+	// cannot succeed against them in any case; the helper matches the
+	// existing server-side enforcement scope.
+	// See GRIDAPPSD/ieee-2030_5-server-go#32.
+	caPool := tlsCfg.RootCAs
+	tlsCfg.InsecureSkipVerify = true //nolint:gosec // see comment above
+	tlsCfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		return sepTLS.VerifyPeerCertWithHardwareModuleSAN(rawCerts, caPool)
 	}
 
-	// Derive SFDI/LFDI from the leaf cert that X509KeyPair already parsed.
-	// Reading the cert file a second time and re-decoding the PEM (the
-	// previous behavior) was redundant and discarded errors from both
-	// os.ReadFile and pem.Decode, leaving a nil-pointer deref on the next
-	// line if either failed. See GRIDAPPSD/ieee-2030_5-server-go#7.
-	if len(cert.Certificate) == 0 {
+	// Derive SFDI/LFDI from the leaf cert core's constructor already
+	// parsed into tlsCfg.Certificates[0], rather than reading and
+	// re-decoding the cert file a second time. See
+	// GRIDAPPSD/ieee-2030_5-server-go#7.
+	if len(tlsCfg.Certificates) == 0 || len(tlsCfg.Certificates[0].Certificate) == 0 {
 		return nil, fmt.Errorf("client cert %q has no leaf certificate", cfg.CertFile)
 	}
-	parsedCert, err := x509.ParseCertificate(cert.Certificate[0])
+	parsedCert, err := x509.ParseCertificate(tlsCfg.Certificates[0].Certificate[0])
 	if err != nil {
 		return nil, fmt.Errorf("parse client cert %q for identity: %w", cfg.CertFile, err)
 	}
@@ -231,7 +200,7 @@ func (c *SEP2Client) SetLogEventRateLimiter(rl LogEventRateLimiter) {
 // holding a cached href can update their local copy; newHref is "" when no
 // follow happened (i.e. the 200 path or any non-3xx error). Subsequent
 // redirects on the retry propagate as a *MovedError without further retry
-// (no chain following per RFC 7231 §6.4.2 / CSIP V1.2 §6.6). See
+// (no chain following per RFC 7231 section 6.4.2 / CSIP V1.2 section 6.6). See
 // GRIDAPPSD/ieee-2030_5-server-go#124.
 func (c *SEP2Client) Get(ctx context.Context, path string, out any) (newHref string, err error) {
 	if err := c.getOnce(ctx, c.baseURL+path, path, out); err != nil {
@@ -301,8 +270,8 @@ func (c *SEP2Client) getOnce(ctx context.Context, rawURL, logPath string, out an
 // the Location header value (empty when the server omits it) with nil error;
 // non-2xx codes return the appropriate typed error wrapped with method-and-
 // URL context. 201 Created is the spec-canonical POST success code and is
-// where the Location header carries the new-resource URI per CSIP V1.2 §6.6
-// / IEEE 2030.5 §10.3. See errors.go.
+// where the Location header carries the new-resource URI per CSIP V1.2 section 6.6
+// / IEEE 2030.5 section 10.3. See errors.go.
 //
 // Follow-once semantics: see Get. The marshalled XML body is held
 // in a []byte and wrapped in a fresh bytes.NewReader per attempt so the
@@ -427,7 +396,7 @@ func (c *SEP2Client) Discover(ctx context.Context) (sep2.DeviceCapability, error
 
 // Register creates an EndDevice on the server by POSTing to the
 // EndDeviceList href advertised in DeviceCapability. The href is passed in
-// rather than baked in as a constant : per IEEE 2030.5 §10.3 / CSIP §6.6 a
+// rather than baked in as a constant : per IEEE 2030.5 section 10.3 / CSIP section 6.6 a
 // client MUST traverse the link graph reachable from /dcap and never assume
 // URL shapes. This link-derivation discipline applies to every href-taking
 // method in this file; see GRIDAPPSD/ieee-2030_5-server-go#38.
@@ -469,7 +438,7 @@ func (c *SEP2Client) Register(ctx context.Context, edevListHref string) (registe
 
 // LookupOwnEndDevice GETs the EndDeviceList at edevListHref and returns the
 // EndDevice whose LFDI matches the client's. This is the CSIP discovery
-// path: per CSIP §6.7 / IEEE 2030.5 §10.5, CSIP devices are pre-allowlisted
+// path: per CSIP section 6.7 / IEEE 2030.5 section 10.5, CSIP devices are pre-allowlisted
 // out-of-band by LFDI; the device's job is to find its own EndDevice in the
 // server's list, not to POST one. Use this instead of Register when the
 // server provisions devices ahead of time.
@@ -545,7 +514,7 @@ func stripPagingQuery(followed, sep string) string {
 
 // GetRegistration GETs the server-provided Registration resource at the given
 // href and decodes it. The Registration resource carries the server-assigned
-// pIN that CSIP V1.2 BASIC-001 step 5 / IEEE 2030.5 §10 expect the device to
+// pIN that CSIP V1.2 BASIC-001 step 5 / IEEE 2030.5 section 10 expect the device to
 // match against its out-of-band provisioned PIN. Mismatch enforcement and
 // idle-retry on a not-yet-provisioned PIN, plus strict-mode
 // missing-RegistrationLink behavior, live in the caller.
@@ -810,7 +779,7 @@ func (c *SEP2Client) PostMeterReading(ctx context.Context, mmrListHref string, m
 // resolveServerURL resolves a possibly-relative server-supplied href against
 // c.baseURL. Absolute hrefs (carrying a scheme) are returned verbatim;
 // relative hrefs are joined to baseURL so callers do not accidentally
-// double-prefix. Matches CSIP §6.6 / IEEE 2030.5 §10.3 : devices MUST treat
+// double-prefix. Matches CSIP section 6.6 / IEEE 2030.5 section 10.3 : devices MUST treat
 // every advertised URI as opaque and resolve via RFC 3986, not by string
 // concatenation. Currently only PostResponse needs the full resolution
 // surface (Response.replyTo is the first href that the spec allows to be
@@ -841,7 +810,7 @@ func isTransientResponseStatus(code int) bool {
 
 // PostResponse POSTs a DERControlResponse to the replyTo URI advertised on
 // the server-issued DERControl, per CSIP V1.2 CORE-022 and IEEE 2030.5
-// §10.10. The href may be relative (e.g. `/rsps/{rspSetID}/rsp`) or absolute
+// section 10.10. The href may be relative (e.g. `/rsps/{rspSetID}/rsp`) or absolute
 // (e.g. `https://server/rsps/...`); both forms resolve correctly against
 // c.baseURL via resolveServerURL. See GRIDAPPSD/ieee-2030_5-server-go#106.
 //
@@ -966,7 +935,7 @@ func (c *SEP2Client) postResponseOnce(ctx context.Context, target string, body [
 	}
 }
 
-// pollDurationFunc is the mapper signature for pollRate → wait duration.
+// pollDurationFunc is the mapper signature for pollRate -> wait duration.
 // A named type so we can store it in an atomic.Pointer below.
 type pollDurationFunc func(pollRateSec uint32) time.Duration
 
@@ -999,7 +968,7 @@ func pollDuration(pollRateSec uint32) time.Duration {
 
 // dcapHasAnyLink reports whether a DeviceCapability advertises at least one
 // function-set link the inverter cares about for Phase 2+ progression.
-// Per CSIP §6.6 / IEEE 2030.5 §10.3 a device MUST NOT proceed past
+// Per CSIP section 6.6 / IEEE 2030.5 section 10.3 a device MUST NOT proceed past
 // discovery (registration, DER setup, metering) when the entry point
 // advertises nothing : the server has not yet provisioned the device.
 func dcapHasAnyLink(d sep2.DeviceCapability) bool {
@@ -1041,7 +1010,7 @@ func (c *SEP2Client) WaitForAdvertisedLinks(ctx context.Context, initial sep2.De
 
 // Server time sync (GRIDAPPSD/ieee-2030_5-server-go#40) =================================================
 //
-// CSIP / IEEE 2030.5 §10 require devices to source time from the server's Time
+// CSIP / IEEE 2030.5 section 10 require devices to source time from the server's Time
 // resource (linked from DeviceCapability.TimeLink) and to use that time :
 // not local wall-clock : for every timestamp the server consumes
 // (DERSettings.UpdatedTime, MirrorMeterReading identifiers, etc.). Before
@@ -1074,7 +1043,7 @@ func (c *SEP2Client) Now() time.Time {
 
 // GetServerTime GETs and parses the IEEE 2030.5 Time resource at timeHref.
 // The href is advertised on DeviceCapability.TimeLink and MUST NOT be
-// hardcoded by the caller : per IEEE 2030.5 §10.3 / CSIP §6.6 the server
+// hardcoded by the caller : per IEEE 2030.5 section 10.3 / CSIP section 6.6 the server
 // is free to host Time at any path.
 // On 301 the underlying Get follows once internally; the new
 // timeHref is not surfaced : RunTimeSync holds timeHref as a parameter and
