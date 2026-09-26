@@ -270,8 +270,9 @@ func (s *Scheduler) computeWindow(ev sep2.DERControl) (fireAt, expireAt time.Tim
 //
 // Documented in the package header. Positive-window is the Phase 5 doc
 // exit-criterion-3 default. We use rng.Int64N for an inclusive upper bound
-// in seconds; the per-second granularity matches the spec's int32-seconds
-// representation of randomizeStart.
+// in seconds; the per-second granularity matches OneHourRange, which core
+// declares as an int16 bounded to +/-3600 seconds (IEEE 2030.5-2018 Annex
+// B.2.3.4).
 //
 // Caller (computeWindow) holds the scheduler mutex; rng calls are safe.
 func applyRandomizeStart(start time.Time, randomizeStart *sep2.OneHourRange, rng *rand.Rand) time.Time {
