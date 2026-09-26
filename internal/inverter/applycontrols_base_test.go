@@ -177,7 +177,7 @@ func TestActiveControlBase(t *testing.T) {
 func TestActiveControlBase_DrivesApplyControls(t *testing.T) {
 	t.Parallel()
 
-	fixedW := sep2.SignedPerCent(500)
+	fixedW := sep2.SignedPerCent(500) // 5%
 	defaultBase := &sep2.DERControlBase{OpModFixedW: &fixedW}
 	defaultCtl := &sep2.DefaultDERControl{DERControlBase: defaultBase}
 
@@ -188,12 +188,16 @@ func TestActiveControlBase_DrivesApplyControls(t *testing.T) {
 	}
 
 	// Now plumb through ApplyControls : same call shape the simulation tick
-	// loop uses.
+	// loop uses. ratedW=8000 (not 10000) so 5% of ratedW (400) is
+	// distinguishable from a raw cast of the wire value (500): at the
+	// package's 10000 W default the two are numerically identical, which is
+	// why this test previously missed the unit regression.
 	grid := inverter.GridState{VoltsPU: 1.0, FreqHz: 60.0}
 	const maxP = 8000.0
-	out := inverter.ApplyControls(base, grid, maxP)
+	const ratedW = 8000.0
+	out := inverter.ApplyControls(base, grid, maxP, ratedW)
 
-	if out.ActivePowerW != 500 {
-		t.Fatalf("ApplyControls(default base with OpModFixedW=500, ...) ActivePowerW = %.0f, want 500 (controller honored the helper-supplied base)", out.ActivePowerW)
+	if out.ActivePowerW != 400 {
+		t.Fatalf("ApplyControls(default base with OpModFixedW=500 [5%%], ratedW=8000, ...) ActivePowerW = %.0f, want 400 (controller honored the helper-supplied base)", out.ActivePowerW)
 	}
 }

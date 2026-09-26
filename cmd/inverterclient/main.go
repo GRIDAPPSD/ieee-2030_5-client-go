@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	mathrand "math/rand/v2"
 	"net/http"
 	"os"
@@ -25,6 +26,18 @@ import (
 // so invoking the binary directly behaves the same as `make run-inverter`.
 // See GRIDAPPSD/ieee-2030_5-server-go#29.
 const defaultServerURL = "https://localhost:8443"
+
+// ratingInt16 converts a nameplate rating to sep2's wire int16 and fails
+// loud rather than silently wrapping if the rating ever exceeds the
+// ActivePower/ReactivePower Value range. internal/inverter.Rating is a
+// fixed 10 kW simulated nameplate today, well inside range; this guard is
+// for the day that constant changes to something the wire type can't hold.
+func ratingInt16(w float64) int16 {
+	if w > math.MaxInt16 || w < math.MinInt16 {
+		log.Fatalf("nameplate rating %.0f exceeds sep2 ActivePower/ReactivePower int16 range [%d, %d]", w, math.MinInt16, math.MaxInt16)
+	}
+	return int16(w)
+}
 
 // HMI server timeout defaults. The HMI is a local dashboard, but zero
 // timeouts still allow Slowloris exhaustion against an unprotected port.
@@ -818,8 +831,8 @@ func main() {
 				// First DER only : multi-DER inverters are a follow-up.
 				der := derList.DER[0]
 
-				maxW := sep2.ActivePower{Value: int16(inverter.Rating.RatedW)}
-				maxVAr := sep2.ReactivePower{Value: int16(inverter.Rating.RatedVAr)}
+				maxW := sep2.ActivePower{Value: ratingInt16(inverter.Rating.RatedW)}
+				maxVAr := sep2.ReactivePower{Value: ratingInt16(inverter.Rating.RatedVAr)}
 				modesSupported := sep2.DERControlType(0xFF) // all modes
 				derType := uint8(4)                         // PV inverter
 
@@ -836,7 +849,7 @@ func main() {
 					log.Println("DER has no DERCapabilityLink; skipping DERCapability PUT")
 				}
 
-				setMaxW := sep2.ActivePower{Value: int16(inverter.Rating.RatedW)}
+				setMaxW := sep2.ActivePower{Value: ratingInt16(inverter.Rating.RatedW)}
 				if der.DERSettingsLink != nil {
 					// Outbound timestamp: use the server-synced clock
 					// rather than local wall-clock. Before any TimeLink sync runs
@@ -991,7 +1004,7 @@ func main() {
 			// server-supplied Volt/Var and Volt/Watt curves; misses fall
 			// back to IEEE 1547 defaults inside the controller.
 			base := inverter.ActiveControlBase(stateMachine.Current(), defaultCtl)
-			controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, curveCache)
+			controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, inverter.Rating.RatedW, curveCache)
 
 			// ApplySetpoint: push the commanded control output to the device
 			// and get back the achieved InverterState.
