@@ -9,7 +9,7 @@ import (
 
 func TestApplyControlsNil(t *testing.T) {
 	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
-	out := ApplyControls(nil, grid, 8000, Rating.RatedW)
+	out := ApplyControls(nil, grid, 8000, RatedW(Rating.RatedW))
 
 	if out.ActivePowerW != 8000 {
 		t.Errorf("nil controls P = %.0f, want 8000", out.ActivePowerW)
@@ -24,7 +24,7 @@ func TestApplyControlsDisconnect(t *testing.T) {
 	base := &sep2.DERControlBase{OpModConnect: &connected}
 	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
 
-	out := ApplyControls(base, grid, 8000, Rating.RatedW)
+	out := ApplyControls(base, grid, 8000, RatedW(Rating.RatedW))
 
 	if out.Connected {
 		t.Error("should be disconnected")
@@ -87,7 +87,7 @@ func TestApplyControlsVoltVar(t *testing.T) {
 	base := &sep2.DERControlBase{OpModVoltVar: &voltVar}
 	grid := GridState{VoltsPU: 1.05, FreqHz: 60.0}
 
-	out := ApplyControls(base, grid, 8000, Rating.RatedW)
+	out := ApplyControls(base, grid, 8000, RatedW(Rating.RatedW))
 
 	if out.Mode != ModeVoltVar {
 		t.Errorf("mode = %v, want VoltVar", out.Mode)
@@ -104,7 +104,7 @@ func TestApplyControlsConstantQ(t *testing.T) {
 	base := &sep2.DERControlBase{OpModFixedVar: &fixedQ}
 	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
 
-	out := ApplyControls(base, grid, 8000, Rating.RatedW)
+	out := ApplyControls(base, grid, 8000, RatedW(Rating.RatedW))
 
 	if out.Mode != ModeConstantQ {
 		t.Errorf("mode = %v, want ConstantQ", out.Mode)
@@ -125,7 +125,7 @@ func TestApplyControlsPriorityDisconnectOverAll(t *testing.T) {
 	}
 	grid := GridState{VoltsPU: 1.05, FreqHz: 60.0}
 
-	out := ApplyControls(base, grid, 8000, Rating.RatedW)
+	out := ApplyControls(base, grid, 8000, RatedW(Rating.RatedW))
 
 	// Disconnect has highest priority : all others ignored
 	if out.Connected {

@@ -1004,7 +1004,7 @@ func main() {
 			// server-supplied Volt/Var and Volt/Watt curves; misses fall
 			// back to IEEE 1547 defaults inside the controller.
 			base := inverter.ActiveControlBase(stateMachine.Current(), defaultCtl)
-			controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, inverter.Rating.RatedW, curveCache)
+			controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, inverter.RatedW(inverter.Rating.RatedW), curveCache)
 
 			// ApplySetpoint: push the commanded control output to the device
 			// and get back the achieved InverterState.
