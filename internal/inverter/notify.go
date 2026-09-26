@@ -95,6 +95,11 @@ type NotifyReceiverConfig struct {
 	CAFile     string
 	ListenAddr string
 	Dispatcher NotificationDispatcher
+
+	// ErrorLog receives net/http server-level error lines, including the
+	// CCM-8 handshake-failure line WrapCCMListener produces (see Start).
+	// Nil uses the standard logger, matching http.Server's own default.
+	ErrorLog *log.Logger
 }
 
 // NotifyReceiver owns the inbound HTTPS listener and the /notify handler.
@@ -106,6 +111,7 @@ type NotifyReceiver struct {
 	tlsCfg     *gotls.Config
 	listenAddr string
 	dispatcher NotificationDispatcher
+	errorLog   *log.Logger
 
 	mu     sync.Mutex
 	tlsL   net.Listener
@@ -146,6 +152,7 @@ func NewNotifyReceiver(cfg NotifyReceiverConfig) (*NotifyReceiver, error) {
 		tlsCfg:     tlsCfg,
 		listenAddr: cfg.ListenAddr,
 		dispatcher: dispatcher,
+		errorLog:   cfg.ErrorLog,
 	}, nil
 }
 
@@ -175,6 +182,7 @@ func (r *NotifyReceiver) Start() error {
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: notifyReadHeaderTimeout,
+		ErrorLog:          r.errorLog,
 		// This listener doesn't need ConnContext / CCMIdentityMiddleware :
 		// the handler doesn't inspect the peer cert (the SEP2 server
 		// is presumed trusted once the chain validates). Subsequent
@@ -183,15 +191,20 @@ func (r *NotifyReceiver) Start() error {
 		// server-side router uses.
 	}
 
+	// net/http's own "TLS handshake error" log path gates on *tls.Conn and
+	// never fires for gotls's fork type, so a refused handshake would
+	// otherwise reach no log line (see WrapCCMListener's doc comment).
+	wrappedL := sepTLS.WrapCCMListener(tlsL, srv.ErrorLog)
+
 	doneCh := make(chan error, 1)
-	r.tlsL = tlsL
+	r.tlsL = wrappedL
 	r.srv = srv
 	r.doneCh = doneCh
 
 	// Capture doneCh in the goroutine's closure so Stop can clear
 	// r.doneCh without racing with the serve goroutine's send.
 	go func() {
-		err := srv.Serve(tlsL)
+		err := srv.Serve(wrappedL)
 		if errors.Is(err, http.ErrServerClosed) {
 			doneCh <- nil
 			return
