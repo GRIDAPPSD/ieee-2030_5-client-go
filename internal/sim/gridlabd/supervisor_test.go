@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,6 +98,157 @@ func TestSupervisor_RestartsAfterCrash(t *testing.T) {
 	second := reg.list()[1]
 	if second.InstanceID() == first.InstanceID() {
 		t.Error("restart reused the crashed fake's instance")
+	}
+}
+
+// TestSupervisor_StateTransitions_FullLifecycle is item 2: every
+// SupervisorState is asserted at the point it is expected, not only the
+// final one, so removing any state assignment (setUp's, setRestarting's,
+// or setStopped's) fails this test. Starting is the zero value, checked
+// before Run is ever called; Up, Restarting, Up again (the restart
+// succeeding), and Stopped follow from a crash and then Stop.
+func TestSupervisor_StateTransitions_FullLifecycle(t *testing.T) {
+	reg := &fakeRegistry{}
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	sup := newSupervisor(testSupervisorConfig(sockPath), newFakeLauncher(t, nil, reg))
+
+	if state, reason := sup.State(); state != StateStarting {
+		t.Fatalf("State() before Run = %v (reason %v), want StateStarting", state, reason)
+	}
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- sup.Run(context.Background()) }()
+
+	waitForState(t, sup, StateUp)
+	reg.list()[0].SimulateCrash()
+	waitForState(t, sup, StateRestarting)
+	waitForState(t, sup, StateUp) // the restart succeeds
+
+	sup.Stop()
+	if err := <-runErr; err != nil {
+		t.Errorf("Run() after Stop = %v, want nil", err)
+	}
+	waitForState(t, sup, StateStopped)
+}
+
+// TestSupervisor_ExitDuringRestart_RemovesSocketAndSetsStopped is a
+// focused unit test of exitDuringRestart itself (item 2): a real Unix
+// socket file planted at SocketPath, simulating one a killed sidecar did
+// not get the chance to unlink itself, must be gone afterward, and State()
+// must read Stopped, not whatever it was before.
+func TestSupervisor_ExitDuringRestart_RemovesSocketAndSetsStopped(t *testing.T) {
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("plant socket: %v", err)
+	}
+	if uln, ok := ln.(*net.UnixListener); ok {
+		uln.SetUnlinkOnClose(false) // leave the socket FILE behind on Close, like a SIGKILLed sidecar would
+	}
+	_ = ln.Close()
+	if _, err := os.Stat(sockPath); err != nil {
+		t.Fatalf("planted socket missing before exitDuringRestart: %v", err)
+	}
+
+	sup := newSupervisor(testSupervisorConfig(sockPath), newFakeLauncher(t, nil, &fakeRegistry{}))
+	sup.setRestarting() // exitDuringRestart is only ever called from mid-restart
+
+	sup.exitDuringRestart()
+
+	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
+		t.Errorf("socket %s still exists after exitDuringRestart (stat err: %v)", sockPath, err)
+	}
+	if state, _ := sup.State(); state != StateStopped {
+		t.Errorf("State() after exitDuringRestart = %v, want StateStopped", state)
+	}
+}
+
+// plantStaleSocket creates a real Unix socket file at sockPath and closes
+// it without unlinking, simulating what a SIGKILLed sidecar leaves behind
+// (its own graceful unlink, in a "finally" block, never gets to run).
+func plantStaleSocket(t *testing.T, sockPath string) {
+	t.Helper()
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("plant socket: %v", err)
+	}
+	if uln, ok := ln.(*net.UnixListener); ok {
+		uln.SetUnlinkOnClose(false)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close planted socket: %v", err)
+	}
+	if _, err := os.Stat(sockPath); err != nil {
+		t.Fatalf("planted socket missing: %v", err)
+	}
+}
+
+// TestSupervisor_StopDuringRestart_EndsStoppedAndRemovesSocket is item 2's
+// integration proof for the stopCh exit inside the restart loop: Stop
+// called while Run is mid-restart (State Restarting, no live client or
+// proc) must still end with State Stopped and the stale socket a killed
+// sidecar left behind removed, not left for the process's whole
+// remaining lifetime.
+func TestSupervisor_StopDuringRestart_EndsStoppedAndRemovesSocket(t *testing.T) {
+	reg := &fakeRegistry{}
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	cfg := testSupervisorConfig(sockPath)
+	cfg.BackoffMin, cfg.BackoffMax = time.Hour, time.Hour // never fires on its own; Stop must interrupt the wait
+	sup := newSupervisor(cfg, newFakeLauncher(t, nil, reg))
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- sup.Run(context.Background()) }()
+	waitForHealthy(t, sup, true)
+	reg.list()[0].SimulateCrash()
+	waitForState(t, sup, StateRestarting)
+
+	plantStaleSocket(t, sockPath)
+
+	sup.Stop()
+	if err := <-runErr; err != nil {
+		t.Errorf("Run() after Stop during restart = %v, want nil", err)
+	}
+	if state, _ := sup.State(); state != StateStopped {
+		t.Errorf("State() after Stop during restart = %v, want StateStopped", state)
+	}
+	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
+		t.Errorf("socket %s still exists after Stop during restart (stat err: %v)", sockPath, err)
+	}
+}
+
+// TestSupervisor_CancelDuringRestart_EndsStoppedAndRemovesSocket is item
+// 2's integration proof for the ctx.Done() exit inside the restart loop:
+// the same as the Stop case above, but via cancelling Run's own ctx.
+func TestSupervisor_CancelDuringRestart_EndsStoppedAndRemovesSocket(t *testing.T) {
+	reg := &fakeRegistry{}
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	cfg := testSupervisorConfig(sockPath)
+	cfg.BackoffMin, cfg.BackoffMax = time.Hour, time.Hour
+	sup := newSupervisor(cfg, newFakeLauncher(t, nil, reg))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- sup.Run(ctx) }()
+	waitForHealthy(t, sup, true)
+	reg.list()[0].SimulateCrash()
+	waitForState(t, sup, StateRestarting)
+
+	plantStaleSocket(t, sockPath)
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Run() after cancel during restart = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not return after cancel during restart")
+	}
+	if state, _ := sup.State(); state != StateStopped {
+		t.Errorf("State() after cancel during restart = %v, want StateStopped", state)
+	}
+	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
+		t.Errorf("socket %s still exists after cancel during restart (stat err: %v)", sockPath, err)
 	}
 }
 
@@ -209,8 +361,18 @@ func TestSupervisor_CancelAtLastAttemptReturnsCanceledNotBudgetError(t *testing.
 	waitForHealthy(t, sup, true)
 	waitForCreatedCount(t, reg, 1)
 	reg.list()[0].SimulateCrash() // consumes the only restart the budget allows
-	waitForHealthy(t, sup, true)
+	// waitForHealthy(true) alone races: Healthy() already reads true from
+	// before this crash until Run's own goroutine gets around to
+	// processing it, so a poll for "true" can return on that stale value
+	// without ever having waited for the restart's own hello to complete.
+	// Observing false first (TestSupervisor_RestartsAfterCrash's own
+	// pattern) proves the crash was actually seen before the restart is
+	// waited for; without it, the second SimulateCrash below can land
+	// mid-handshake on the restarted fake instead of after it, which is
+	// exactly the flake this fix closes.
+	waitForHealthy(t, sup, false)
 	waitForCreatedCount(t, reg, 2)
+	waitForHealthy(t, sup, true)
 
 	reg.list()[1].SimulateCrash() // budget now exhausted; the Log hook above cancels ctx as Run logs this
 
@@ -254,6 +416,22 @@ func waitForHealthy(t *testing.T, sup *Supervisor, want bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("Healthy() did not reach %v within 2s", want)
+}
+
+// waitForState polls State() until it reaches want, so a test can observe
+// a transient state (Restarting between a crash and the next attempt)
+// rather than only the final one.
+func waitForState(t *testing.T, sup *Supervisor, want SupervisorState) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if state, _ := sup.State(); state == want {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	got, reason := sup.State()
+	t.Fatalf("State() did not reach %v within 2s (last seen: %v, reason %v)", want, got, reason)
 }
 
 func waitForFinished(t *testing.T, fp *fakeProcess) {
@@ -632,6 +810,69 @@ func TestWaitForSocket_NoticesProcessExitBeforeSocketAppears(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("Run() took %v to notice the process already exited, want well under the 5s StartTimeout", elapsed)
+	}
+}
+
+// TestSupervisor_CancelBeforeFirstStartIsStoppedNotDown is item 1's
+// second half: a ctx cancelled while the first start is still in flight
+// is a cancellation, not a refusal (security lane finding at 377eb1b: a
+// SIGINT during the first-start wait logged "fleet probe DOWN: ...
+// context canceled" and left State() at Down). State must end Stopped,
+// WaitStarted must return the ctx's own error, and no DOWN line is
+// logged. The fake stalls on hello so Run is still inside startOnce, past
+// the launch step, when the ctx is cancelled.
+//
+// CallTimeout is short here (not testSupervisorConfig's 2s default):
+// abortStart's client.Close() call, right after the cancelled Hello
+// detaches, blocks behind that same call's drain goroutine until the
+// stalled reply's conn deadline fires (item 3's "Close waits behind a
+// drain" case), so a 2s CallTimeout would make this test itself wait
+// close to 2s for Run to return. 150ms keeps the test fast without
+// changing what it proves.
+func TestSupervisor_CancelBeforeFirstStartIsStoppedNotDown(t *testing.T) {
+	reg := &fakeRegistry{}
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	configure := func(fp *fakeProcess) { fp.stallOp = "hello" }
+	spy := &logSpy{}
+	cfg := testSupervisorConfig(sockPath)
+	cfg.CallTimeout = 150 * time.Millisecond
+	cfg.Log = spy.log
+	sup := newSupervisor(cfg, newFakeLauncher(t, configure, reg))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- sup.Run(ctx) }()
+
+	// Let Run reach the stalled hello call before cancelling, so the
+	// cancel lands during startOnce rather than before Run is even
+	// scheduled.
+	waitForCreatedCount(t, reg, 1)
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-runErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Run() after a cancel during the first start = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not return after ctx cancel during the first start")
+	}
+
+	if state, reason := sup.State(); state != StateStopped {
+		t.Errorf("State() after a cancel during the first start = %v (reason %v), want StateStopped", state, reason)
+	}
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	defer waitCancel()
+	if err := sup.WaitStarted(waitCtx); !errors.Is(err, context.Canceled) {
+		t.Errorf("WaitStarted() after a cancel during the first start = %v, want context.Canceled", err)
+	}
+
+	for _, line := range spy.lines_() {
+		if strings.Contains(line, "DOWN") {
+			t.Errorf("log line %q mentions DOWN for what is a cancellation, want none", line)
+		}
 	}
 }
 

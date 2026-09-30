@@ -303,7 +303,7 @@ func main() {
 			fleets = append(fleets, sup)
 		}
 	}
-	fleetStop, err := startFleets(ctx, fleets, log.Printf)
+	fleetStop, err := startFleets(ctx, fleets)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			// A signal arrived during the first-start wait: reported as an

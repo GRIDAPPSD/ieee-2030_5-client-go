@@ -104,6 +104,12 @@ type fakeProcess struct {
 	shortReplyBy int
 	// reorderReply swaps the first two items of a "get" or "set" reply.
 	reorderReply bool
+	// corruptReplyOn, when set, replaces the reply for that op with bytes
+	// that are not valid JSON, so a test can prove a drain (or a normal
+	// call) that receives a reply it cannot decode marks the connection
+	// broken rather than treating the bad bytes as a clean, discardable
+	// reply.
+	corruptReplyOn string
 
 	killCh   chan struct{}
 	killOnce sync.Once
@@ -294,7 +300,12 @@ func (fp *fakeProcess) serve() {
 			time.Sleep(fp.replyDelay)
 		}
 		reply, stop := fp.handle(req)
-		b, _ := json.Marshal(reply)
+		var b []byte
+		if fp.corruptReplyOn != "" && req.Op == fp.corruptReplyOn {
+			b = []byte(`{not valid json`)
+		} else {
+			b, _ = json.Marshal(reply)
+		}
 		if _, err := conn.Write(append(b, '\n')); err != nil {
 			fp.finish(nil)
 			return

@@ -12,7 +12,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"sync"
 )
 
@@ -38,47 +37,34 @@ type fleetSupervisor interface {
 // path table, Decision 4).
 //
 // Once every fleet is healthy, startFleets returns at once. A LATER Run
-// error (the restart budget exhausted; Supervisor.Run has already reached
-// its own terminal Down state and logged through its own cfg.Log before
-// returning) is logged here through logf as well, and does not stop any
-// other fleet or make the returned stop report an error: Decision 2's "a
-// DOWN fleet stops only itself."
+// error (the restart budget exhausted) does not stop any other fleet or
+// make the returned stop report an error: Decision 2's "a DOWN fleet
+// stops only itself." startFleets does NOT log that transition itself:
+// Supervisor.Run already reached its own terminal Down state and logged
+// "fleet <name> DOWN: <reason>" exactly once through its own cfg.Log
+// before returning here, and a second log line from this layer would
+// double it (closing coverage MEDIUM / error-handling LOW: the two
+// layers used to log the same transition independently). Supervisor is
+// the one layer that owns this line, since it is the one place a
+// same-fleet's later restart attempts and its final state are already
+// serialized; startFleets, driving several fleets at once, is not.
 //
 // The returned stop is idempotent (safe to call more than once, from more
 // than one goroutine) and returns only once every fleet's own Stop call
 // has itself returned.
-func startFleets(ctx context.Context, fleets []fleetSupervisor, logf func(format string, args ...any)) (stop func(), err error) {
+func startFleets(ctx context.Context, fleets []fleetSupervisor) (stop func(), err error) {
 	if len(fleets) == 0 {
 		return func() {}, nil
 	}
 
-	type fleetErr struct {
-		fleet fleetSupervisor
-		err   error
-	}
 	var runWG sync.WaitGroup
-	runErrs := make(chan fleetErr, len(fleets))
 	for _, f := range fleets {
 		runWG.Add(1)
 		go func(f fleetSupervisor) {
 			defer runWG.Done()
-			if e := f.Run(ctx); e != nil && !errors.Is(e, context.Canceled) && !errors.Is(e, context.DeadlineExceeded) {
-				runErrs <- fleetErr{f, e}
-			}
+			_ = f.Run(ctx)
 		}(f)
 	}
-	// Closes runErrs once every Run has returned, so the logging
-	// goroutine below terminates rather than ranging forever; correct
-	// whichever path (refusal or success) this function takes.
-	go func() {
-		runWG.Wait()
-		close(runErrs)
-	}()
-	go func() {
-		for fe := range runErrs {
-			logf("fleet %s DOWN: %v", fe.fleet.Fleet(), fe.err)
-		}
-	}()
 
 	var stopOnce sync.Once
 	stopFn := func() {

@@ -397,6 +397,80 @@ func TestNewManager_RelativeRunDir_RealSidecarHealthy(t *testing.T) {
 	}
 }
 
+// TestNewManager_InterpreterFieldIsActuallyUsed is item 4: the coverage
+// review's finding that ignoring ff.Interpreter survives, because CI's
+// (and this sandbox's) python3 on PATH is the same venv the interpreter
+// field would have named, so "use PATH instead" and "use the field"
+// produce the same running binary either way. A wrapper script at a path
+// nothing named "python3" resolves to touches a marker file before
+// exec'ing the real interpreter with the same arguments: if the
+// interpreter field were ignored, Supervisor would run plain "python3"
+// from PATH instead and the marker would never appear, regardless of
+// what python3 on PATH happens to point at in this environment.
+func TestNewManager_InterpreterFieldIsActuallyUsed(t *testing.T) {
+	python := sidecarPython(t)
+
+	fleetDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fleetDir, "probe.glm"), []byte(battery2GLM), 0o600); err != nil {
+		t.Fatalf("write glm: %v", err)
+	}
+
+	marker := filepath.Join(fleetDir, "wrapper-was-invoked")
+	wrapper := filepath.Join(fleetDir, "interpreter_wrapper.sh")
+	script := "#!/bin/sh\numask 022\n: > " + marker + "\nexec " + python + " \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+		t.Fatalf("write wrapper: %v", err)
+	}
+
+	ff := validFleetFile()
+	ff["interpreter"] = wrapper
+	fleetFilePath := writeFleetFile(t, fleetDir, ff)
+
+	env := append(DefaultEnv(), "PYTHONPATH="+filepath.Join(repoRoot(t), "sim", "gridlabd"))
+	m, err := NewManager(ManagerConfig{
+		Role:         AggregatorRole,
+		FleetFiles:   []string{fleetFilePath},
+		RunDir:       shortSockDir(t),
+		Env:          env,
+		StartTimeout: 15 * time.Second,
+		CallTimeout:  10 * time.Second,
+		StopGrace:    2 * time.Second,
+		Stderr:       testWriter{t},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	sup := m.Supervisors[0]
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- sup.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-runErr:
+		case <-time.After(5 * time.Second):
+			t.Error("Supervisor.Run did not return after ctx cancel")
+		}
+	})
+
+	deadline := time.Now().Add(15 * time.Second)
+	for !sup.Healthy() && time.Now().Before(deadline) {
+		select {
+		case err := <-runErr:
+			t.Fatalf("Run exited before becoming healthy: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if !sup.Healthy() {
+		t.Fatal("sidecar did not become healthy within 15s through the wrapper interpreter")
+	}
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("wrapper marker missing: the fleet file's interpreter field was not actually used (fell back to PATH's python3 instead): %v", err)
+	}
+}
+
 func fleetControls(activePowerW, reactivePowerVAr float64) inverter.ControlOutputs {
 	return inverter.ControlOutputs{
 		ActivePowerW:     activePowerW,

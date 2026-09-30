@@ -34,6 +34,18 @@ func dialFakeWithTimeout(t *testing.T, configure func(*fakeProcess), clientTimeo
 	return client, reg.list()[0]
 }
 
+// TestDial_RefusesNonPositiveTimeout is item 3: timeout must be positive,
+// since it is also the only bound on how long Close can wait behind a
+// drain; a zero or negative value would leave that wait unbounded.
+func TestDial_RefusesNonPositiveTimeout(t *testing.T) {
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	for _, timeout := range []time.Duration{0, -1 * time.Second} {
+		if _, err := Dial(context.Background(), sockPath, timeout); err == nil {
+			t.Errorf("Dial(timeout=%v): want error, got nil", timeout)
+		}
+	}
+}
+
 func TestClient_Hello(t *testing.T) {
 	client, _ := dialFake(t, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -321,6 +333,67 @@ func TestClient_Call_QueuedBehindDrainGetsOwnCtxErrorWithoutWriting(t *testing.T
 	time.Sleep(250 * time.Millisecond)
 	if got := fp.reqCount("get"); got != callsBefore {
 		t.Errorf("second Get reached the wire (get request count %d -> %d), want unchanged: an already-expired ctx must be answered without writing", callsBefore, got)
+	}
+}
+
+// TestClient_Drain_StalledReplyBreaksConnectionWithinCallTimeout is item
+// 3's first drain-failure branch: a caller cancels mid-round-trip, and
+// the reply it wrote for never arrives at all (coverage MEDIUM at
+// 377eb1b: "dropping the break on a stalled reply survives"). The drain
+// must still mark the connection broken, bounded by the same conn
+// deadline (client's own timeout, set once from the original write) as
+// any other call, not left open waiting forever.
+func TestClient_Drain_StalledReplyBreaksConnectionWithinCallTimeout(t *testing.T) {
+	const callTimeout = 150 * time.Millisecond
+	client, _ := dialFakeWithTimeout(t, func(fp *fakeProcess) { fp.stallOp = "get" }, callTimeout)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := client.Get(ctx, []GetItem{{Object: "a", Property: "x"}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Get: err = %v, want context.Canceled", err)
+	}
+
+	select {
+	case <-client.Broken():
+	case <-time.After(callTimeout + time.Second):
+		t.Fatal("Broken() did not fire within CallTimeout plus a margin after a cancel followed by a stalled reply")
+	}
+	if reason := client.BrokenReason(); reason == nil {
+		t.Error("BrokenReason() = nil after the drain's stalled reply broke the connection")
+	}
+}
+
+// TestClient_Drain_UndecodableReplyBreaksConnection is item 3's second
+// drain-failure branch: a caller cancels mid-round-trip, and the reply
+// that does arrive for it is not valid JSON (coverage MEDIUM at 377eb1b:
+// "skipping the decode (id, worker_dead) survives"). The drain must
+// still mark the connection broken, promptly, since the reply is already
+// on the wire and does not need to wait out any timeout.
+func TestClient_Drain_UndecodableReplyBreaksConnection(t *testing.T) {
+	client, _ := dialFakeWithTimeout(t, func(fp *fakeProcess) {
+		fp.replyDelay = 50 * time.Millisecond
+		fp.corruptReplyOn = "get"
+	}, 5*time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := client.Get(ctx, []GetItem{{Object: "a", Property: "x"}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Get: err = %v, want context.Canceled", err)
+	}
+
+	select {
+	case <-client.Broken():
+	case <-time.After(time.Second):
+		t.Fatal("Broken() did not fire promptly after a cancel followed by an undecodable reply")
+	}
+	if reason := client.BrokenReason(); reason == nil {
+		t.Error("BrokenReason() = nil after the drain's undecodable reply broke the connection")
 	}
 }
 

@@ -53,8 +53,17 @@ type Client struct {
 // Dial connects to a sidecar listening on sockPath. ctx bounds the dial
 // only. timeout bounds every subsequent call whose own ctx carries no
 // earlier deadline, so a caller with a bare context.Background() still
-// gets a bounded round trip rather than blocking forever.
+// gets a bounded round trip rather than blocking forever. timeout must be
+// positive: it is also the only bound on how long Close can wait behind a
+// drain (a detached caller's abandoned reply still being read off the
+// wire, client.go's call and drain), and a zero or negative value would
+// leave that wait unbounded (error-handling finding at 377eb1b: Close
+// still blocked after 3s against a zero timeout; production never passes
+// one).
 func Dial(ctx context.Context, sockPath string, timeout time.Duration) (*Client, error) {
+	if timeout <= 0 {
+		return nil, fmt.Errorf("dial %s: timeout must be positive, got %s", sockPath, timeout)
+	}
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", sockPath)
 	if err != nil {

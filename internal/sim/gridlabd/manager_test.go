@@ -366,6 +366,57 @@ func TestNewManager_OverlongSocketPathRefusesNamingFleet(t *testing.T) {
 	}
 }
 
+// TestNewManager_SocketPathBoundary_107Accepted_108Refused is item 4: the
+// coverage review's finding that ">=" surviving as "==" or ">" means
+// nothing tests the exact boundary. A socket path of exactly
+// maxSocketPathLen (107) bytes, the longest Linux's sun_path can actually
+// hold, must be accepted; one byte longer (108) must be refused.
+func TestNewManager_SocketPathBoundary_107Accepted_108Refused(t *testing.T) {
+	base := shortSockDir(t)                                // short and absolute: t.TempDir() here leaves no room to hit an exact byte-length boundary under this GOTMPDIR
+	fleetPath := writeFleetFile(t, base, validFleetFile()) // fleet name "probe"; "probe.sock" is 10 bytes
+
+	for _, tc := range []struct {
+		name     string
+		totalLen int
+		wantErr  bool
+	}{
+		{"107 bytes accepted", maxSocketPathLen, false},
+		{"108 bytes refused", maxSocketPathLen + 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// sockPath = runDir + "/" + "probe.sock" (10 bytes), so runDir
+			// itself must be totalLen - 1 (separator) - 10 bytes long.
+			wantRunDirLen := tc.totalLen - 1 - len("probe.sock")
+			pad := wantRunDirLen - len(base) - 1 // -1 for the base/pad separator
+			if pad < 1 {
+				t.Fatalf("base %q (%d bytes) leaves no room to reach %d bytes of RunDir", base, len(base), wantRunDirLen)
+			}
+			runDir := filepath.Join(base, strings.Repeat("y", pad))
+			if len(runDir) != wantRunDirLen {
+				t.Fatalf("constructed RunDir length = %d, want %d (path: %s)", len(runDir), wantRunDirLen, runDir)
+			}
+			if err := os.MkdirAll(runDir, 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if got := len(filepath.Join(runDir, "probe.sock")); got != tc.totalLen {
+				t.Fatalf("constructed socket path length = %d, want %d", got, tc.totalLen)
+			}
+
+			_, err := NewManager(ManagerConfig{
+				Role:       AggregatorRole,
+				FleetFiles: []string{fleetPath},
+				RunDir:     runDir,
+			})
+			if tc.wantErr && err == nil {
+				t.Errorf("socket path of %d bytes: want error, got nil", tc.totalLen)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("socket path of %d bytes: want nil, got %v", tc.totalLen, err)
+			}
+		})
+	}
+}
+
 // TestPrepareRunDir_RootIsRefusedByOwner proves the owner check actually
 // fires on a real, unwritable-by-us directory (not just the synthetic
 // 0700 t.TempDir() every other prepareRunDir test constructs): "/" exists,

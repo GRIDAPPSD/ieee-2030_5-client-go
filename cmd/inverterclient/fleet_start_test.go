@@ -8,7 +8,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -99,7 +98,7 @@ func TestStartFleets_RunCalledOnEach(t *testing.T) {
 	a, b := healthyFake("a"), healthyFake("b")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stop, err := startFleets(ctx, []fleetSupervisor{a, b}, t.Logf)
+	stop, err := startFleets(ctx, []fleetSupervisor{a, b})
 	if err != nil {
 		t.Fatalf("startFleets: %v", err)
 	}
@@ -107,6 +106,44 @@ func TestStartFleets_RunCalledOnEach(t *testing.T) {
 
 	waitClosed(t, a.runCalled, time.Second, "fleet a's Run")
 	waitClosed(t, b.runCalled, time.Second, "fleet b's Run")
+}
+
+// instantRefusalFake's WaitStarted returns an unrelated, already-set
+// refusal immediately, ignoring ctx entirely: used only to prove
+// startFleets's own ctx.Err() check overrides whatever a fleet's
+// WaitStarted happened to return, rather than relying on that return
+// value already equaling ctx.Err() by coincidence (which a fake whose
+// WaitStarted resolves via <-ctx.Done() would, defeating the point).
+type instantRefusalFake struct {
+	*fakeFleetSupervisor
+	refusal error
+}
+
+func (f *instantRefusalFake) WaitStarted(context.Context) error { return f.refusal }
+
+// TestStartFleets_CtxCancelledDuringWaitIsReportedAsCancellation is item
+// 4: a signal arriving while startFleets is still waiting for the first
+// start is reported as the outer ctx's own error, even when a fleet's own
+// WaitStarted has already resolved with some unrelated refusal, and it
+// still stops every fleet before returning. RED with the
+// `if ctx.Err() != nil { return func(){}, ctx.Err() }` branch removed
+// (main.go's own signal-during-start branch, `errors.Is(err,
+// context.Canceled)`, would then be looking at the unrelated refusal
+// instead).
+func TestStartFleets_CtxCancelledDuringWaitIsReportedAsCancellation(t *testing.T) {
+	base := newFakeFleetSupervisor("a")
+	close(base.stopRelease)
+	a := &instantRefusalFake{fakeFleetSupervisor: base, refusal: errors.New("unrelated refusal, resolved before the signal")}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already done before startFleets is even called
+
+	stop, err := startFleets(ctx, []fleetSupervisor{a})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("startFleets error = %v, want context.Canceled (not the fake's unrelated refusal)", err)
+	}
+	stop()
+	waitClosed(t, a.stopStarted, time.Second, "fleet a's Stop")
 }
 
 // TestStartFleets_RefusalStopsTheHealthyFakeAndReturnsTheError is item 4's
@@ -126,7 +163,7 @@ func TestStartFleets_RefusalStopsTheHealthyFakeAndReturnsTheError(t *testing.T) 
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := startFleets(ctx, []fleetSupervisor{refused, healthy}, t.Logf)
+	_, err := startFleets(ctx, []fleetSupervisor{refused, healthy})
 	if !errors.Is(err, refusalErr) {
 		t.Fatalf("startFleets error = %v, want %v", err, refusalErr)
 	}
@@ -135,61 +172,34 @@ func TestStartFleets_RefusalStopsTheHealthyFakeAndReturnsTheError(t *testing.T) 
 	waitClosed(t, healthy.stopStarted, time.Second, "the healthy fleet's Stop")
 }
 
-// TestStartFleets_LaterErrorLeavesTheOtherFakeRunningAndLogsOneDownLine is
-// item 4: once every fleet is healthy, a LATER Run error (the restart
-// budget exhausted) is logged once and does not stop, or otherwise touch,
-// any other fleet. RED with a later error turned into an exit (a
-// log.Fatalf-shaped mutant would end the test process itself, which this
-// test cannot directly simulate, so it instead asserts the two properties
-// a "turn it into an exit" mutant would violate: the log line never
-// appears, or the healthy fleet gets stopped).
-func TestStartFleets_LaterErrorLeavesTheOtherFakeRunningAndLogsOneDownLine(t *testing.T) {
+// TestStartFleets_LaterErrorLeavesTheOtherFakeRunning is item 4: once
+// every fleet is healthy, a LATER Run error (the restart budget
+// exhausted) does not stop, or otherwise touch, any other fleet.
+// startFleets logs nothing of its own for this transition (item 1, round
+// 5: Supervisor.setDown is the one layer that owns the "fleet <name>
+// DOWN" line now; TestStartFleets_RealCrashLoop_LogsExactlyOneDownLine
+// proves that composition end to end with a real Supervisor). RED with a
+// later error turned into an exit: this test cannot directly observe an
+// os.Exit from inside itself, so it asserts the property such a mutant
+// would violate instead: the healthy fleet is never stopped by fleet a's
+// own later error.
+func TestStartFleets_LaterErrorLeavesTheOtherFakeRunning(t *testing.T) {
 	a, b := healthyFake("a"), healthyFake("b")
-
-	var mu sync.Mutex
-	var lines []string
-	logf := func(format string, args ...any) {
-		mu.Lock()
-		defer mu.Unlock()
-		lines = append(lines, fmt.Sprintf(format, args...))
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stop, err := startFleets(ctx, []fleetSupervisor{a, b}, logf)
+	stop, err := startFleets(ctx, []fleetSupervisor{a, b})
 	if err != nil {
 		t.Fatalf("startFleets: %v", err)
 	}
 	defer stop()
 
-	laterErr := errors.New("restart budget exhausted")
-	a.runErrCh <- laterErr
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		mu.Lock()
-		n := len(lines)
-		mu.Unlock()
-		if n > 0 || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	mu.Lock()
-	got := append([]string{}, lines...)
-	mu.Unlock()
-	if len(got) != 1 {
-		t.Fatalf("log lines = %v, want exactly 1", got)
-	}
-	if got[0] != "fleet a DOWN: restart budget exhausted" {
-		t.Errorf("log line = %q, want %q", got[0], "fleet a DOWN: restart budget exhausted")
-	}
+	a.runErrCh <- errors.New("restart budget exhausted")
 
 	select {
 	case <-b.stopStarted:
 		t.Error("fleet b was stopped after fleet a's later error: want it untouched")
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
@@ -207,7 +217,7 @@ func TestStartFleets_StopReturnsOnlyAfterEveryFakesStopHasFinished(t *testing.T)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stop, err := startFleets(ctx, []fleetSupervisor{a, b}, t.Logf)
+	stop, err := startFleets(ctx, []fleetSupervisor{a, b})
 	if err != nil {
 		t.Fatalf("startFleets: %v", err)
 	}

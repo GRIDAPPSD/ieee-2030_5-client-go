@@ -315,6 +315,19 @@ func (s *Supervisor) setStopped() {
 	s.state = StateStopped
 }
 
+// exitDuringRestart records an orderly exit (Stop or ctx cancel) reached
+// from inside the restart loop, where no live client or proc is currently
+// owned by this Supervisor (the previous sidecar already exited or was
+// killed before this loop was entered). Unlike shutdown (below), there is
+// nothing to ask for a clean stop; the only cleanup left is the socket
+// file a killed sidecar may not have had the chance to unlink itself.
+// Without this, State() stayed Restarting forever after such an exit, and
+// that socket was left in RunDir until the process ended.
+func (s *Supervisor) exitDuringRestart() {
+	s.setStopped()
+	removeIfSocket(s.cfg.SocketPath)
+}
+
 // Run starts the sidecar and supervises it until ctx is cancelled or Stop
 // is called. The first start is not retried: a hello mismatch or a launch
 // failure is refused outright, matching "refuses to run on a version or
@@ -340,6 +353,17 @@ func (s *Supervisor) Run(ctx context.Context) error {
 
 	proc, client, err := s.startOnce(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			// The signal ctx was already done, or became done during this
+			// attempt: this is a cancellation, not a refusal (design
+			// Decision 4: "a refusal observed after the signal ctx is
+			// done is reported as a cancellation"). Stopped, not Down, and
+			// no DOWN log for what the caller itself asked for.
+			cancelErr := ctx.Err()
+			s.setStopped()
+			s.markStarted(cancelErr)
+			return cancelErr
+		}
 		reason := fmt.Errorf("fleet %s: initial start refused: %w", s.cfg.Fleet, err)
 		s.setDown(reason)
 		s.markStarted(reason)
@@ -387,8 +411,10 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			// that, not a crash-loop diagnosis.
 			select {
 			case <-ctx.Done():
+				s.exitDuringRestart()
 				return ctx.Err()
 			case <-s.stopCh:
+				s.exitDuringRestart()
 				return nil
 			default:
 			}
@@ -406,8 +432,10 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
+				s.exitDuringRestart()
 				return ctx.Err()
 			case <-s.stopCh:
+				s.exitDuringRestart()
 				return nil
 			}
 

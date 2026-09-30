@@ -80,6 +80,38 @@ func TestFleetManagerWiredIntoMain(t *testing.T) {
 	}
 }
 
+// TestShutdownWiredIntoMain is item 4 (round 5): a source-text check that
+// `defer shutdown()` is present and positioned after startFleets' success
+// path, so the deferred call covers every ordinary return main makes from
+// there on (a ctx-cancel idle loop, Phase 5's own ctx.Done() case,
+// scenario completion). This is a text check, not a behavioral one: it
+// cannot tell a live `defer shutdown()` from one some other edit made
+// dead code, the same limit TestFleetManagerWiredIntoMain and the old,
+// now-deleted TestStopFleetSupervisorsWiredIntoMain always had.
+// TestMain_CreateClientFailureAfterFleetHealthy_RemovesFleetSocket (round
+// 4) is the behavioral proof for shutdown() itself, through fatalf's own
+// explicit call to the same function value; driving main() to a genuine
+// ordinary return instead of a fatal exit needs a live or fake IEEE
+// 2030.5 server, out of proportion for this round.
+func TestShutdownWiredIntoMain(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	text := string(src)
+	startFleetsIdx := strings.Index(text, "fleetStop, err := startFleets(ctx, fleets)")
+	deferIdx := strings.Index(text, "defer shutdown()")
+	if startFleetsIdx < 0 {
+		t.Fatal("main.go does not call startFleets(ctx, fleets) (has it been renamed?)")
+	}
+	if deferIdx < 0 {
+		t.Fatal("main.go has no `defer shutdown()`")
+	}
+	if deferIdx < startFleetsIdx {
+		t.Error("defer shutdown() must be positioned after startFleets succeeds, not before")
+	}
+}
+
 // TestBinary_DERRoleWithFleetFile_ExitsWithError is #70's literal
 // criterion: the real compiled binary, started in the der role with a
 // fleet file, exits with an error and starts no sidecar. No other flag is
