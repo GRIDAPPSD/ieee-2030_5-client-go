@@ -35,11 +35,21 @@ def test_lfdi_differs_by_pen():
     assert fleet1["devices"][0]["lfdi"][:32] == fleet2["devices"][0]["lfdi"][:32]
 
 
-def test_rejects_a_pen_that_is_not_8_hex_digits():
+@pytest.mark.parametrize(
+    "bad_pen",
+    [
+        "ABC",  # too short
+        "ZZZZZZZZ",  # not hex at all
+        "0x123456",  # int(pen, 16) alone would accept this (probed 2026-09-29)
+        "+1234567",
+        "1234_567",
+        " 1234567",
+        "1234567 ",
+    ],
+)
+def test_rejects_a_pen_that_is_not_exactly_8_hex_digits(bad_pen):
     with pytest.raises(ValueError):
-        battery_fleet.generate("fleetA", count=1, pen="ABC")
-    with pytest.raises(ValueError):
-        battery_fleet.generate("fleetA", count=1, pen="ZZZZZZZZ")
+        battery_fleet.generate("fleetA", count=1, pen=bad_pen)
 
 
 def test_glm_holds_one_battery_and_inverter_pair_per_device():
@@ -70,6 +80,7 @@ def test_write_creates_glm_and_fleet_file(tmp_path):
         "brace{name",
         "",
         "x" * 33,  # over the length cap
+        "valid_looking_name\n",  # $ would accept a trailing newline; fullmatch does not
     ],
 )
 def test_generate_refuses_an_unsafe_fleet_name(bad_name):

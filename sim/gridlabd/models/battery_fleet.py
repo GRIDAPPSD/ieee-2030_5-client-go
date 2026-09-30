@@ -26,11 +26,23 @@ GRIDLABD_VERSION = "6.0.0a1"
 # arbitrary command at load time (reproduced 2026-09-29: a name of
 # "x\n#system touch PWNED" created the file during load_glm). Restricting
 # the character set closes the break-out, not just the "#system" token.
-_SAFE_NAME = re.compile(r"^[A-Za-z0-9_]{1,32}$")
+# No ^/$ anchors: $ matches before a trailing newline too (the same gap
+# closed in adapter.py's time regex, probed again here 2026-09-29), so
+# fullmatch() is used instead, which requires the whole string to match.
+_SAFE_NAME = re.compile(r"[A-Za-z0-9_]{1,32}")
+
+# Exactly 8 hex digits, nothing else. int(pen, 16) alone would accept a
+# leading 0x prefix, a +/- sign, underscores as digit separators, and
+# surrounding whitespace (probed 2026-09-29: int("0x123456", 16) succeeds
+# even though only 6 of its 8 characters are hex digits), any of which
+# would store a PEN in the fleet file that is not 8 raw hex digits, so
+# the LFDI's trailing 8 characters would not actually be the PEN a
+# downstream reader expects.
+_HEX8 = re.compile(r"[0-9A-Fa-f]{8}")
 
 
 def _validate_name(name: str, what: str) -> None:
-    if not _SAFE_NAME.match(name):
+    if not _SAFE_NAME.fullmatch(name):
         raise ValueError(
             f"{what} must be 1-32 characters of [A-Za-z0-9_], got {name!r}"
         )
@@ -81,9 +93,8 @@ object meter {{
 
 
 def _lfdi(fleet_name: str, index: int, seed: str, pen: str) -> str:
-    if len(pen) != 8:
-        raise ValueError(f"pen must be 8 hex digits (32 bits), got {pen!r}")
-    int(pen, 16)  # raises ValueError when pen is not hex
+    if not _HEX8.fullmatch(pen):
+        raise ValueError(f"pen must be exactly 8 hex digits (32 bits), got {pen!r}")
     digest = hashlib.sha256(f"{fleet_name}:{index}:{seed}".encode("utf-8")).digest()
     random_128 = digest[:16].hex()
     return (random_128 + pen.lower()).upper()
