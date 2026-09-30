@@ -58,3 +58,34 @@ def test_write_creates_glm_and_fleet_file(tmp_path):
     assert (tmp_path / "fleetC.fleet.json").is_file()
     assert glm_path == str(tmp_path / "fleetC.glm")
     assert fleet_path == str(tmp_path / "fleetC.fleet.json")
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "pwn\n#system touch PWNED",  # reproduced 2026-09-29: this created a file at load time
+        "has space",
+        "semi;colon",
+        "quote'name",
+        "brace{name",
+        "",
+        "x" * 33,  # over the length cap
+    ],
+)
+def test_generate_refuses_an_unsafe_fleet_name(bad_name):
+    with pytest.raises(ValueError):
+        battery_fleet.generate(bad_name, count=1, pen="00000000")
+
+
+def test_write_creates_no_files_for_an_unsafe_fleet_name(tmp_path):
+    with pytest.raises(ValueError):
+        battery_fleet.write(str(tmp_path), "pwn\n#system touch PWNED", count=1, pen="00000000")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_generate_accepts_a_name_at_the_safe_boundary():
+    # Exercises the allowed set itself (not just its rejection), so the
+    # guard is proven to admit valid names and not only reject bad ones.
+    glm_text, fleet = battery_fleet.generate("A_b9" * 8, count=1, pen="00000000")
+    assert len(fleet["devices"]) == 1
+    assert "#system" not in glm_text

@@ -15,8 +15,25 @@ import argparse
 import hashlib
 import json
 import os
+import re
 
 GRIDLABD_VERSION = "6.0.0a1"
+
+# fleet_name reaches GLM text unescaped as every device's object name
+# (f"{fleet_name}_bat{i}_inv"). GridLAB-D's parser treats a line starting
+# with '#' as a preprocessor directive, including #system <command>, so a
+# name carrying a newline can break out of a "name X;" line and run an
+# arbitrary command at load time (reproduced 2026-09-29: a name of
+# "x\n#system touch PWNED" created the file during load_glm). Restricting
+# the character set closes the break-out, not just the "#system" token.
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9_]{1,32}$")
+
+
+def _validate_name(name: str, what: str) -> None:
+    if not _SAFE_NAME.match(name):
+        raise ValueError(
+            f"{what} must be 1-32 characters of [A-Za-z0-9_], got {name!r}"
+        )
 
 # CONSTANT_PQ holds an externally set P_Out/Q_Out across step_to; the class
 # default, CONSTANT_PF, recomputes P_Out from power_factor on the next step
@@ -84,6 +101,7 @@ def generate(
     stoptime: str = "2020-01-01 02:00:00",
 ) -> tuple[str, dict]:
     """Return (glm_text, fleet_file_dict) for a battery fleet of count devices."""
+    _validate_name(fleet_name, "fleet name")
     devices = []
     body = [_GLM_HEADER.format(starttime=starttime, stoptime=stoptime)]
     for i in range(count):
