@@ -6,7 +6,11 @@ build-backend = "setuptools.build_meta"
 name = "gldsidecar"
 version = "0.1.0"
 description = "GridLAB-D fleet physics sidecar for the client-go aggregator"
-requires-python = ">=3.10"
+# nanobind-backend and numpy in requirements.lock ship cp313-only wheels
+# (not gridlabd's stable-ABI cp310-abi3), matching CI's
+# actions/setup-python python-version: '3.13'; >=3.10 overstated what
+# the lock actually supports.
+requires-python = "~=3.13.0"
 dependencies = [
     "gridlabd==6.0.0a1",
 ]
