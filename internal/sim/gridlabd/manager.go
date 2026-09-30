@@ -10,9 +10,9 @@ import (
 )
 
 // ErrNotAggregatorRole is returned when fleet files are given outside the
-// aggregator role. ADR-009 decision 1: a fleet file in the der role is a
-// startup error, not a partial run; ADR-009 decision 2: the der runner
-// never constructs the managed-set walk at all.
+// aggregator role: a fleet file in the der role is a startup error, not a
+// partial run, and the der role never constructs the managed-set walk at
+// all.
 var ErrNotAggregatorRole = errors.New("fleet sidecars are only built in the aggregator role")
 
 // AggregatorRole is the client role value that permits building fleets.
@@ -33,9 +33,9 @@ type ManagerConfig struct {
 }
 
 // Manager owns one Supervisor per fleet file and the FleetDevice backends
-// built from it. NewManager is the construction-time gate ADR-009 decision
-// 2 requires: called with any role other than "aggregator" and one or more
-// fleet files, it refuses before starting any process.
+// built from it. NewManager is the construction-time gate: called with any
+// role other than "aggregator" and one or more fleet files, it refuses
+// before starting any process.
 type Manager struct {
 	Supervisors []*Supervisor
 	Devices     []*device.FleetDevice

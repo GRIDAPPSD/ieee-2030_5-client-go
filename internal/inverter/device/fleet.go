@@ -46,15 +46,15 @@ type FleetTransport interface {
 
 // FleetDevice is the DERDevice backend for one managed DER inside a fleet:
 // it drives its own inverter object over a transport shared with every
-// other device of the same fleet. Constructed only in the aggregator role
-// (ADR-009 decision 2's construction-time gate).
+// other device of the same fleet. Construct one only for a device this
+// process actually manages.
 //
 // Known scope limit: ApplySetpoint calls StepTo on every device's own
 // call, not once per fleet tick. That is safe (StepTo is a no-op once the
 // model is already at the target), but it means N managed devices step
-// the model N times per tick instead of once. The coordinated fleet loop
-// that steps once per tick belongs to the aggregator's fleet loop
-// (ADR-009's later "C4b" work), not this backend.
+// the model N times per tick instead of once. A coordinated fleet loop
+// that steps once per tick belongs to a later aggregator dispatch loop,
+// not this backend.
 type FleetDevice struct {
 	transport   FleetTransport
 	lfdi        string
@@ -64,8 +64,8 @@ type FleetDevice struct {
 
 // NewFleetDevice constructs a FleetDevice for the managed device identified
 // by lfdi, whose inverter object in the fleet's model is inverterObj. now
-// supplies the real-time clock StepTo advances to (fleets run in real
-// time, ADR-009); pass nil to use time.Now.
+// supplies the real-time clock StepTo advances to (fleets step in real
+// time, not simulated time); pass nil to use time.Now.
 func NewFleetDevice(transport FleetTransport, lfdi, inverterObj string, now func() time.Time) (*FleetDevice, error) {
 	if transport == nil {
 		return nil, fmt.Errorf("fleet device %s: transport is required", lfdi)

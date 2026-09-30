@@ -5,11 +5,10 @@ import (
 	"testing"
 )
 
-// TestNewManager_DERRoleWithFleetFile_Refuses is the construction-time gate
-// ADR-009 decision 2 requires: a fleet file given outside the aggregator
-// role is a startup error, and nothing is built (no supervisor, no
-// device), matching "the der runner does not construct the managed-set
-// walk or the device mapping loader".
+// TestNewManager_DERRoleWithFleetFile_Refuses is the construction-time
+// gate: a fleet file given outside the aggregator role is a startup
+// error, and nothing is built (no supervisor, no device); the der role
+// never constructs the managed-set walk or the device mapping loader.
 func TestNewManager_DERRoleWithFleetFile_Refuses(t *testing.T) {
 	dir := t.TempDir()
 	path := writeFleetFile(t, dir, validFleetFile())

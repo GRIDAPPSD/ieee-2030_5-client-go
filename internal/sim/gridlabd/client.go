@@ -215,8 +215,8 @@ func (c *Client) Get(ctx context.Context, items []GetItem) ([]GetResult, error) 
 	return out, nil
 }
 
-// StepTo advances the model to target, which must be UTC (ADR-009: always
-// step_to an explicit time, never a bare step). A target not after the
+// StepTo advances the model to target, which must be UTC; always call
+// this with an explicit time, never a bare step. A target not after the
 // model's current time is a no-op that returns the current time
 // (protocol.py, probed 2026-09-29), so calling StepTo more than once for
 // the same tick is safe.
