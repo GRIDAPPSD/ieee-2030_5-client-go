@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
@@ -60,7 +61,7 @@ func TestRedirect_200OKNoFollow(t *testing.T) {
 	client := newCSIPClient(t, env, serverURL, true)
 
 	var dcap sep2.DeviceCapability
-	newHref, err := client.Get(redirectTestCtx(t), "/dcap", &dcap)
+	newHref, err := client.Get(redirectTestCtx(t), guard.KindEndDeviceRead, "/dcap", &dcap)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestRedirect_Get301FollowsOnceAndReturnsBody(t *testing.T) {
 	client := newCSIPClient(t, env, serverURL, true)
 
 	var list sep2.EndDeviceList
-	newHref, err := client.Get(redirectTestCtx(t), "/edev", &list)
+	newHref, err := client.Get(redirectTestCtx(t), guard.KindEndDeviceRead, "/edev", &list)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -144,7 +145,7 @@ func TestRedirect_ChainedRedirectsNotFollowed(t *testing.T) {
 	client := newCSIPClient(t, env, serverURL, true)
 
 	var dcap sep2.DeviceCapability
-	_, err := client.Get(redirectTestCtx(t), "/a", &dcap)
+	_, err := client.Get(redirectTestCtx(t), guard.KindEndDeviceRead, "/a", &dcap)
 	if err == nil {
 		t.Fatal("Get: nil err, want *MovedError from second redirect")
 	}
@@ -189,7 +190,7 @@ func TestRedirect_301EmptyLocationDoesNotFollow(t *testing.T) {
 	client := newCSIPClient(t, env, serverURL, true)
 
 	var list sep2.EndDeviceList
-	newHref, err := client.Get(redirectTestCtx(t), "/edev", &list)
+	newHref, err := client.Get(redirectTestCtx(t), guard.KindEndDeviceRead, "/edev", &list)
 	if err == nil {
 		t.Fatal("Get: nil err, want *MovedError with empty Location")
 	}
@@ -298,7 +299,7 @@ func TestRedirect_CallerUpdatesCachedHrefOnFollow(t *testing.T) {
 	cachedHref := "/edev" // mimics cmd/inverterclient/main.go's edevListHref
 
 	var list sep2.EndDeviceList
-	newHref, err := client.Get(redirectTestCtx(t), cachedHref, &list)
+	newHref, err := client.Get(redirectTestCtx(t), guard.KindEndDeviceRead, cachedHref, &list)
 	if err != nil {
 		t.Fatalf("first Get: %v", err)
 	}
@@ -310,7 +311,7 @@ func TestRedirect_CallerUpdatesCachedHrefOnFollow(t *testing.T) {
 	// Second call uses the updated cached href. The redirect handler
 	// must not fire again.
 	var list2 sep2.EndDeviceList
-	newHref2, err := client.Get(redirectTestCtx(t), cachedHref, &list2)
+	newHref2, err := client.Get(redirectTestCtx(t), guard.KindEndDeviceRead, cachedHref, &list2)
 	if err != nil {
 		t.Fatalf("second Get: %v", err)
 	}

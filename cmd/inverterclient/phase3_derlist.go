@@ -44,6 +44,7 @@ import (
 	"log"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
@@ -51,7 +52,7 @@ import (
 // *inverter.SEP2Client. Tests substitute a fake; production passes the real
 // client. Defined at the consumer per Pike-rule on small interfaces.
 type derListClient interface {
-	Get(ctx context.Context, path string, out interface{}) (string, error)
+	Get(ctx context.Context, kind guard.Kind, path string, out interface{}) (string, error)
 }
 
 // fetchDERListForSetup GETs the DERList at derListHref. Failure modes are
@@ -72,7 +73,7 @@ func fetchDERListForSetup(
 	derListHref string,
 ) (sep2.DERList, bool, string, error) {
 	var derList sep2.DERList
-	newHref, err := client.Get(ctx, derListHref, &derList)
+	newHref, err := client.Get(ctx, guard.KindEndDeviceRead, derListHref, &derList)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return sep2.DERList{}, false, "", err

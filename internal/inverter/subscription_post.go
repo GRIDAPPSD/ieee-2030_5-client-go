@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
@@ -81,7 +82,7 @@ func (c *SEP2Client) PostSubscription(
 	// one-shot 301 follow. We get the Location header on 201
 	// directly; on 405 / other non-2xx we get a typed error from
 	// classifyResponse.
-	location, _, postErr := c.Post(ctx, subscriptionListHref, &sub)
+	location, _, postErr := c.Post(ctx, guard.KindSubscriptionPost, subscriptionListHref, &sub)
 	if postErr != nil {
 		// errors.Is preserves the typed sentinel through the Post wrapper's
 		// fmt.Errorf chain so callers above us can pattern-match.

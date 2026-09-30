@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
@@ -122,7 +123,7 @@ func (c *SEP2Client) PostLogEvent(
 		evt.LogEventPEN = c.pen
 	}
 
-	location, _, postErr := c.Post(ctx, logEventListHref, &evt)
+	location, _, postErr := c.Post(ctx, guard.KindLogEventPost, logEventListHref, &evt)
 	if postErr != nil {
 		// errors.Is preserves the typed sentinel through the wrapper so
 		// callers can pattern-match ErrMethodNotAllowed / ErrBadRequest /
