@@ -37,7 +37,7 @@ type SupervisorConfig struct {
 	// is never wherever the aggregator process itself happened to start
 	// from.
 	Dir string
-	// Env is the sidecar's environment; nil defaults to defaultEnv()
+	// Env is the sidecar's environment; nil defaults to DefaultEnv()
 	// (PATH and HOME only), never this process's full environment.
 	Env []string
 
@@ -65,7 +65,7 @@ func (cfg SupervisorConfig) withDefaults() SupervisorConfig {
 		cfg.Command = []string{"python3", "-P", "-m", "gldsidecar"}
 	}
 	if cfg.Env == nil {
-		cfg.Env = defaultEnv()
+		cfg.Env = DefaultEnv()
 	}
 	if cfg.StartTimeout <= 0 {
 		cfg.StartTimeout = defaultStartTimeout
@@ -363,6 +363,10 @@ func waitForSocket(ctx context.Context, sockPath string, proc sidecarProcess, di
 				// kernel who actually holds the peer fd, which the peer
 				// cannot spoof by writing to the socket.
 				if pidErr := verifyPeerPID(client.conn, proc.Pid()); pidErr != nil {
+					// Discarded: pidErr is already the failure being
+					// returned, and this dial is being abandoned rather
+					// than retried, so a close error here has no
+					// separate action to take.
 					_ = client.Close()
 					return nil, fmt.Errorf("dial %s: %w", sockPath, pidErr)
 				}

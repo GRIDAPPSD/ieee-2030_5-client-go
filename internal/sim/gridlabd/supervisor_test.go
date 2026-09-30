@@ -2,7 +2,10 @@ package gridlabd
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,7 +58,9 @@ func TestSupervisor_RefusesOnHelloMismatch(t *testing.T) {
 	}
 	sup := newSupervisor(testSupervisorConfig(sockPath), newFakeLauncher(t, configure, reg))
 
-	err := sup.Run(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // bounded: a regression must fail fast, not hang the package
+	defer cancel()
+	err := sup.Run(ctx)
 	if err == nil {
 		t.Fatal("Run(): want error on hello mismatch, got nil")
 	}
@@ -252,7 +257,9 @@ func TestSupervisor_RefusesOnProtocolMismatch(t *testing.T) {
 	configure := func(fp *fakeProcess) { fp.helloProtocol = 999 }
 	sup := newSupervisor(testSupervisorConfig(sockPath), newFakeLauncher(t, configure, reg))
 
-	err := sup.Run(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // bounded: a regression must fail fast, not hang the package
+	defer cancel()
+	err := sup.Run(ctx)
 	if err == nil {
 		t.Fatal("Run(): want error on protocol mismatch, got nil")
 	}
@@ -268,7 +275,9 @@ func TestSupervisor_RefusesOnFleetNameMismatch(t *testing.T) {
 	configure := func(fp *fakeProcess) { fp.fleet = "a-different-fleet" }
 	sup := newSupervisor(testSupervisorConfig(sockPath), newFakeLauncher(t, configure, reg))
 
-	err := sup.Run(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // bounded: a regression must fail fast, not hang the package
+	defer cancel()
+	err := sup.Run(ctx)
 	if err == nil {
 		t.Fatal("Run(): want error when hello.Fleet does not match the configured fleet, got nil")
 	}
@@ -329,8 +338,12 @@ func TestSupervisor_StopWithoutRun_DoesNotHang(t *testing.T) {
 		t.Fatal("Stop() without a prior Run() did not return within 2s")
 	}
 
-	// A Run() called afterward must see the stop and do nothing.
-	err := sup.Run(context.Background())
+	// A Run() called afterward must see the stop and do nothing. Bounded:
+	// if the stopped check regresses, Run() would otherwise try a real
+	// (unbounded) start attempt against a socket that will never appear.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := sup.Run(ctx)
 	if err != nil {
 		t.Errorf("Run() after Stop() preceded it: %v, want nil", err)
 	}
@@ -392,4 +405,192 @@ func TestPruneRestarts_KeepsAllWithinWindow(t *testing.T) {
 	if len(got) != 2 {
 		t.Errorf("pruneRestarts kept %d entries, want 2 (both within the window)", len(got))
 	}
+}
+
+// TestSupervisor_ConcurrentCallersDoNotChargeQueueTimeAgainstTimeout is
+// item 1: N devices sharing one fleet's connection each queue behind
+// Client.call's serialization. A caller must not be charged for time
+// spent waiting for c.mu: each of 4 concurrent Gets, individually served
+// in 100 ms, against a 250 ms CallTimeout, must all succeed even though
+// the 4th is queued behind roughly 300 ms of the others' round trips.
+// Proves no break and no restart: generation stays 1 throughout.
+func TestSupervisor_ConcurrentCallersDoNotChargeQueueTimeAgainstTimeout(t *testing.T) {
+	reg := &fakeRegistry{}
+	cfg := testSupervisorConfig(filepath.Join(shortSockDir(t), "a.sock"))
+	cfg.CallTimeout = 250 * time.Millisecond
+	configure := func(fp *fakeProcess) { fp.replyDelay = 100 * time.Millisecond }
+	sup := newSupervisor(cfg, newFakeLauncher(t, configure, reg))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go sup.Run(ctx)
+	waitForHealthy(t, sup, true)
+
+	transport := sup.Transport()
+	const n = 4
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := transport.Get(context.Background(), []device.FleetGetItem{{Object: "x", Property: "y"}})
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("caller %d: %v, want nil (queue wait must not consume its CallTimeout budget)", i, err)
+		}
+	}
+	if gen := sup.generation(); gen != 1 {
+		t.Errorf("generation() = %d, want 1 (no restart)", gen)
+	}
+	if !sup.Healthy() {
+		t.Error("Healthy() = false, want true (connection must not have broken)")
+	}
+}
+
+// TestSupervisor_CtxDoneAfterQueueingReturnsCleanly is the other half of
+// item 1: a caller whose own ctx is already done by the time it is served
+// (not c.timeout, an explicit caller deadline that expired while queued)
+// gets its ctx error back, and the connection stays healthy for the
+// caller queued behind it.
+func TestSupervisor_CtxDoneAfterQueueingReturnsCleanly(t *testing.T) {
+	reg := &fakeRegistry{}
+	cfg := testSupervisorConfig(filepath.Join(shortSockDir(t), "a.sock"))
+	configure := func(fp *fakeProcess) { fp.replyDelay = 150 * time.Millisecond }
+	sup := newSupervisor(cfg, newFakeLauncher(t, configure, reg))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go sup.Run(ctx)
+	waitForHealthy(t, sup, true)
+
+	transport := sup.Transport()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Occupies c.mu for ~150ms.
+		_, _ = transport.Get(context.Background(), []device.FleetGetItem{{Object: "x", Property: "y"}})
+	}()
+	time.Sleep(10 * time.Millisecond) // let the first call acquire the lock
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer shortCancel()
+	_, err := transport.Get(shortCtx, []device.FleetGetItem{{Object: "x", Property: "y"}})
+	if err == nil {
+		t.Fatal("Get with a ctx that expires while queued: want error, got nil")
+	}
+
+	wg.Wait()
+	if !sup.Healthy() {
+		t.Error("Healthy() = false after a queued caller's own ctx expired, want true (nothing was written for it)")
+	}
+	if gen := sup.generation(); gen != 1 {
+		t.Errorf("generation() = %d, want 1 (no restart)", gen)
+	}
+}
+
+// diesInstantlyProcess is a sidecarProcess whose Wait() has already fired
+// before it is ever returned: no socket is ever bound at the path
+// waitForSocket polls, so the only way that function can return before
+// the full StartTimeout is by watching proc.Wait() directly.
+type diesInstantlyProcess struct {
+	done chan error
+}
+
+func newDiesInstantlyProcess(cause error) *diesInstantlyProcess {
+	ch := make(chan error, 1)
+	ch <- cause
+	return &diesInstantlyProcess{done: ch}
+}
+
+func (p *diesInstantlyProcess) Pid() int               { return os.Getpid() }
+func (p *diesInstantlyProcess) Wait() <-chan error     { return p.done }
+func (p *diesInstantlyProcess) Signal(os.Signal) error { return nil }
+func (p *diesInstantlyProcess) Kill() error            { return nil }
+
+// TestWaitForSocket_NoticesProcessExitBeforeSocketAppears is the
+// mutation-killing case for the early-exit watch in waitForSocket
+// (`case werr := <-proc.Wait():`): StartTimeout is generous (5s) so a
+// removed watch would make this test wait out the full timeout instead of
+// returning almost immediately.
+func TestWaitForSocket_NoticesProcessExitBeforeSocketAppears(t *testing.T) {
+	cfg := testSupervisorConfig(filepath.Join(shortSockDir(t), "never-appears.sock"))
+	cfg.StartTimeout = 5 * time.Second
+	launch := func(context.Context, []string) (sidecarProcess, error) {
+		return newDiesInstantlyProcess(fmt.Errorf("exited before bind")), nil
+	}
+	sup := newSupervisor(cfg, launch)
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second) // bounded: a regression must fail fast, not hang the package
+	defer cancel()
+	err := sup.Run(ctx)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Run() with a process that exits before binding a socket: want error, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("Run() took %v to notice the process already exited, want well under the 5s StartTimeout", elapsed)
+	}
+}
+
+// TestSupervisor_RefusesOnPeerPIDMismatch is the supervisor-level
+// peer-identity mutation-killing case: TestVerifyPeerPID proves the
+// function alone, but every fake Supervisor dials in other tests reports
+// Pid() == os.Getpid(), the real peer, so nothing at the Supervisor level
+// ever exercised a mismatch before this.
+func TestSupervisor_RefusesOnPeerPIDMismatch(t *testing.T) {
+	reg := &fakeRegistry{}
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	configure := func(fp *fakeProcess) { fp.pidOverride = os.Getpid() + 999999 }
+	sup := newSupervisor(testSupervisorConfig(sockPath), newFakeLauncher(t, configure, reg))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // bounded: a regression must fail fast
+	defer cancel()
+	err := sup.Run(ctx)
+	if err == nil {
+		t.Fatal("Run() with a mismatched peer pid: want error, got nil")
+	}
+	if sup.Healthy() {
+		t.Error("Healthy() after a peer pid mismatch: want false")
+	}
+}
+
+// TestSupervisor_BrokenConnectionCase_NotEquivalentToProcessExit is the
+// mutation-killing case for `case <-client.Broken():` in Run: the fake's
+// stall blocks on killCh (never on the connection), so it cannot exit on
+// its own just because the client gave up. Only Run reacting to
+// client.Broken() and calling killAndReap can end it; TestClient_Call_*
+// prove Broken() fires, this proves Run actually watches it.
+func TestSupervisor_BrokenConnectionCase_NotEquivalentToProcessExit(t *testing.T) {
+	reg := &fakeRegistry{}
+	cfg := testSupervisorConfig(filepath.Join(shortSockDir(t), "a.sock"))
+	cfg.CallTimeout = 100 * time.Millisecond
+	configure := func(fp *fakeProcess) { fp.stallOp = "get" }
+	sup := newSupervisor(cfg, newFakeLauncher(t, configure, reg))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second) // bounded: a regression must fail fast
+	defer cancel()
+	go sup.Run(ctx)
+	waitForHealthy(t, sup, true)
+	fp := reg.list()[0]
+
+	transport := sup.Transport()
+	_, err := transport.Get(context.Background(), []device.FleetGetItem{{Object: "x", Property: "y"}})
+	if err == nil {
+		t.Fatal("Get against a stalled fake that never reads or replies: want error, got nil")
+	}
+
+	// Without Run watching client.Broken(), fp stays alive forever (it
+	// blocks on killCh, not on the connection): this is the assertion a
+	// removed case makes fail (by timing out the whole package, which the
+	// bounded ctx above turns into a fast, readable failure instead).
+	waitForFinished(t, fp)
 }

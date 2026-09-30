@@ -6,7 +6,16 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"time"
 )
+
+// waitDelayAfterExit bounds cmd.Wait() once the process itself has exited:
+// without WaitDelay, Wait also blocks on the Stderr pipe reaching EOF, which
+// a lingering child of the sidecar (holding the fd open after being
+// reparented) can wedge indefinitely even though the sidecar we launched is
+// long gone. At that point Wait is killed and its pipe read abandoned rather
+// than hung forever.
+const waitDelayAfterExit = 5 * time.Second
 
 // sidecarProcess abstracts a running sidecar process so Supervisor's
 // restart, health and stop-by-PID logic is testable without spawning a
@@ -59,6 +68,7 @@ func startExecProcess(_ context.Context, opts execOptions, args []string) (*exec
 	cmd.Dir = opts.Dir
 	cmd.Stderr = opts.Stderr
 	cmd.SysProcAttr = deathSigAttr()
+	cmd.WaitDelay = waitDelayAfterExit
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start sidecar %v: %w", full, err)
 	}
@@ -72,11 +82,13 @@ func (p *execProcess) Wait() <-chan error       { return p.done }
 func (p *execProcess) Signal(s os.Signal) error { return p.cmd.Process.Signal(s) }
 func (p *execProcess) Kill() error              { return p.cmd.Process.Kill() }
 
-// defaultEnv is the sidecar's environment when the caller supplies none:
+// DefaultEnv is the sidecar's environment when the caller supplies none:
 // PATH (to resolve the interpreter's own needs) and HOME (numpy/gridlabd
 // may look for a writable config or cache location there), taken
 // explicitly from this process's environment, not the whole of it.
-func defaultEnv() []string {
+// Exported so a caller building its own ManagerConfig.Env (main.go, to
+// add PYTHONPATH) can extend this rather than reconstruct it.
+func DefaultEnv() []string {
 	var env []string
 	if v, ok := os.LookupEnv("PATH"); ok {
 		env = append(env, "PATH="+v)

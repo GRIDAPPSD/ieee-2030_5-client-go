@@ -313,6 +313,42 @@ def test_get_of_a_complex_valued_property_encodes_as_re_im(tmp_path):
     assert not server_thread.is_alive()
 
 
+def test_get_of_a_nan_valued_property_gets_a_structured_error_and_server_stays_up(tmp_path, monkeypatch):
+    # item 5's NaN decision: gridlabd can return NaN/Infinity for a
+    # divergent or uninitialized solve. protocol.encode_ok's allow_nan=False
+    # makes that a ValueError at encode time rather than a non-standard
+    # NaN/Infinity token on the wire (which Go's encoding/json cannot parse
+    # at all, and which used to fail the whole reply's decode and mark the
+    # CONNECTION broken over one bad value). This proves the ValueError is
+    # caught by the same catch-all as the complex-value TypeError above, and
+    # this one request's error does not take the rest of the connection
+    # down with it.
+    sock_path, server_thread, fleet_data = _start_server(tmp_path, sock_name="k.sock")
+    client = _Client(sock_path)
+    try:
+        real_get = Adapter.get
+
+        def get_returns_nan(self, items):
+            results = real_get(self, items)
+            results[0]["value"] = float("nan")
+            return results
+
+        monkeypatch.setattr(Adapter, "get", get_returns_nan)
+
+        inv = fleet_data["devices"][0]["objects"]["inverter"]
+        reply = client.call("get", {"items": [{"object": inv, "property": "P_Out"}]})
+        assert reply["ok"] is False
+        assert reply["error"]["code"] == "internal_error"
+
+        hello = client.call("hello")
+        assert hello["ok"] is True
+        client.call("shutdown")
+    finally:
+        client.close()
+    server_thread.join(timeout=10)
+    assert not server_thread.is_alive()
+
+
 def test_a_pathologically_nested_line_gets_a_structured_error_and_server_stays_up(tmp_path):
     # json.loads raises RecursionError, not JSONDecodeError, on deeply
     # nested input (probed 2026-09-29: 200000 nested '['); Request.parse

@@ -3,6 +3,7 @@ package device
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,8 +14,12 @@ import (
 // testing FleetDevice without a sidecar: it stores property values in a
 // map, applies StepTo's no-op-when-not-after rule, and can be forced
 // unhealthy to prove FleetDevice refuses rather than fabricating a
-// reading.
+// reading. mu guards every field below so two goroutines driving the same
+// fake (a concurrency test) never race on it; FleetDevice's own locking is
+// what is under test, not this fake's.
 type fakeFleetTransport struct {
+	mu sync.Mutex
+
 	healthy    bool
 	generation uint64
 	values     map[[2]string]float64
@@ -33,6 +38,17 @@ type fakeFleetTransport struct {
 	// setCalls records every Set call, so a test can assert whether a
 	// restart resync happened.
 	setCalls [][]FleetSetItem
+
+	// pauseSetOnP, when nonzero, makes Set() pause (after recording the
+	// call, before returning) the first time it sees an item whose
+	// Property is "P_Out" and whose Value equals pauseSetOnP: it closes
+	// pauseReached, then blocks on pauseResume. This lets a test force a
+	// specific interleaving between a resync's Set and a concurrent
+	// caller's own Set, deterministically, rather than relying on
+	// goroutine scheduling to reproduce a race window.
+	pauseSetOnP  float64
+	pauseReached chan struct{}
+	pauseResume  chan struct{}
 }
 
 func newFakeFleetTransport() *fakeFleetTransport {
@@ -44,12 +60,24 @@ func newFakeFleetTransport() *fakeFleetTransport {
 	}
 }
 
-func (f *fakeFleetTransport) Healthy() bool      { return f.healthy }
-func (f *fakeFleetTransport) Generation() uint64 { return f.generation }
+func (f *fakeFleetTransport) Healthy() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.healthy
+}
+
+func (f *fakeFleetTransport) Generation() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.generation
+}
 
 func (f *fakeFleetTransport) Set(_ context.Context, items []FleetSetItem) ([]float64, error) {
+	f.mu.Lock()
 	if f.setErr != nil {
-		return nil, f.setErr
+		err := f.setErr
+		f.mu.Unlock()
+		return nil, err
 	}
 	f.setCalls = append(f.setCalls, items)
 	out := make([]float64, len(items))
@@ -57,10 +85,24 @@ func (f *fakeFleetTransport) Set(_ context.Context, items []FleetSetItem) ([]flo
 		f.values[[2]string{it.Object, it.Property}] = it.Value
 		out[i] = it.Value
 	}
+	pauseP, reached, resume := f.pauseSetOnP, f.pauseReached, f.pauseResume
+	f.mu.Unlock()
+
+	if pauseP != 0 {
+		for _, it := range items {
+			if it.Property == "P_Out" && it.Value == pauseP {
+				close(reached)
+				<-resume
+				break
+			}
+		}
+	}
 	return out, nil
 }
 
 func (f *fakeFleetTransport) StepTo(_ context.Context, target time.Time) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if target.After(f.modelTime) {
 		f.modelTime = target
 	}
@@ -68,6 +110,8 @@ func (f *fakeFleetTransport) StepTo(_ context.Context, target time.Time) (time.T
 }
 
 func (f *fakeFleetTransport) Get(_ context.Context, items []FleetGetItem) ([]FleetValue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -90,8 +134,25 @@ func (f *fakeFleetTransport) Get(_ context.Context, items []FleetGetItem) ([]Fle
 // (every property back to the template's defaults) and the generation the
 // fleet is on advances.
 func (f *fakeFleetTransport) resetModel() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.values = map[[2]string]float64{}
 	f.generation++
+}
+
+// valueOf reads a stored property directly, for test assertions, without
+// going through Get (which may be overridden).
+func (f *fakeFleetTransport) valueOf(object, property string) float64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.values[[2]string{object, property}]
+}
+
+// setCallCount reads the number of Set calls made so far.
+func (f *fakeFleetTransport) setCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.setCalls)
 }
 
 func fixedClock(t time.Time) func() time.Time {
@@ -150,6 +211,33 @@ func TestFleetDevice_ApplySetpoint_ResultComesFromGetNotEcho(t *testing.T) {
 	}
 }
 
+// TestFleetDevice_ApplySetpoint_TimeComesFromStepToNotClock is the
+// mutation-killing case for InverterState.Time: the test above sets the
+// clock to a value that is AFTER the model's current time, so StepTo moves
+// the model to exactly that value and returns it, leaving d.now() and
+// StepTo's return indistinguishable. Here the model is already ahead of
+// the clock, so StepTo is a no-op that returns the model's own (later, and
+// distinct) time; the assertion only holds if ApplySetpoint uses that
+// returned value rather than d.now() directly.
+func TestFleetDevice_ApplySetpoint_TimeComesFromStepToNotClock(t *testing.T) {
+	transport := newFakeFleetTransport()
+	laterModelTime := time.Date(2020, 1, 1, 0, 5, 0, 0, time.UTC)
+	transport.modelTime = laterModelTime
+	clockTime := time.Date(2020, 1, 1, 0, 1, 0, 0, time.UTC) // before the model's current time
+	dev, err := NewFleetDevice(transport, "LFDI1", "inv0", "meter0", fixedClock(clockTime))
+	if err != nil {
+		t.Fatalf("NewFleetDevice: %v", err)
+	}
+
+	state, err := dev.ApplySetpoint(context.Background(), inverter.ControlOutputs{ActivePowerW: 100})
+	if err != nil {
+		t.Fatalf("ApplySetpoint: %v", err)
+	}
+	if !state.Time.Equal(laterModelTime) {
+		t.Errorf("Time = %v, want %v (StepTo's returned model time; clockTime is before it, so StepTo is a no-op and the two are distinct)", state.Time, laterModelTime)
+	}
+}
+
 // TestFleetDevice_ReadState_GridComesFromSimulator is the mutation-killing
 // case for the constant-Grid bug: the fake reports voltage and frequency
 // values that are deliberately NOT 1.0 pu / 60 Hz, so a hardcoded constant
@@ -181,11 +269,14 @@ func TestFleetDevice_ReadState_GridComesFromSimulator(t *testing.T) {
 	}
 }
 
-// TestFleetDevice_ReadState_RejectsComplexVoltageMismodel proves Magnitude
-// is used for voltage (a phasor), not Float64: a complex reading with a
-// nonzero angle must not be refused the way a genuinely scalar property
-// with a nonzero imaginary part would be.
-func TestFleetDevice_ReadState_RejectsComplexVoltageMismodel(t *testing.T) {
+// TestFleetDevice_ReadState_AcceptsComplexVoltageViaMagnitude proves
+// Magnitude is used for voltage (a phasor), not Float64: a complex reading
+// with a nonzero angle is accepted and converted by magnitude, not refused
+// the way a genuinely scalar property with a nonzero imaginary part would
+// be. Renamed from ...RejectsComplexVoltageMismodel, whose own body always
+// asserted success: the old name described the mismodel this test guards
+// against, not the outcome it checks.
+func TestFleetDevice_ReadState_AcceptsComplexVoltageViaMagnitude(t *testing.T) {
 	transport := newFakeFleetTransport()
 	transport.values[[2]string{"inv0", "rated_power"}] = 1000
 	transport.values[[2]string{"meter0", "nominal_voltage"}] = 120
@@ -204,6 +295,23 @@ func TestFleetDevice_ReadState_RejectsComplexVoltageMismodel(t *testing.T) {
 	wantVoltsPU := 127.27922061357855 / 120
 	if diff := state.Grid.VoltsPU - wantVoltsPU; diff > 1e-9 || diff < -1e-9 {
 		t.Errorf("VoltsPU = %v, want %v (magnitude of 90+90i over nominal 120)", state.Grid.VoltsPU, wantVoltsPU)
+	}
+}
+
+// TestFleetDevice_ReadState_RefusesZeroNominalVoltage proves ReadState
+// refuses rather than dividing by zero (producing +Inf/NaN) when the
+// meter's nominal_voltage reads 0: a misconfigured or not-yet-initialized
+// meter object must surface as an error, never a fabricated or
+// infinite VoltsPU.
+func TestFleetDevice_ReadState_RefusesZeroNominalVoltage(t *testing.T) {
+	transport := newFakeFleetTransport()
+	// nominal_voltage is left at the map's zero value (0) deliberately.
+	dev, err := NewFleetDevice(transport, "LFDI1", "inv0", "meter0", nil)
+	if err != nil {
+		t.Fatalf("NewFleetDevice: %v", err)
+	}
+	if _, err := dev.ReadState(context.Background()); err == nil {
+		t.Fatal("ReadState with nominal_voltage 0: want error, got nil")
 	}
 }
 
@@ -275,6 +383,91 @@ func TestFleetDevice_Restart_ReappliesLastSetpoint(t *testing.T) {
 	if len(transport.setCalls) != setCallsAfterFirstResync {
 		t.Errorf("ReadState on an unchanged generation issued %d more Set call(s), want 0",
 			len(transport.setCalls)-setCallsAfterFirstResync)
+	}
+}
+
+// TestFleetDevice_ConcurrentResyncDoesNotClobberNewerSetpoint is the
+// mutation-killing case for a resync and a newer ApplySetpoint racing on
+// the same device: a resync re-applies the LAST setpoint recorded before it
+// started, so if that resync's own Set call is allowed to land on the wire
+// after a concurrent, newer ApplySetpoint's Set call, the older value wins
+// and the newer commanded setpoint is silently lost. d.mu must serialize
+// the two across their full Set calls, not just around the struct field
+// reads, or this reproduces.
+//
+// The fake's pauseSetOnP forces the interleaving deterministically: a
+// ReadState goroutine is paused mid-resync, inside its Set(200) call,
+// holding FleetDevice's lock (proved below by observing ApplySetpoint(300)
+// has not yet reached the wire while paused). Releasing the pause lets the
+// resync finish; ApplySetpoint(300) must then run strictly after it, so the
+// final model value is 300, never the resynced 200.
+func TestFleetDevice_ConcurrentResyncDoesNotClobberNewerSetpoint(t *testing.T) {
+	transport := newFakeFleetTransport()
+	transport.values[[2]string{"meter0", "nominal_voltage"}] = 120
+	now := time.Date(2020, 1, 1, 0, 5, 0, 0, time.UTC)
+	dev, err := NewFleetDevice(transport, "LFDI1", "inv0", "meter0", fixedClock(now))
+	if err != nil {
+		t.Fatalf("NewFleetDevice: %v", err)
+	}
+
+	// Establish the "old" setpoint that the restart resync will re-apply.
+	if _, err := dev.ApplySetpoint(context.Background(), inverter.ControlOutputs{ActivePowerW: 200}); err != nil {
+		t.Fatalf("ApplySetpoint(200): %v", err)
+	}
+	transport.resetModel()
+	transport.values[[2]string{"meter0", "nominal_voltage"}] = 120
+
+	// setCalls is cumulative for the whole fake, and the setup call above
+	// already added one; baseline here so the "while paused" assertion
+	// below counts only what happens after this point.
+	baseline := transport.setCallCount()
+
+	transport.mu.Lock()
+	transport.pauseSetOnP = 200
+	transport.pauseReached = make(chan struct{})
+	transport.pauseResume = make(chan struct{})
+	transport.mu.Unlock()
+
+	resyncDone := make(chan error, 1)
+	go func() {
+		_, err := dev.ReadState(context.Background())
+		resyncDone <- err
+	}()
+
+	select {
+	case <-transport.pauseReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("resync's Set(200) never reached the pause point")
+	}
+
+	// ApplySetpoint(300) must be blocked on d.mu, since ReadState's resync
+	// holds it across the paused Set call: give it a moment to prove it has
+	// NOT completed (and so cannot yet have written 300 to the wire).
+	applyDone := make(chan error, 1)
+	go func() {
+		_, err := dev.ApplySetpoint(context.Background(), inverter.ControlOutputs{ActivePowerW: 300})
+		applyDone <- err
+	}()
+	select {
+	case <-applyDone:
+		t.Fatal("ApplySetpoint(300) completed while the resync was still paused: d.mu did not serialize them")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := transport.setCallCount() - baseline; got != 1 {
+		t.Fatalf("Set calls since baseline while paused = %d, want 1 (only the resync's own call so far)", got)
+	}
+
+	close(transport.pauseResume)
+
+	if err := <-resyncDone; err != nil {
+		t.Fatalf("ReadState (resync): %v", err)
+	}
+	if err := <-applyDone; err != nil {
+		t.Fatalf("ApplySetpoint(300): %v", err)
+	}
+
+	if got := transport.valueOf("inv0", "P_Out"); got != 300 {
+		t.Errorf("final P_Out = %v, want 300 (the newer setpoint, not the resynced 200)", got)
 	}
 }
 

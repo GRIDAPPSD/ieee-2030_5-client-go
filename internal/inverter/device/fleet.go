@@ -137,26 +137,35 @@ func NewFleetDevice(transport FleetTransport, lfdi, inverterObj, meterObj string
 // LFDI returns the managed device's LFDI, as configured.
 func (d *FleetDevice) LFDI() string { return d.lfdi }
 
-// resyncAfterRestart re-applies the last commanded setpoint if the fleet's
-// sidecar has restarted since this device last talked to it. A restart
-// reloads the GLM from scratch (P_Out back to the template's 0), and
-// without this a caller would see healthy readings, or a healthy next
+// resyncAfterRestartLocked re-applies the last commanded setpoint if the
+// fleet's sidecar has restarted since this device last talked to it. A
+// restart reloads the GLM from scratch (P_Out back to the template's 0),
+// and without this a caller would see healthy readings, or a healthy next
 // ApplySetpoint, from a silently reset model as if the last commanded
 // setpoint still held. Chosen over reporting the reset as an error: an
 // aggregator's managed DER should not silently stop contributing its
 // committed power because its physics process happened to restart.
-func (d *FleetDevice) resyncAfterRestart(ctx context.Context) error {
+//
+// Must be called with d.mu held, and the caller must keep holding it for
+// its own subsequent mutating work (its own Set, if any) until that work
+// and any lastControls/lastGeneration update are done. Releasing the lock
+// between this resync's read of lastControls and its own Set call used to
+// let a concurrent resync (from another goroutine calling ReadState or
+// ApplySetpoint on the same device) interleave its own Set with this one:
+// whichever Set reached the wire last won, with no guarantee that was the
+// newer setpoint. Holding one lock across the whole operation, on every
+// caller, removes that window: only one mutating operation on this device
+// is ever in flight, so a resync can never be caught reading a setpoint
+// that is about to be superseded by a Set already past the point of no
+// return.
+func (d *FleetDevice) resyncAfterRestartLocked(ctx context.Context) error {
 	gen := d.transport.Generation()
-	d.mu.Lock()
 	stale := gen != d.lastGeneration
-	controls := d.lastControls
-	d.mu.Unlock()
-	if !stale || controls == nil {
-		d.mu.Lock()
+	if !stale || d.lastControls == nil {
 		d.lastGeneration = gen
-		d.mu.Unlock()
 		return nil
 	}
+	controls := *d.lastControls
 	if _, err := d.transport.Set(ctx, []FleetSetItem{
 		{Object: d.inverterObj, Property: "P_Out", Value: controls.ActivePowerW},
 		{Object: d.inverterObj, Property: "Q_Out", Value: controls.ReactivePowerVAr},
@@ -166,9 +175,7 @@ func (d *FleetDevice) resyncAfterRestart(ctx context.Context) error {
 	if _, err := d.transport.StepTo(ctx, d.now()); err != nil {
 		return fmt.Errorf("fleet device %s: re-apply setpoint after restart: step_to: %w", d.lfdi, err)
 	}
-	d.mu.Lock()
 	d.lastGeneration = gen
-	d.mu.Unlock()
 	return nil
 }
 
@@ -179,7 +186,9 @@ func (d *FleetDevice) ReadState(ctx context.Context) (StateReading, error) {
 	if !d.transport.Healthy() {
 		return StateReading{}, fmt.Errorf("fleet device %s: sidecar is down", d.lfdi)
 	}
-	if err := d.resyncAfterRestart(ctx); err != nil {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.resyncAfterRestartLocked(ctx); err != nil {
 		return StateReading{}, err
 	}
 	vals, err := d.transport.Get(ctx, []FleetGetItem{
@@ -229,7 +238,9 @@ func (d *FleetDevice) ApplySetpoint(ctx context.Context, controls inverter.Contr
 	if !d.transport.Healthy() {
 		return inverter.InverterState{}, fmt.Errorf("fleet device %s: sidecar is down", d.lfdi)
 	}
-	if err := d.resyncAfterRestart(ctx); err != nil {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.resyncAfterRestartLocked(ctx); err != nil {
 		return inverter.InverterState{}, err
 	}
 	if _, err := d.transport.Set(ctx, []FleetSetItem{
@@ -262,9 +273,7 @@ func (d *FleetDevice) ApplySetpoint(ctx context.Context, controls inverter.Contr
 	}
 
 	cp := controls
-	d.mu.Lock()
 	d.lastControls = &cp
-	d.mu.Unlock()
 
 	return inverter.InverterState{
 		ActivePowerW:     activeW,

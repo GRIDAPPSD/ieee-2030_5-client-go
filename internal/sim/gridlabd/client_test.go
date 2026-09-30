@@ -155,8 +155,13 @@ func TestClient_Shutdown_ClosesConnection(t *testing.T) {
 func TestClient_Call_BoundedEvenWithNoDeadlineCtx(t *testing.T) {
 	client, _ := dialFakeWithTimeout(t, func(fp *fakeProcess) { fp.stallOp = "hello" }, 150*time.Millisecond)
 
+	// This call is deliberately given context.Background(): the whole
+	// point is that c.timeout alone must bound it. If that regresses,
+	// the call blocks forever; helloBounded runs it in a goroutine under
+	// an outer 5s guard so the failure is a fast, readable test failure
+	// rather than a 10-minute package-wide hang.
 	start := time.Now()
-	_, err := client.Hello(context.Background())
+	_, err := helloBounded(t, client, 5*time.Second)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("Hello against a sidecar that never answers, with context.Background(): want error, got nil")
@@ -166,13 +171,37 @@ func TestClient_Call_BoundedEvenWithNoDeadlineCtx(t *testing.T) {
 	}
 
 	start2 := time.Now()
-	_, err2 := client.Hello(context.Background())
+	_, err2 := helloBounded(t, client, 5*time.Second)
 	elapsed2 := time.Since(start2)
 	if !errors.Is(err2, ErrConnectionBroken) {
 		t.Errorf("Hello after a timed-out call: err = %v, want ErrConnectionBroken", err2)
 	}
 	if elapsed2 > 50*time.Millisecond {
 		t.Errorf("Hello after the connection was already broken took %v, want near-instant (fast path)", elapsed2)
+	}
+}
+
+// helloBounded calls client.Hello(context.Background()), which is the
+// scenario under test (see callers), but fails the test after guard
+// instead of hanging the whole package if the timeout mechanism under
+// test regresses.
+func helloBounded(t *testing.T, client *Client, guard time.Duration) (HelloResult, error) {
+	t.Helper()
+	type result struct {
+		res HelloResult
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		res, err := client.Hello(context.Background())
+		done <- result{res, err}
+	}()
+	select {
+	case r := <-done:
+		return r.res, r.err
+	case <-time.After(guard):
+		t.Fatalf("Hello(context.Background()) did not return within %v: the c.timeout fallback has likely regressed", guard)
+		return HelloResult{}, nil
 	}
 }
 
@@ -216,6 +245,46 @@ func TestClient_Get_RejectsReorderedReply(t *testing.T) {
 	if _, err := client.Get(ctx, []GetItem{{Object: "a", Property: "x"}, {Object: "b", Property: "y"}}); err == nil {
 		t.Fatal("Get with a reordered reply: want error, got nil")
 	}
+}
+
+// TestClient_Set_RejectsShortReply and TestClient_Set_RejectsReorderedReply
+// are Set's own versions of the Get tests above: Set decodes and validates
+// its reply the same way Get does (both go through
+// validateReplyMatchesRequest), and each path needs its own proof, since a
+// regression specific to Set's call site would not be caught by Get's.
+func TestClient_Set_RejectsShortReply(t *testing.T) {
+	client, _ := dialFake(t, func(fp *fakeProcess) { fp.shortReplyBy = 1 })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	items := []SetItem{
+		{Object: "a", Property: "x", Value: mustFloatValue(t, 1)},
+		{Object: "b", Property: "y", Value: mustFloatValue(t, 2)},
+	}
+	if _, err := client.Set(ctx, items); err == nil {
+		t.Fatal("Set with a short reply: want error, got nil")
+	}
+}
+
+func TestClient_Set_RejectsReorderedReply(t *testing.T) {
+	client, _ := dialFake(t, func(fp *fakeProcess) { fp.reorderReply = true })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	items := []SetItem{
+		{Object: "a", Property: "x", Value: mustFloatValue(t, 1)},
+		{Object: "b", Property: "y", Value: mustFloatValue(t, 2)},
+	}
+	if _, err := client.Set(ctx, items); err == nil {
+		t.Fatal("Set with a reordered reply: want error, got nil")
+	}
+}
+
+func mustFloatValue(t *testing.T, f float64) Value {
+	t.Helper()
+	v, err := FloatValue(f)
+	if err != nil {
+		t.Fatalf("FloatValue(%v): %v", f, err)
+	}
+	return v
 }
 
 // TestClient_WorkerDead_MapsToErrWorkerDead is the mutation-killing case

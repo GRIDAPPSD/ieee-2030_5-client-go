@@ -219,3 +219,74 @@ func TestPrepareRunDir_AcceptsExistingPrivateDir(t *testing.T) {
 		t.Errorf("prepareRunDir(existing 0700 dir): %v", err)
 	}
 }
+
+// TestPrepareRunDir_RefusesGroupWritableOnly is the mutation-killing case
+// for &0o022 loosened to &0o002: 0750 (group-readable and -executable,
+// NOT group-writable) must pass, and 0770 (group-writable, not
+// world-writable) must be refused on the group bit alone.
+func TestPrepareRunDir_RefusesGroupWritableOnly(t *testing.T) {
+	dir := t.TempDir()
+	readOnlyGroup := filepath.Join(dir, "ro-group")
+	if err := os.Mkdir(readOnlyGroup, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(readOnlyGroup, 0o750); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if err := prepareRunDir(readOnlyGroup); err != nil {
+		t.Errorf("prepareRunDir(0750): %v, want nil (group-writable bit is not set)", err)
+	}
+
+	groupWritable := filepath.Join(dir, "rw-group")
+	if err := os.Mkdir(groupWritable, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(groupWritable, 0o770); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if err := prepareRunDir(groupWritable); err == nil {
+		t.Error("prepareRunDir(0770): want error, got nil (group-writable, not just world-writable)")
+	}
+}
+
+// TestNewManager_AggregatorRoleNoFleetFiles_IsOrdinaryRun is the
+// regression item 3 names: --client-role aggregator with no --fleet-file
+// is an existing, valid invocation (#71) and must not now require RunDir.
+func TestNewManager_AggregatorRoleNoFleetFiles_IsOrdinaryRun(t *testing.T) {
+	m, err := NewManager(ManagerConfig{Role: AggregatorRole})
+	if err != nil {
+		t.Fatalf("NewManager(aggregator role, no fleet files, no RunDir): %v, want nil", err)
+	}
+	if m != nil {
+		t.Errorf("NewManager(aggregator role, no fleet files) = %+v, want nil", m)
+	}
+}
+
+func TestNewManager_RunDirRequiredWithFleetFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFleetFile(t, dir, validFleetFile())
+	_, err := NewManager(ManagerConfig{
+		Role:       AggregatorRole,
+		FleetFiles: []string{path},
+		// RunDir deliberately omitted.
+	})
+	if err == nil {
+		t.Fatal("NewManager(fleet file, no RunDir): want error, got nil")
+	}
+}
+
+func TestNewManager_NoInverterObjectMappedRefuses(t *testing.T) {
+	dir := t.TempDir()
+	ff := validFleetFile()
+	devices := ff["devices"].([]map[string]any)
+	devices[0]["objects"] = map[string]string{"battery": "probe_bat0"} // no "inverter" key
+	path := writeFleetFile(t, dir, ff)
+
+	if _, err := NewManager(ManagerConfig{
+		Role:       AggregatorRole,
+		FleetFiles: []string{path},
+		RunDir:     dir,
+	}); err == nil {
+		t.Fatal("NewManager(device with no inverter object): want error, got nil")
+	}
+}

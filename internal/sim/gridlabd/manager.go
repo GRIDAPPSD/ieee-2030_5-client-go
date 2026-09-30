@@ -32,8 +32,16 @@ const defaultFleetMeterObject = "fleet_meter"
 type ManagerConfig struct {
 	Role       string   // the process's client role, e.g. "der" or "aggregator"
 	FleetFiles []string // one fleet JSON per fleet
-	RunDir     string   // directory for per-fleet sockets; never /tmp
+	RunDir     string   // directory for per-fleet sockets; required only when FleetFiles is non-empty; never /tmp
 	Command    []string // sidecar command template; nil uses the default
+	// Env is the sidecar's environment, passed to every fleet's
+	// Supervisor; nil defaults to DefaultEnv() (PATH and HOME only). A
+	// caller whose gldsidecar package is not installed (not on the
+	// default PATH-resolved interpreter's own site-packages) must add
+	// PYTHONPATH here: this package cannot discover sim/gridlabd's
+	// location on its own, since a deployed binary need not be
+	// colocated with that source tree.
+	Env []string
 
 	StartTimeout, CallTimeout, StopGrace  time.Duration
 	BackoffMin, BackoffMax, RestartWindow time.Duration
@@ -67,6 +75,11 @@ type Manager struct {
 //   - with no fleet files, returns (nil, nil): an ordinary DER client run.
 //   - with one or more fleet files, returns ErrNotAggregatorRole and
 //     builds nothing.
+//
+// In the aggregator role with no fleet files, also returns (nil, nil):
+// --client-role aggregator with no --fleet-file is a valid, existing
+// invocation (#71) that must keep working unchanged, and RunDir is only
+// ever needed to hold a fleet's socket.
 func NewManager(cfg ManagerConfig) (*Manager, error) {
 	if cfg.Role != AggregatorRole {
 		if len(cfg.FleetFiles) == 0 {
@@ -74,8 +87,11 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 		}
 		return nil, fmt.Errorf("%w: role %q was given %d fleet file(s)", ErrNotAggregatorRole, cfg.Role, len(cfg.FleetFiles))
 	}
+	if len(cfg.FleetFiles) == 0 {
+		return nil, nil
+	}
 	if cfg.RunDir == "" {
-		return nil, fmt.Errorf("gridlabd: RunDir is required in the aggregator role")
+		return nil, fmt.Errorf("gridlabd: RunDir is required when FleetFiles is non-empty")
 	}
 	if err := prepareRunDir(cfg.RunDir); err != nil {
 		return nil, err
@@ -114,6 +130,7 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 			SocketPath:    filepath.Join(cfg.RunDir, ff.Fleet+".sock"),
 			FleetFilePath: ff.path, // absolute; the sidecar's --fleet-file argument
 			Command:       cfg.Command,
+			Env:           cfg.Env,
 			Dir:           cfg.RunDir,
 			StartTimeout:  cfg.StartTimeout,
 			CallTimeout:   cfg.CallTimeout,
@@ -168,6 +185,13 @@ func prepareRunDir(dir string) error {
 	}
 	if info.Mode().Perm()&0o022 != 0 {
 		return fmt.Errorf("run dir %s: group- or world-writable (mode %o), refusing", dir, info.Mode().Perm())
+	}
+	owned, err := ownedByCurrentUser(info)
+	if err != nil {
+		return fmt.Errorf("run dir %s: %w", dir, err)
+	}
+	if !owned {
+		return fmt.Errorf("run dir %s: not owned by the current user, refusing", dir)
 	}
 	return nil
 }

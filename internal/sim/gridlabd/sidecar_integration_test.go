@@ -188,7 +188,7 @@ func TestSidecarIntegration_RealGridlabd(t *testing.T) {
 	// requirements.lock). -P (below) keeps the working directory and the
 	// script's own directory off sys.path regardless; PYTHONPATH is a
 	// separate, explicit mechanism -P does not touch.
-	env := append(defaultEnv(), "PYTHONPATH="+filepath.Join(repoRoot(t), "sim", "gridlabd"))
+	env := append(DefaultEnv(), "PYTHONPATH="+filepath.Join(repoRoot(t), "sim", "gridlabd"))
 	cfg := SupervisorConfig{
 		Fleet:         "probe",
 		SocketPath:    filepath.Join(sockDir, "probe.sock"),

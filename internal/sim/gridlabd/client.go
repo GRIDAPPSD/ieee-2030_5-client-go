@@ -97,6 +97,32 @@ type callResult struct {
 	err  error
 }
 
+// objProp is one (object, property) pair, used only to compare a reply's
+// per-item identity against the request's, in order: Set and Get each build
+// a want and a got slice of these from their own typed items and results.
+type objProp struct {
+	Object   string
+	Property string
+}
+
+// validateReplyMatchesRequest checks a decoded reply's items against the
+// request's, in order: the count must match and no item may be reordered or
+// substituted. Set and Get both enforce this identically, since either
+// reply is never read positionally and a short, long or reordered one is
+// always an error, never a silent partial result.
+func validateReplyMatchesRequest(op string, want, got []objProp) error {
+	if len(got) != len(want) {
+		return fmt.Errorf("%s: sidecar replied with %d results for %d items", op, len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return fmt.Errorf("%s: result %d is %s.%s, want %s.%s (reordered or mismatched reply)",
+				op, i, got[i].Object, got[i].Property, want[i].Object, want[i].Property)
+		}
+	}
+	return nil
+}
+
 // call sends one request and returns its result, or an error: *RemoteError
 // for an ordinary refusal (the wire stays in sync: one request got one
 // reply), or one wrapping ErrConnectionBroken or ErrWorkerDead when it does
@@ -106,17 +132,23 @@ type callResult struct {
 // (c.timeout), and ctx.Done() is honored directly by running the round
 // trip in a goroutine and selecting on it: SetDeadline alone only reacts
 // to wall-clock expiry, never to an explicit cancel.
+//
+// The protocol serializes every call behind c.mu (one request in flight
+// per socket), so a caller can queue behind another call already in
+// progress. Two things follow, and both matter for N devices sharing one
+// fleet's connection: c.timeout is applied only after the lock is held,
+// so time spent queued is never charged against this call's own budget;
+// and ctx is checked again right after the lock, so a caller whose own
+// ctx expired while queued is answered with its ctx error and nothing
+// else, never touching the wire or marking the connection broken. Only a
+// timeout or cancellation reached DURING this call's own round trip (the
+// select below) risks a reply still in flight and must break the
+// connection.
 func (c *Client) call(ctx context.Context, op string, args map[string]any) (json.RawMessage, error) {
 	select {
 	case <-c.broken:
 		return nil, fmt.Errorf("%s: %w", op, ErrConnectionBroken)
 	default:
-	}
-
-	if c.timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.timeout)
-		defer cancel()
 	}
 
 	c.mu.Lock()
@@ -126,6 +158,19 @@ func (c *Client) call(ctx context.Context, op string, args map[string]any) (json
 	case <-c.broken:
 		return nil, fmt.Errorf("%s: %w", op, ErrConnectionBroken)
 	default:
+	}
+
+	// Answer a caller whose own ctx is already done now, before this call
+	// has written anything: the connection stays exactly as it was, so
+	// there is nothing to break.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if c.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.timeout)
+		defer cancel()
 	}
 
 	id := c.nextID
@@ -258,15 +303,19 @@ func (c *Client) Set(ctx context.Context, items []SetItem) ([]SetResult, error) 
 	if err := json.Unmarshal(raw, &results); err != nil {
 		return nil, fmt.Errorf("decode set result: %w", err)
 	}
-	if len(results) != len(items) {
-		return nil, fmt.Errorf("set: sidecar replied with %d results for %d items", len(results), len(items))
+	want := make([]objProp, len(items))
+	for i, it := range items {
+		want[i] = objProp{it.Object, it.Property}
+	}
+	got := make([]objProp, len(results))
+	for i, r := range results {
+		got[i] = objProp{r.Object, r.Property}
+	}
+	if err := validateReplyMatchesRequest("set", want, got); err != nil {
+		return nil, err
 	}
 	out := make([]SetResult, len(results))
 	for i, r := range results {
-		if r.Object != items[i].Object || r.Property != items[i].Property {
-			return nil, fmt.Errorf("set: result %d is %s.%s, want %s.%s (reordered or mismatched reply)",
-				i, r.Object, r.Property, items[i].Object, items[i].Property)
-		}
 		out[i] = SetResult{Object: r.Object, Property: r.Property, Value: r.Value}
 	}
 	return out, nil
@@ -311,15 +360,19 @@ func (c *Client) Get(ctx context.Context, items []GetItem) ([]GetResult, error) 
 	if err := json.Unmarshal(raw, &results); err != nil {
 		return nil, fmt.Errorf("decode get result: %w", err)
 	}
-	if len(results) != len(items) {
-		return nil, fmt.Errorf("get: sidecar replied with %d results for %d items", len(results), len(items))
+	want := make([]objProp, len(items))
+	for i, it := range items {
+		want[i] = objProp{it.Object, it.Property}
+	}
+	got := make([]objProp, len(results))
+	for i, r := range results {
+		got[i] = objProp{r.Object, r.Property}
+	}
+	if err := validateReplyMatchesRequest("get", want, got); err != nil {
+		return nil, err
 	}
 	out := make([]GetResult, len(results))
 	for i, r := range results {
-		if r.Object != items[i].Object || r.Property != items[i].Property {
-			return nil, fmt.Errorf("get: result %d is %s.%s, want %s.%s (reordered or mismatched reply)",
-				i, r.Object, r.Property, items[i].Object, items[i].Property)
-		}
 		out[i] = GetResult{Object: r.Object, Property: r.Property, Value: r.Value, ModelTime: r.Time}
 	}
 	return out, nil

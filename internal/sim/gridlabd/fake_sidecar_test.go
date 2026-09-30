@@ -50,6 +50,11 @@ type fakeProcess struct {
 	// in waitForSocket to accept it, the same as it would a real child.
 	instanceID int
 	pid        int
+	// pidOverride, when nonzero, makes Pid() answer this instead of
+	// os.Getpid(), so a test can present a peer whose real OS-level
+	// identity (os.Getpid(), what SO_PEERCRED actually reports) does not
+	// match what Supervisor was told to expect.
+	pidOverride int
 
 	mu      sync.Mutex
 	ln      net.Listener
@@ -82,15 +87,26 @@ type fakeProcess struct {
 	workerDeadOn string
 
 	// stallOp, when set, makes the fake never reply to that op: the
-	// handler blocks on reading the connection (which the client never
-	// writes more to while awaiting a reply) until the client gives up
-	// and closes it, simulating an unresponsive sidecar.
+	// handler blocks on killCh, which only die() (Kill, or Signal not
+	// ignored) closes. It deliberately does NOT block on reading the
+	// connection: a stall that unblocks when the CLIENT gives up and
+	// closes its own end would end this fake via that disconnect alone,
+	// which is indistinguishable from Supervisor's proc.Wait() path and
+	// would let a test pass whether or not the Client.Broken() case in
+	// Run is even there.
 	stallOp string
-	// shortReplyBy truncates a "get" reply by this many items.
+	// replyDelay, when nonzero, sleeps before every reply (any op), so a
+	// test can prove several concurrent callers queued on one socket each
+	// get their own timeout budget starting when they are served, not
+	// when they first called.
+	replyDelay time.Duration
+	// shortReplyBy truncates a "get" or "set" reply by this many items.
 	shortReplyBy int
-	// reorderReply swaps the first two items of a "get" reply.
+	// reorderReply swaps the first two items of a "get" or "set" reply.
 	reorderReply bool
 
+	killCh   chan struct{}
+	killOnce sync.Once
 	done     chan error
 	doneOnce sync.Once
 	finished bool
@@ -145,6 +161,7 @@ func newFakeLauncher(t *testing.T, configure func(*fakeProcess), reg *fakeRegist
 			ln:         ln,
 			objects:    map[[2]string]float64{},
 			model:      time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+			killCh:     make(chan struct{}),
 			done:       make(chan error, 1),
 			fleet:      fakeFleetName,
 		}
@@ -157,7 +174,12 @@ func newFakeLauncher(t *testing.T, configure func(*fakeProcess), reg *fakeRegist
 	}
 }
 
-func (fp *fakeProcess) Pid() int           { return fp.pid }
+func (fp *fakeProcess) Pid() int {
+	if fp.pidOverride != 0 {
+		return fp.pidOverride
+	}
+	return fp.pid
+}
 func (fp *fakeProcess) InstanceID() int    { return fp.instanceID }
 func (fp *fakeProcess) Wait() <-chan error { return fp.done }
 
@@ -200,6 +222,7 @@ func (fp *fakeProcess) SimulateCrash() {
 }
 
 func (fp *fakeProcess) die(err error) {
+	fp.killOnce.Do(func() { close(fp.killCh) })
 	fp.mu.Lock()
 	if fp.conn != nil {
 		_ = fp.conn.Close()
@@ -248,13 +271,14 @@ func (fp *fakeProcess) serve() {
 			continue
 		}
 		if fp.stallOp != "" && req.Op == fp.stallOp {
-			// Block on a read the client never satisfies (it is waiting on
-			// its own read for our reply), until the client gives up and
-			// closes the connection.
-			buf := make([]byte, 1)
-			_, _ = conn.Read(buf)
-			fp.finish(nil)
+			// Block on killCh, not on reading the connection: this must
+			// NOT unblock just because the client gave up and closed its
+			// own end (see the stallOp field comment for why).
+			<-fp.killCh
 			return
+		}
+		if fp.replyDelay > 0 {
+			time.Sleep(fp.replyDelay)
 		}
 		reply, stop := fp.handle(req)
 		b, _ := json.Marshal(reply)
@@ -305,6 +329,12 @@ func (fp *fakeProcess) handle(req wireRequest) (wireReply, bool) {
 			val, _ := m["value"].(float64)
 			fp.objects[[2]string{obj, prop}] = val
 			out = append(out, map[string]any{"object": obj, "property": prop, "value": val})
+		}
+		if fp.reorderReply && len(out) >= 2 {
+			out[0], out[1] = out[1], out[0]
+		}
+		if fp.shortReplyBy > 0 && fp.shortReplyBy <= len(out) {
+			out = out[:len(out)-fp.shortReplyBy]
 		}
 		result, _ := json.Marshal(out)
 		return wireReply{ID: req.ID, OK: true, Result: result}, false

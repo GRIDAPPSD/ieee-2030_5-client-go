@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"sync"
 	"syscall"
 	"time"
 
@@ -177,6 +178,26 @@ func walkDERProgramTree(
 	return nil
 }
 
+// stopFleetSupervisors stops every fleet's Supervisor and waits for each
+// to finish (by PID, Supervisor.Stop's own contract), so a clean shutdown
+// leaves no sidecar process running instead of relying solely on
+// Pdeathsig. mgr is nil in the der role or the aggregator role with no
+// --fleet-file, in which case this is a no-op.
+func stopFleetSupervisors(mgr *gridlabd.Manager) {
+	if mgr == nil {
+		return
+	}
+	var wg sync.WaitGroup
+	for _, sup := range mgr.Supervisors {
+		wg.Add(1)
+		go func(sup *gridlabd.Supervisor) {
+			defer wg.Done()
+			sup.Stop()
+		}(sup)
+	}
+	wg.Wait()
+}
+
 func main() {
 	cfg := inverter.SimConfig{}
 
@@ -210,6 +231,7 @@ func main() {
 		Role:       cfg.ClientRole,
 		FleetFiles: []string(*cf.FleetFiles),
 		RunDir:     *cf.RunDir,
+		Env:        fleetSidecarEnv(defaultSidecarPythonPath),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -287,8 +309,16 @@ func main() {
 	if fleetMgr != nil {
 		for _, sup := range fleetMgr.Supervisors {
 			go func(sup *gridlabd.Supervisor) {
+				// Exit, not log-and-continue: a fleet Run can return only
+				// on an initial start refused (a version/object/fleet-name
+				// mismatch) or a restart budget exhausted after running.
+				// Either way the fleet is down for good until an operator
+				// intervenes, and the aggregator has no way to bring it
+				// back on its own; running on with other fleets apparently
+				// healthy while this one is silently dead is worse than
+				// exiting so the whole process gets restarted/alerted on.
 				if err := sup.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-					log.Printf("fleet sidecar exited: %v", err)
+					log.Fatalf("fleet sidecar exited: %v", err)
 				}
 			}(sup)
 		}
@@ -988,6 +1018,7 @@ func main() {
 		select {
 		case <-ctx.Done():
 			log.Println("Shutting down...")
+			stopFleetSupervisors(fleetMgr)
 			return
 		case <-ticker.C:
 			if skipDERPipelineForRole(cfg) {

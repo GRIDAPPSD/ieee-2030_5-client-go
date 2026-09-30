@@ -46,3 +46,13 @@ def test_encode_error_round_trips_through_json():
     line = protocol.encode_error(4, "bad_time", "not RFC 3339")
     obj = json.loads(line)
     assert obj == {"id": 4, "ok": False, "error": {"code": "bad_time", "message": "not RFC 3339"}}
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_encode_ok_refuses_nan_and_infinity(bad):
+    # item 5's NaN decision: allow_nan=False makes this raise rather than
+    # emit the non-standard NaN/Infinity/-Infinity token, which Go's
+    # encoding/json cannot parse at all. _handle_line (server.py) catches
+    # this and turns it into a normal per-request encode_error reply.
+    with pytest.raises(ValueError):
+        protocol.encode_ok(5, {"value": bad})

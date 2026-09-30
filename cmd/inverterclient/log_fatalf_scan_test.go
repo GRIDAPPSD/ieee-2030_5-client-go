@@ -61,6 +61,13 @@ var expectedFatalfSitePrefixes = []string{
 	// this is unreachable in practice; fail loudly rather than silently
 	// disable metering if that ever changes.
 	`log.Fatalf("build reporter: %v", err)`,
+	// #70 item 2: a fleet sidecar that exits (initial refusal or restart
+	// budget exhausted) leaves that fleet down with no way for the
+	// aggregator to recover it on its own; exiting the whole process is
+	// preferred over continuing with other fleets apparently healthy
+	// while this one is silently dead. See the call site's own comment
+	// in main.go for the full reasoning.
+	`log.Fatalf("fleet sidecar exited: %v", err)`,
 }
 
 // expectedFatalfPercentSCount is the number of `log.Fatalf("%s", fe.Error())`
