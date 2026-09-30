@@ -246,7 +246,7 @@ func TestRunTimeSync_GoroutineExitsOnCtxCancel(t *testing.T) {
 // drives SyncServerTime, which (c) stores the expected ~42s offset.
 // Cancellation still exits the goroutine cleanly.
 //
-// Lifts RunTimeSync coverage over the ≥80% exit-criteria gate by
+// Lifts RunTimeSync coverage over the >=80% exit-criteria gate by
 // exercising the body the select.time.After arm leads into.
 func TestRunTimeSync_LoopBodyExecutesAndAppliesOffset(t *testing.T) {
 	t.Parallel()
@@ -325,14 +325,14 @@ func TestRunTimeSync_LoopBodyExecutesAndAppliesOffset(t *testing.T) {
 }
 
 // TestRunTimeSync_PollRateClamps covers the two clamp branches at the
-// top of RunTimeSync: zero/negative pollRate → DefaultTimeSyncPollRate,
-// and below-floor pollRate → minTimeSyncPollRate. Neither needs to
+// top of RunTimeSync: zero/negative pollRate -> DefaultTimeSyncPollRate,
+// and below-floor pollRate -> minTimeSyncPollRate. Neither needs to
 // actually run a loop iteration; we just cover the assignment statement
 // by entering RunTimeSync with the relevant pollRate value and
 // cancelling immediately (the select.Done arm wins regardless of
 // which floor was applied).
 //
-// Lifts RunTimeSync coverage over the ≥80% gate alongside
+// Lifts RunTimeSync coverage over the >=80% gate alongside
 // TestRunTimeSync_LoopBodyExecutesAndAppliesOffset.
 func TestRunTimeSync_PollRateClamps(t *testing.T) {
 	t.Parallel()
@@ -606,13 +606,13 @@ func TestPhase1bSkipsWhenTimeLinkAbsent(t *testing.T) {
 //
 // The MRID format is "reading-YYYYMMDD-HHMMSS" per reporter.go:92. We
 // capture the raw POST body, unmarshal it, and assert:
-//   - The MRID parses back into a time matching client.Now() ± 2 seconds.
+//   - The MRID parses back into a time matching client.Now() +/- 2 seconds.
 //   - The local-time-formatted MRID is NOT what was emitted (i.e. the
 //     suffix is at least many-seconds ahead of time.Now()'s formatting).
 //
 // A regression where reporter.go reverts to time.Now() would land the
 // MRID 42 seconds behind the client.Now() timestamp : well outside the
-// ±2s window. The two-second tolerance absorbs second-rollover at the
+// +/-2s window. The two-second tolerance absorbs second-rollover at the
 // minute boundary plus the small drift between SyncServerTime returning
 // and the MRID being formatted.
 func TestReporterMRID_DerivesFromClientNow(t *testing.T) {
@@ -712,7 +712,7 @@ func TestReporterMRID_DerivesFromClientNow(t *testing.T) {
 
 	clientSkew := parsed.Sub(clientNowBefore)
 	if clientSkew < -tolerance || clientSkew > tolerance {
-		t.Errorf("MRID parsed=%v vs client.Now()=%v (skew=%v) outside ±%v : MRID does not derive from client.Now()",
+		t.Errorf("MRID parsed=%v vs client.Now()=%v (skew=%v) outside +/-%v : MRID does not derive from client.Now()",
 			parsed, clientNowBefore, clientSkew, tolerance)
 	}
 

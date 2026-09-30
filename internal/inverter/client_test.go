@@ -71,7 +71,7 @@ const otherLFDI = "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"
 // =============================================================================
 
 // TestLookupOwnEndDevice_FindsByLFDI exercises case 1:
-// --csip on, server /edev list contains our LFDI → LookupOwnEndDevice
+// --csip on, server /edev list contains our LFDI -> LookupOwnEndDevice
 // succeeds; Phase 3 (DER setup) fires exactly once afterward.
 //
 // The handler reads the client LFDI from an atomic stitched in after
@@ -146,7 +146,7 @@ func TestLookupOwnEndDevice_FindsByLFDI(t *testing.T) {
 }
 
 // TestLookupOwnEndDevice_EmptyListReturnsNotFound exercises case 2:
-// --csip on, server /edev list empty → ErrEndDeviceNotFound; caller idles;
+// --csip on, server /edev list empty -> ErrEndDeviceNotFound; caller idles;
 // zero PUTs/POSTs on Phase 3+ endpoints while idling. Then the list
 // becomes populated and Lookup succeeds on the retry.
 //
@@ -198,7 +198,7 @@ func TestLookupOwnEndDevice_EmptyListReturnsNotFound(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// First lookup: list empty → ErrEndDeviceNotFound.
+	// First lookup: list empty -> ErrEndDeviceNotFound.
 	_, _, err := client.LookupOwnEndDevice(ctx, "/edev")
 	if !errors.Is(err, inverter.ErrEndDeviceNotFound) {
 		t.Fatalf("LookupOwnEndDevice err = %v, want ErrEndDeviceNotFound", err)
@@ -237,7 +237,7 @@ func TestLookupOwnEndDevice_EmptyListReturnsNotFound(t *testing.T) {
 }
 
 // TestLookupOwnEndDevice_OtherLFDIsNotOurs exercises case 3:
-// --csip on, server list contains other LFDIs but not ours → LookupOwnEndDevice
+// --csip on, server list contains other LFDIs but not ours -> LookupOwnEndDevice
 // returns ErrEndDeviceNotFound. Verifies the LFDI filter is exact-match,
 // not just a non-empty list check, and case-sensitive on the uppercase-hex
 // representation produced by internal/tls.LFDI.
@@ -362,7 +362,7 @@ func TestLookupOwnEndDevice_EmptyHrefErrors(t *testing.T) {
 // in LookupOwnEndDevice : a 500 from the list endpoint surfaces as a
 // wrapped error containing both the operation context ("get edev list")
 // and the underlying transport status. Lifts LookupOwnEndDevice coverage
-// over the ≥80% gate.
+// over the >=80% gate.
 func TestLookupOwnEndDevice_ServerErrorIsWrapped(t *testing.T) {
 	t.Parallel()
 	env := newCCMTestEnv(t)
@@ -546,7 +546,7 @@ func TestRegister_PostsToExactHref(t *testing.T) {
 		})
 	}
 
-	// Empty href → error before any HTTP call.
+	// Empty href -> error before any HTTP call.
 	t.Run("empty_href_errors", func(t *testing.T) {
 		t.Parallel()
 		env := newCCMTestEnv(t)
@@ -645,7 +645,7 @@ func TestPutDERCapability_WritesToExactHref(t *testing.T) {
 }
 
 // TestPhase3SkipsWhenDERListLinkAbsent exercises case 3:
-// EndDevice with DERListLink == nil → zero DER PUTs. The production
+// EndDevice with DERListLink == nil -> zero DER PUTs. The production
 // gating logic lives in cmd/inverterclient/main.go's Phase 3 block :
 // we assert the contract at the inverter package boundary: when the
 // caller observes a nil DERListLink, no PutDERCapability /
@@ -713,7 +713,7 @@ func TestPhase3SkipsWhenDERListLinkAbsent(t *testing.T) {
 }
 
 // TestPhase4SkipsWhenMUPListLinkAbsent exercises case 4:
-// dcap with MirrorUsagePointListLink == nil → zero /mup calls. The
+// dcap with MirrorUsagePointListLink == nil -> zero /mup calls. The
 // inverter package contract: CreateMirrorUsagePoint and PostMeterReading
 // short-circuit on empty href, so a nil MirrorUsagePointListLink in the
 // caller cannot leak into HTTP traffic.
