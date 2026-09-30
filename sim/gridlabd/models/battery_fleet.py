@@ -1,8 +1,7 @@
 """Generates a battery fleet GLM and its fleet-file entries.
 
 Each device's LFDI is 128 "random" bits with the aggregator's PEN
-right-concatenated (IEEE 2030.5-2023 S23 L2691-2693; ADR-009 decision 1,
-"What X aggregators of N DERs each implies"). The 128 bits come from
+right-concatenated (IEEE 2030.5-2023 S23 L2691-2693). The 128 bits come from
 SHA-256(fleet, index, seed) rather than a true RNG so two generator runs
 with the same arguments write byte-identical fleets (the issue's "stable
 across runs" criterion); a device's identity depends only on its own
@@ -21,7 +20,7 @@ GRIDLABD_VERSION = "6.0.0a1"
 
 # CONSTANT_PQ holds an externally set P_Out/Q_Out across step_to; the class
 # default, CONSTANT_PF, recomputes P_Out from power_factor on the next step
-# and silently discards a setpoint (probed 2026-09-29, hale-sidecar-s0).
+# and silently discards a setpoint (verified 2026-09-29).
 _DEVICE_TEMPLATE = """\
 object inverter {{
   name {inv_name};
