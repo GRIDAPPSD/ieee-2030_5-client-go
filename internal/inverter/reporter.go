@@ -59,20 +59,14 @@ func (r *Reporter) ReportStatus(ctx context.Context, state InverterState) error 
 		return nil
 	}
 
-	connectValue := uint8(0)
-	if state.Connected {
-		connectValue = 1
-	}
-	modeValue := uint8(state.Mode)
-
 	status := sep2.DERStatus{
 		GenConnectStatus: &sep2.ConnectStatusType{
 			DateTime: state.Time.Unix(),
-			Value:    sep2.HexBinary8(connectValue),
+			Value:    sep2.HexBinary8(genConnectStatus(state.Connected, state.Energized)),
 		},
 		OperationalModeStatus: &sep2.OperationalModeStatusType{
 			DateTime: state.Time.Unix(),
-			Value:    modeValue,
+			Value:    operationalModeStatus(state.Energized),
 		},
 		ReadingTime: state.Time.Unix(),
 	}
@@ -134,4 +128,30 @@ func (r *Reporter) ReportMetering(ctx context.Context, state InverterState) erro
 // second, which the clock alone cannot.
 func readingMRID(deviceLFDI string, at time.Time, seq uint64) string {
 	return deriveMRID("reading", deviceLFDI, at.Format("20060102-150405"), strconv.FormatUint(seq, 10))
+}
+
+// operationalModeStatus maps DER state to the operationalModeStatus wire
+// value (IEEE 2030.5-2018 OperationalModeStatusType): 1 off, 2 operational
+// mode. Kept in its own function so #87's tri-state Energized can add the
+// 0 (unknown) case without touching ReportStatus.
+func operationalModeStatus(energized bool) uint8 {
+	if energized {
+		return 2
+	}
+	return 1
+}
+
+// genConnectStatus maps DER state to the genConnectStatus bitmap
+// (IEEE 2030.5-2018 ConnectStatusType): bit 0 connected, bit 2 operating.
+// Bit 1 (available) has no corresponding InverterState field and is left
+// unset.
+func genConnectStatus(connected, energized bool) uint8 {
+	var v uint8
+	if connected {
+		v |= 1 << 0
+	}
+	if energized {
+		v |= 1 << 2
+	}
+	return v
 }
