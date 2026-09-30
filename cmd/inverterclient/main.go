@@ -196,6 +196,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%s is a der-only setting and has no effect in the aggregator role; remove it\n", name)
 		os.Exit(1)
 	}
+	if err := validateNotifyAdvertiseHost(*notifyAdvertiseHost); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
 
 	// Clamp PEN to uint32 range. flag.Uint64Var lets us catch out-of-range
 	// input from CLI / env without silently truncating.
@@ -300,6 +304,14 @@ func main() {
 	// in scope. If cert load, TCP bind, or address resolution fails, log
 	// the error and continue with polling-only rather than crash.
 	notifyReceiver := startNotifyReceiver(cfg, *notifyListen, hmi, notifyDispatcher.Dispatch)
+	// effectiveAdvertiseHost is the host:port the notify URL actually
+	// names: --notify-advertise-host's own port when it gives one,
+	// otherwise --notify-advertise-host's host combined with the port the
+	// listener actually bound (never a stale or guessed port), otherwise
+	// the bound address unchanged. Computed once here so both the
+	// loopback warning below and the subscription POST (registerSubscriptions,
+	// further down) agree on the same address.
+	var effectiveAdvertiseHost string
 	if notifyReceiver != nil {
 		defer func() {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -308,6 +320,12 @@ func main() {
 				log.Printf("notify receiver stop: %v", err)
 			}
 		}()
+		if boundAddr, err := notifyReceiver.Addr(); err == nil {
+			effectiveAdvertiseHost = effectiveNotifyAdvertiseHost(*notifyAdvertiseHost, boundAddr)
+			if isLoopbackHost(effectiveAdvertiseHost) {
+				log.Printf("WARNING: notify URL advertises a loopback address (%s); a server on another host cannot reach it. Set --notify-listen and --notify-advertise-host to a reachable interface, or expect polling-only behavior against a remote server.", effectiveAdvertiseHost)
+			}
+		}
 	}
 
 	log.Printf("Inverter Simulator : scenario: %s (%s)", scenario.Name, scenario.Description)
@@ -483,7 +501,7 @@ func main() {
 		ctx,
 		client,
 		edev,
-		notifyURLForReceiver(notifyReceiver, *notifyAdvertiseHost),
+		notifyURLForReceiver(notifyReceiver, effectiveAdvertiseHost),
 	)
 	// Wire the registry's Cancel method as the dispatcher's CancelHook so
 	// status=1 notifications (CSIP V1.2 CORE-019 step 13: "subscription

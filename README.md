@@ -81,7 +81,7 @@ Key flags:
 | `--csip` | false | CSIP mode: discover own EndDevice instead of POST-registering |
 | `--pin` | `0` | Expected registration PIN (0 = skip check; nonzero mismatch is fatal) |
 | `--notify-listen` | `127.0.0.1:0` | Inbound HTTPS Notification listener (empty to disable) |
-| `--notify-advertise-host` | | `host:port` advertised in subscription notify URLs (default: the bound `--notify-listen` address) |
+| `--notify-advertise-host` | | Host or `host:port` advertised in subscription notify URLs (default: the bound `--notify-listen` address). A bare host is combined with the port the listener actually bound; a `host:port` value overrides both. Refused at start if it carries a URL scheme or a non-numeric port. A startup warning fires when the effective address is loopback: unreachable from a server on another host, which is the default `--notify-listen=127.0.0.1:0` |
 | `--pen` | `0` | IANA Private Enterprise Number for outbound LogEvents (env: SEP2_PEN) |
 | `--list-scenarios` | | Print available scenarios and exit |
 
