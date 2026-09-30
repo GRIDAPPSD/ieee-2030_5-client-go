@@ -68,6 +68,57 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # The Python sidecar steps run before the App token is minted and
+      # written into git config, below. pip install runs arbitrary
+      # third-party code (setup hooks, and the packages themselves), so
+      # it never runs while an org-scoped credential sits in git config;
+      # --require-hashes still bounds what network content pip will even
+      # install, but ordering removes the exposure window regardless.
+      - name: Set up Python
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Restore GridLAB-D sidecar wheel cache
+        # Keyed on both lock files and the resolved Python version:
+        # numpy and nanobind-backend ship per-CPython-minor wheels
+        # (unlike gridlabd's stable-ABI cp310-abi3 wheel), so a Python
+        # version bump must start from an empty cache, not reuse a
+        # wheel built for a different interpreter. On a hit, the install
+        # step below never contacts PyPI (--no-index --find-links); on a
+        # miss it downloads once.
+        uses: actions/cache@v4
+        with:
+          path: sim/gridlabd/.wheelhouse
+          key: gldsidecar-wheelhouse-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('sim/gridlabd/requirements.lock', 'sim/gridlabd/requirements-dev.lock') }}
+
+      - name: Install the pinned GridLAB-D sidecar (hash-locked)
+        # gridlabd==6.0.0a1 is a pre-release; an exact == pin installs it
+        # with no --pre (verified 2026-09-29). --require-hashes rejects a
+        # tampered or substituted wheel instead of installing it, so a run
+        # is red the moment the pin or the network copy stops matching.
+        # The test runner (pytest and its closure) is hash-locked the
+        # same way, in requirements-dev.lock, so nothing installed here
+        # is unpinned. No `pip install --upgrade pip`: this step installs
+        # only what its two lock files name.
+        run: |
+          set -eu
+          cd sim/gridlabd
+          python -m venv .venv
+          if [ ! -f .wheelhouse/.populated ]; then
+            .venv/bin/pip download --require-hashes -r requirements.lock -r requirements-dev.lock -d .wheelhouse
+            touch .wheelhouse/.populated
+          fi
+          .venv/bin/pip install --no-index --find-links .wheelhouse --require-hashes -r requirements.lock -r requirements-dev.lock
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Run the sidecar's own tests
+        # The real pinned gridlabd runs here, every CI run: no fake, no
+        # skip. A run whose install step above fails never reaches this
+        # step, so an install failure is red on its own step.
+        run: sim/gridlabd/.venv/bin/python -m pytest sim/gridlabd/tests -q
+
       - name: Mint GitHub App installation token
         # Mints a short-lived installation token for the GRIDAPPSD App
         # (referenced by App ID via secret, not by slug) so

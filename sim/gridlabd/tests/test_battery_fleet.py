@@ -1,0 +1,102 @@
+import re
+
+import pytest
+
+from models import battery_fleet
+
+_HEX40 = re.compile(r"^[0-9A-F]{40}$")
+
+
+def test_lfdi_is_40_uppercase_hex_digits_with_pen_right_concatenated():
+    _, fleet = battery_fleet.generate("fleetA", count=4, pen="0A0B0C0D")
+    for device in fleet["devices"]:
+        lfdi = device["lfdi"]
+        assert _HEX40.match(lfdi), lfdi
+        assert lfdi.endswith("0A0B0C0D")
+
+
+def test_lfdi_stable_across_runs_with_same_arguments():
+    _, fleet1 = battery_fleet.generate("fleetA", count=4, pen="0A0B0C0D", seed="s1")
+    _, fleet2 = battery_fleet.generate("fleetA", count=4, pen="0A0B0C0D", seed="s1")
+    assert [d["lfdi"] for d in fleet1["devices"]] == [d["lfdi"] for d in fleet2["devices"]]
+
+
+def test_lfdi_depends_only_on_its_own_index_not_on_fleet_size():
+    _, small = battery_fleet.generate("fleetA", count=2, pen="0A0B0C0D", seed="s1")
+    _, large = battery_fleet.generate("fleetA", count=5, pen="0A0B0C0D", seed="s1")
+    assert small["devices"][0]["lfdi"] == large["devices"][0]["lfdi"]
+    assert small["devices"][1]["lfdi"] == large["devices"][1]["lfdi"]
+
+
+def test_lfdi_differs_by_pen():
+    _, fleet1 = battery_fleet.generate("fleetA", count=1, pen="00000000", seed="s1")
+    _, fleet2 = battery_fleet.generate("fleetA", count=1, pen="FFFFFFFF", seed="s1")
+    assert fleet1["devices"][0]["lfdi"] != fleet2["devices"][0]["lfdi"]
+    assert fleet1["devices"][0]["lfdi"][:32] == fleet2["devices"][0]["lfdi"][:32]
+
+
+@pytest.mark.parametrize(
+    "bad_pen",
+    [
+        "ABC",  # too short
+        "ZZZZZZZZ",  # not hex at all
+        "0x123456",  # int(pen, 16) alone would accept this (probed 2026-09-29)
+        "+1234567",
+        "1234_567",
+        " 1234567",
+        "1234567 ",
+    ],
+)
+def test_rejects_a_pen_that_is_not_exactly_8_hex_digits(bad_pen):
+    with pytest.raises(ValueError):
+        battery_fleet.generate("fleetA", count=1, pen=bad_pen)
+
+
+def test_glm_holds_one_battery_and_inverter_pair_per_device():
+    glm_text, fleet = battery_fleet.generate("fleetB", count=3, pen="00000001")
+    assert glm_text.count("object battery {") == 3
+    assert glm_text.count("object inverter {") == 3
+    assert glm_text.count("four_quadrant_control_mode CONSTANT_PQ;") == 3
+    for device in fleet["devices"]:
+        assert device["objects"]["inverter"] in glm_text
+        assert device["objects"]["battery"] in glm_text
+
+
+def test_write_creates_glm_and_fleet_file(tmp_path):
+    glm_path, fleet_path = battery_fleet.write(str(tmp_path), "fleetC", count=2, pen="00000002")
+    assert (tmp_path / "fleetC.glm").is_file()
+    assert (tmp_path / "fleetC.fleet.json").is_file()
+    assert glm_path == str(tmp_path / "fleetC.glm")
+    assert fleet_path == str(tmp_path / "fleetC.fleet.json")
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "pwn\n#system touch PWNED",  # reproduced 2026-09-29: this created a file at load time
+        "has space",
+        "semi;colon",
+        "quote'name",
+        "brace{name",
+        "",
+        "x" * 33,  # over the length cap
+        "valid_looking_name\n",  # $ would accept a trailing newline; fullmatch does not
+    ],
+)
+def test_generate_refuses_an_unsafe_fleet_name(bad_name):
+    with pytest.raises(ValueError):
+        battery_fleet.generate(bad_name, count=1, pen="00000000")
+
+
+def test_write_creates_no_files_for_an_unsafe_fleet_name(tmp_path):
+    with pytest.raises(ValueError):
+        battery_fleet.write(str(tmp_path), "pwn\n#system touch PWNED", count=1, pen="00000000")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_generate_accepts_a_name_at_the_safe_boundary():
+    # Exercises the allowed set itself (not just its rejection), so the
+    # guard is proven to admit valid names and not only reject bad ones.
+    glm_text, fleet = battery_fleet.generate("A_b9" * 8, count=1, pen="00000000")
+    assert len(fleet["devices"]) == 1
+    assert "#system" not in glm_text

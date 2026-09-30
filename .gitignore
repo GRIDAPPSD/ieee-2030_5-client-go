@@ -59,5 +59,14 @@ tmp/
 # committed files. See GRIDAPPSD/ieee-2030_5-server-go#214.
 testdata/rapid/
 
+
 # Log files
 *.log
+
+# GridLAB-D sidecar: local venv and the CI wheel cache
+sim/gridlabd/.venv/
+sim/gridlabd/.wheelhouse/
+sim/gridlabd/__pycache__/
+sim/gridlabd/**/__pycache__/
+sim/gridlabd/.pytest_cache/
+*.pyc
