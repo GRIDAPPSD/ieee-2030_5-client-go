@@ -20,7 +20,10 @@ import gridlabd
 
 from . import protocol
 
-_RFC3339_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+# No ^/$ anchors: $ matches before a trailing newline too, so
+# "...Z\n" would otherwise pass (probed 2026-09-29). fullmatch() requires
+# the pattern to cover the whole string, closing that gap.
+_RFC3339_UTC = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 _OK = 0
 
 
@@ -32,12 +35,15 @@ class ModelError(Exception):
         self.status = status
 
 
-def _parse_rfc3339_utc(value: str) -> str:
-    if not _RFC3339_UTC.match(value):
+def _parse_rfc3339_utc(value: object) -> str:
+    if not isinstance(value, str) or not _RFC3339_UTC.fullmatch(value):
         raise protocol.ProtocolError(
             "bad_time", f"expected RFC 3339 UTC (YYYY-MM-DDTHH:MM:SSZ), got {value!r}"
         )
-    datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")  # raises ValueError on an invalid calendar date
+    try:
+        datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")  # rejects e.g. 2020-02-30
+    except ValueError as exc:
+        raise protocol.ProtocolError("bad_time", f"not a real UTC instant: {value!r} ({exc})") from exc
     return value
 
 
@@ -50,14 +56,26 @@ class Adapter:
         fleet: str,
         expected_version: str,
         expected_objects: dict[str, list[str]],
+        *,
+        native: Any = None,
     ):
+        """native is a test seam: an already-"loaded" stand-in for the
+        gridlabd.GridLabD instance, so a test can drive a specific native
+        status (set_property/step_to/get_property) without needing a real
+        gridlabd failure to reproduce it. Production code never passes it.
+        """
         self._fleet = fleet
         self._expected_version = expected_version
         self._expected_objects = expected_objects
+        if native is not None:
+            self._gld = native
+            return
         self._gld = gridlabd.GridLabD(verbose=False)
         self._gld.set_working_directory(".")
         self._gld.setup_before_load()
-        self._gld.load_glm([model_path])
+        status = self._gld.load_glm([model_path])
+        if status != _OK:
+            raise ModelError(status, f"load_glm({model_path!r}) failed, status {status}")
         self._gld.setup_after_load()
         self._gld.start()
 
@@ -84,6 +102,20 @@ class Adapter:
         }
 
     def set(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # All-or-nothing: check every (object, property) exists before
+        # writing any of them, so a batch that names one bad object never
+        # leaves an earlier device's setpoint applied while the rest of
+        # the batch is refused (probed 2026-09-29: a bad object amid good
+        # ones replied gridlabd_error but had already applied the first).
+        # A nonexistent object or property answers the same status (3)
+        # from get_property as it would from set_property, so this check
+        # is a reliable stand-in for "would this write succeed".
+        for item in items:
+            obj, prop = item["object"], item["property"]
+            status, _ = self._gld.get_property(obj, prop)
+            if status != _OK:
+                raise ModelError(status, f"set {obj}.{prop} would fail, status {status}")
+
         applied = []
         for item in items:
             obj, prop, value = item["object"], item["property"], item["value"]
