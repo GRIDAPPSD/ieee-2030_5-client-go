@@ -107,6 +107,22 @@ def test_state_of_charge_moves_under_discharge(adapter):
     assert after < before
 
 
+def test_state_of_charge_moves_under_charge(adapter):
+    # A real charge setpoint (negative P_Out), not just discharge's mirror
+    # image: proves the sign the aggregator will actually send for
+    # charging moves the model the other way, not merely that some
+    # setpoint moves it somewhere.
+    a, fleet_data = adapter
+    inv = fleet_data["devices"][0]["objects"]["inverter"]
+    bat = fleet_data["devices"][0]["objects"]["battery"]
+    a.set([{"object": inv, "property": "P_Out", "value": -1234.0}])
+    before = a.get([{"object": bat, "property": "state_of_charge"}])[0]["value"]
+    a.step_to("2020-01-01T00:05:00Z")
+    a.step_to("2020-01-01T00:10:00Z")
+    after = a.get([{"object": bat, "property": "state_of_charge"}])[0]["value"]
+    assert after > before
+
+
 def test_step_to_past_the_models_last_event_does_not_crash(adapter):
     a, _ = adapter
     # The GLM's stoptime is 02:00:00; both calls land after it. A bare
@@ -200,6 +216,33 @@ def test_set_is_atomic_a_bad_item_leaves_no_earlier_item_applied(adapter):
     assert after == initial
 
 
+@pytest.mark.parametrize(
+    "make_second_item,expected_exception",
+    [
+        (lambda inv: {"object": inv, "property": "P_Out"}, KeyError),  # no "value" at all
+        (lambda inv: {"object": inv, "property": "P_Out", "value": "garbage"}, ModelError),
+        (lambda inv: {"object": inv, "property": "P_Out", "value": None}, ModelError),
+        (lambda inv: {"object": inv, "property": "P_Out", "value": [1, 2, 3]}, ModelError),
+        (lambda inv: {"object": inv, "property": "P_Out", "value": {"a": 1}}, ModelError),
+    ],
+    ids=["missing_value", "garbage_string", "none", "a_list", "a_dict"],
+)
+def test_set_restores_earlier_items_when_a_later_value_is_refused(adapter, make_second_item, expected_exception):
+    # gridlabd refuses each of these values at set_property itself
+    # (probed 2026-09-29: status 3 for a string, None, a list and a dict
+    # on a float property, no exception), so shape validation alone
+    # cannot catch them in advance; item 1 must still end up unapplied.
+    a, fleet_data = adapter
+    inv = fleet_data["devices"][0]["objects"]["inverter"]
+    initial = a.get([{"object": inv, "property": "P_Out"}])[0]["value"]
+
+    with pytest.raises(expected_exception):
+        a.set([{"object": inv, "property": "P_Out", "value": 4242.0}, make_second_item(inv)])
+
+    after = a.get([{"object": inv, "property": "P_Out"}])[0]["value"]
+    assert after == initial
+
+
 class _StubNative:
     """A minimal stand-in for gridlabd.GridLabD, used only to drive a
     specific non-OK native status through the Adapter's own checks
@@ -207,13 +250,31 @@ class _StubNative:
     failure to reproduce it. Never used by production code (Adapter only
     accepts one through its native= test seam)."""
 
-    def __init__(self, *, set_status=0, step_status=0, get_status=0, clock="2020-01-01T00:00:00"):
+    def __init__(
+        self,
+        *,
+        set_status=0,
+        step_status=0,
+        get_status=0,
+        get_statuses=None,
+        clock="2020-01-01T00:00:00",
+    ):
         self._set_status = set_status
         self._step_status = step_status
         self._get_status = get_status
+        # A sequence of statuses to hand out on successive get_property
+        # calls, the last one repeating once exhausted. Lets a test tell
+        # set()'s precheck read apart from its post-write read-back,
+        # which a single fixed get_status cannot.
+        self._get_statuses = list(get_statuses) if get_statuses is not None else None
+        self._get_call = 0
         self._clock = clock
 
     def get_property(self, obj, prop):
+        if self._get_statuses is not None:
+            index = min(self._get_call, len(self._get_statuses) - 1)
+            self._get_call += 1
+            return self._get_statuses[index], 0.0
         return self._get_status, 0.0
 
     def set_property(self, obj, prop, value):
@@ -230,6 +291,19 @@ class _StubNative:
 
     def stop(self):
         pass
+
+
+def test_set_raises_when_the_read_back_after_a_successful_write_fails():
+    # get_statuses: call 1 is set()'s precheck (must be OK to reach the
+    # write), call 2 is the read-back right after set_property (made to
+    # fail here). Kills a mutant that drops the read-back status check:
+    # without it, this would return the stub's placeholder value instead
+    # of raising.
+    stub = _StubNative(set_status=0, get_statuses=[0, 9])
+    a = Adapter(model_path="unused", fleet="f", expected_version="6.0.0a1", expected_objects={}, native=stub)
+    with pytest.raises(ModelError) as exc_info:
+        a.set([{"object": "obj", "property": "P_Out", "value": 1.0}])
+    assert exc_info.value.status == 9
 
 
 def test_set_raises_when_the_native_set_property_call_itself_fails():

@@ -102,31 +102,49 @@ class Adapter:
         }
 
     def set(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        # All-or-nothing: check every (object, property) exists before
-        # writing any of them, so a batch that names one bad object never
-        # leaves an earlier device's setpoint applied while the rest of
-        # the batch is refused (probed 2026-09-29: a bad object amid good
+        # All-or-nothing in two layers. First, shape: every item must
+        # carry object, property and value, and name an existing
+        # (object, property), checked (and each one's pre-batch value
+        # captured) before any write. A nonexistent object or property
+        # answers the same status (3) from get_property as it would from
+        # set_property, so this check is a reliable stand-in for "would
+        # this write succeed" (probed 2026-09-29: a bad object amid good
         # ones replied gridlabd_error but had already applied the first).
-        # A nonexistent object or property answers the same status (3)
-        # from get_property as it would from set_property, so this check
-        # is a reliable stand-in for "would this write succeed".
+        #
+        # Second, value: gridlabd only rejects a value's TYPE when
+        # set_property is actually called (probed 2026-09-29: a string,
+        # None, a list and a dict for a float property all return status
+        # 3 with no exception), so shape validation alone cannot rule
+        # that out in advance. If a native write or its read-back fails
+        # partway through a batch, every item already applied is
+        # restored to the value captured before this batch started.
+        originals: list[Any] = []
         for item in items:
-            obj, prop = item["object"], item["property"]
-            status, _ = self._gld.get_property(obj, prop)
+            obj, prop, _ = item["object"], item["property"], item["value"]  # KeyError here, before any write
+            status, original_value = self._gld.get_property(obj, prop)
             if status != _OK:
                 raise ModelError(status, f"set {obj}.{prop} would fail, status {status}")
+            originals.append(original_value)
 
         applied = []
-        for item in items:
+        for index, item in enumerate(items):
             obj, prop, value = item["object"], item["property"], item["value"]
             status = self._gld.set_property(obj, prop, value)
+            if status == _OK:
+                status, read_value = self._gld.get_property(obj, prop)
             if status != _OK:
+                self._restore(items, originals, count=index + 1)
                 raise ModelError(status, f"set {obj}.{prop} failed, status {status}")
-            read_status, read_value = self._gld.get_property(obj, prop)
-            if read_status != _OK:
-                raise ModelError(read_status, f"read-back {obj}.{prop} failed, status {read_status}")
             applied.append({"object": obj, "property": prop, "value": read_value})
         return applied
+
+    def _restore(self, items: list[dict[str, Any]], originals: list[Any], count: int) -> None:
+        # Best effort: restoring a value that gridlabd itself just
+        # accepted is not expected to fail, and there is no further
+        # fallback if it does.
+        for index in range(count):
+            obj, prop = items[index]["object"], items[index]["property"]
+            self._gld.set_property(obj, prop, originals[index])
 
     def step_to(self, time: str) -> str:
         target = _parse_rfc3339_utc(time)
