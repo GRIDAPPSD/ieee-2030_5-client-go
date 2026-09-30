@@ -130,18 +130,23 @@ func gldsidecarPython(t *testing.T) string {
 	return p
 }
 
-// TestNewManager_RealSidecarThroughOwnDefaults is item 2: NewManager's own
-// Env default (gridlabd.DefaultEnv, PATH and HOME only) cannot start the
-// real sidecar, because gldsidecar needs PYTHONPATH; fleetSidecarEnv is
-// the fix, and this test proves it starts the real, pinned sidecar using
-// exactly the value production computes (defaultSidecarPythonPath,
-// resolved to an absolute path here only because the test's own working
-// directory is not the repo root the way a deployed binary's would be;
-// the mechanism under test is fleetSidecarEnv plus ManagerConfig.Env, not
-// a PYTHONPATH the test invents on its own).
+// TestNewManager_RealSidecarThroughOwnDefaults is item 1's own test,
+// rewritten from its round-3 shape: production's own defaults must be
+// enough to start the real, pinned sidecar, with NO absolute path the
+// test builds itself, which is the exact gap this round closes (the
+// round-3 version built one: `filepath.Join(root, defaultSidecarPythonPath)`
+// passed straight into fleetSidecarEnv, bypassing resolveSidecarPythonPath
+// entirely). t.Chdir to the repo root matches where a deployed binary
+// runs from (the same convention --cert/--key/--ca already use); RunDir
+// is deliberately outside the repo. buildFleetManagerConfig is the same
+// function main() calls, with the --sidecar-pythonpath flag's own default
+// value and no Command override, so Supervisor's own default resolves
+// "python3" from PATH exactly as production would.
 func TestNewManager_RealSidecarThroughOwnDefaults(t *testing.T) {
-	python := gldsidecarPython(t)
+	gldsidecarPython(t) // skip/fatal gate: gridlabd must be importable via PATH's python3
+
 	root := repoRoot(t)
+	t.Chdir(root)
 
 	fleetDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(fleetDir, "probe.glm"), []byte(probeGLM), 0o600); err != nil {
@@ -153,13 +158,11 @@ func TestNewManager_RealSidecarThroughOwnDefaults(t *testing.T) {
 	}
 	runDir := shortRunDir(t)
 
-	m, err := gridlabd.NewManager(gridlabd.ManagerConfig{
-		Role:       string(guard.RoleAggregator),
-		FleetFiles: []string{fleetFilePath},
-		RunDir:     runDir,
-		Command:    []string{python, "-P", "-m", "gldsidecar"},
-		Env:        fleetSidecarEnv(filepath.Join(root, defaultSidecarPythonPath)),
-	})
+	fleetCfg, err := buildFleetManagerConfig(string(guard.RoleAggregator), []string{fleetFilePath}, runDir, defaultSidecarPythonPath)
+	if err != nil {
+		t.Fatalf("buildFleetManagerConfig: %v", err)
+	}
+	m, err := gridlabd.NewManager(fleetCfg)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -184,7 +187,25 @@ func TestNewManager_RealSidecarThroughOwnDefaults(t *testing.T) {
 		}
 	}
 	if !m.Supervisors[0].Healthy() {
-		t.Fatal("sidecar did not become healthy within 15s using NewManager's own Env mechanism (fleetSidecarEnv)")
+		t.Fatal("sidecar did not become healthy within 15s using production's own defaults (buildFleetManagerConfig, resolveSidecarPythonPath, PATH)")
+	}
+}
+
+// TestResolveSidecarPythonPath_MissingDirectory is item 1's second test: a
+// --sidecar-pythonpath value with no gldsidecar package there is a
+// startup error naming the flag and the resolved path, not a "No module
+// named gldsidecar" traceback from deep inside a sidecar process.
+func TestResolveSidecarPythonPath_MissingDirectory(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	_, err := resolveSidecarPythonPath(missing)
+	if err == nil {
+		t.Fatal("resolveSidecarPythonPath on a directory with no gldsidecar package: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "--sidecar-pythonpath") {
+		t.Errorf("error %q does not name the flag --sidecar-pythonpath", err.Error())
+	}
+	if !strings.Contains(err.Error(), missing) {
+		t.Errorf("error %q does not name the resolved path %s", err.Error(), missing)
 	}
 }
 
@@ -196,30 +217,8 @@ func TestNewManager_RealSidecarThroughOwnDefaults(t *testing.T) {
 // "supervisors run" and "shutdown stops and waits" against the compiled
 // binary would need a fake SEP2 server, which is out of proportion for
 // this round; TestNewManager_RealSidecarThroughOwnDefaults above proves
-// the construction and Env mechanism main() uses (the part specific to
-// this round's findings) against the real sidecar instead, and the
-// wiring-scan test below proves main() calls stopFleetSupervisors on
-// shutdown.
-
-// TestStopFleetSupervisorsWiredIntoMain is the wiring seam, the same shape
-// TestFleetManagerWiredIntoMain uses: proves main() actually calls
-// stopFleetSupervisors from the ctx.Done() shutdown case, not just that
-// the function exists on its own.
-func TestStopFleetSupervisorsWiredIntoMain(t *testing.T) {
-	src, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read main.go: %v", err)
-	}
-	text := string(src)
-	if !strings.Contains(text, "stopFleetSupervisors(fleetMgr)") {
-		t.Error("main.go does not call stopFleetSupervisors(fleetMgr)")
-	}
-	doneIdx := strings.Index(text, "case <-ctx.Done():")
-	stopIdx := strings.Index(text, "stopFleetSupervisors(fleetMgr)")
-	if doneIdx < 0 {
-		t.Fatal("main.go has no case <-ctx.Done(): (has the shutdown path been restructured?)")
-	}
-	if stopIdx < doneIdx {
-		t.Error("stopFleetSupervisors must be called from within the ctx.Done() shutdown case, not before it")
-	}
-}
+// the construction and Env mechanism main() uses against the real sidecar
+// instead, and fleet_start_test.go proves startFleets' own stop and
+// wiring behavior against fakes. TestStopFleetSupervisorsWiredIntoMain
+// (a source-text scan for the function item 4 removed) is deleted along
+// with the function it checked for.

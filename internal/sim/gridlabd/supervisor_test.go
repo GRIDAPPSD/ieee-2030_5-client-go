@@ -2,9 +2,11 @@ package gridlabd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -101,11 +103,39 @@ func TestSupervisor_RestartsAfterCrash(t *testing.T) {
 // TestSupervisor_RestartBudgetExhausted proves the fleet stays DOWN, and
 // Run returns an error, once restarts exceed MaxRestarts within the
 // window: it does not retry forever.
+// logSpy collects every cfg.Log call, safe for concurrent use (Run logs
+// from its own goroutine while a test reads lines() from the test
+// goroutine).
+type logSpy struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (s *logSpy) log(format string, args ...any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lines = append(s.lines, fmt.Sprintf(format, args...))
+}
+
+func (s *logSpy) lines_() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.lines))
+	copy(out, s.lines)
+	return out
+}
+
+// TestSupervisor_RestartBudgetExhausted is item 3: the terminal state on
+// budget exhaustion is State Down, with the reason, and the design's "logs
+// the fleet and cause once per state change" fires exactly once for this
+// transition (not once per failed restart attempt).
 func TestSupervisor_RestartBudgetExhausted(t *testing.T) {
 	reg := &fakeRegistry{}
 	sockPath := filepath.Join(shortSockDir(t), "a.sock")
 	cfg := testSupervisorConfig(sockPath)
 	cfg.MaxRestarts = 2
+	spy := &logSpy{}
+	cfg.Log = spy.log
 	sup := newSupervisor(cfg, newFakeLauncher(t, nil, reg))
 
 	runErr := make(chan error, 1)
@@ -127,6 +157,70 @@ func TestSupervisor_RestartBudgetExhausted(t *testing.T) {
 	}
 	if sup.Healthy() {
 		t.Error("Healthy() after budget exhausted: want false")
+	}
+	if state, reason := sup.State(); state != StateDown {
+		t.Errorf("State() = %v (reason %v), want StateDown", state, reason)
+	} else if reason == nil {
+		t.Error("State() reason = nil, want the budget-exhausted error")
+	}
+	downLines := 0
+	for _, line := range spy.lines_() {
+		if strings.HasPrefix(line, fmt.Sprintf("fleet %s DOWN: ", fakeFleetName)) {
+			downLines++
+		}
+	}
+	if downLines != 1 {
+		t.Errorf("DOWN log lines = %d, want exactly 1 (got: %v)", downLines, spy.lines_())
+	}
+}
+
+// TestSupervisor_CancelAtLastAttemptReturnsCanceledNotBudgetError is item
+// 3's ctx-before-budget ordering: Run checks ctx.Done()/stopCh before the
+// budget on every pass through the restart loop, so a cancel that lands
+// exactly when the budget would otherwise be exhausted is reported as
+// context.Canceled, not a budget-exhausted diagnosis the caller did not
+// ask for. cfg.Log's hook cancels ctx synchronously from inside Run's own
+// call stack (Log is never called from a separate goroutine), the instant
+// Run logs the second crash and is about to re-enter the restart loop
+// with its one-attempt budget already spent: this makes the race
+// deterministic rather than hoping the test goroutine's cancel() call
+// wins a scheduling race against Run's.
+func TestSupervisor_CancelAtLastAttemptReturnsCanceledNotBudgetError(t *testing.T) {
+	reg := &fakeRegistry{}
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	cfg := testSupervisorConfig(sockPath)
+	cfg.MaxRestarts = 1
+
+	ctx, cancel := context.WithCancel(context.Background())
+	crashLogs := 0
+	cfg.Log = func(format string, args ...any) {
+		if strings.HasPrefix(format, "fleet %s: sidecar exited") {
+			crashLogs++
+			if crashLogs == 2 {
+				cancel()
+			}
+		}
+	}
+	sup := newSupervisor(cfg, newFakeLauncher(t, nil, reg))
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- sup.Run(ctx) }()
+
+	waitForHealthy(t, sup, true)
+	waitForCreatedCount(t, reg, 1)
+	reg.list()[0].SimulateCrash() // consumes the only restart the budget allows
+	waitForHealthy(t, sup, true)
+	waitForCreatedCount(t, reg, 2)
+
+	reg.list()[1].SimulateCrash() // budget now exhausted; the Log hook above cancels ctx as Run logs this
+
+	select {
+	case err := <-runErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Run() after cancel racing the exhausted restart budget = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not return after ctx cancel")
 	}
 }
 
@@ -545,7 +639,12 @@ func TestWaitForSocket_NoticesProcessExitBeforeSocketAppears(t *testing.T) {
 // peer-identity mutation-killing case: TestVerifyPeerPID proves the
 // function alone, but every fake Supervisor dials in other tests reports
 // Pid() == os.Getpid(), the real peer, so nothing at the Supervisor level
-// ever exercised a mismatch before this.
+// ever exercised a mismatch before this. The error text is asserted (not
+// only err != nil), and WaitStarted is asserted to return promptly: item
+// 3's own mutant is verifyPeerPID replaced by a no-op (always nil), which
+// would make Run start successfully and WaitStarted hang past the 1s
+// bound since startedCh would never see a failure worth reporting this
+// fast.
 func TestSupervisor_RefusesOnPeerPIDMismatch(t *testing.T) {
 	reg := &fakeRegistry{}
 	sockPath := filepath.Join(shortSockDir(t), "a.sock")
@@ -554,12 +653,31 @@ func TestSupervisor_RefusesOnPeerPIDMismatch(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // bounded: a regression must fail fast
 	defer cancel()
-	err := sup.Run(ctx)
+	runErr := make(chan error, 1)
+	go func() { runErr <- sup.Run(ctx) }()
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	defer waitCancel()
+	startErr := sup.WaitStarted(waitCtx)
+	if startErr == nil {
+		t.Fatal("WaitStarted() with a mismatched peer pid: want error, got nil")
+	}
+	if !strings.Contains(startErr.Error(), "peer credential check") {
+		t.Errorf("WaitStarted() error = %q, does not name the peer credential check", startErr.Error())
+	}
+
+	err := <-runErr
 	if err == nil {
 		t.Fatal("Run() with a mismatched peer pid: want error, got nil")
 	}
+	if !strings.Contains(err.Error(), "peer credential check") {
+		t.Errorf("Run() error = %q, does not name the peer credential check", err.Error())
+	}
 	if sup.Healthy() {
 		t.Error("Healthy() after a peer pid mismatch: want false")
+	}
+	if state, _ := sup.State(); state != StateDown {
+		t.Errorf("State() after a refused first start = %v, want StateDown", state)
 	}
 }
 
@@ -593,4 +711,51 @@ func TestSupervisor_BrokenConnectionCase_NotEquivalentToProcessExit(t *testing.T
 	// removed case makes fail (by timing out the whole package, which the
 	// bounded ctx above turns into a fast, readable failure instead).
 	waitForFinished(t, fp)
+}
+
+// TestSupervisor_RepeatedCallerCancelsDoNotExhaustRestartBudget is item
+// 6's Supervisor-level proof, the security review's own probe: under the
+// old break-on-cancel behavior a caller cancel marked the connection
+// broken, which Run's client.Broken() case treated exactly like a crash
+// and spent a restart on it, so MaxRestarts+1 caller cancels alone used
+// to exhaust the budget and end Run (RED at fb767fc). Each reply here is
+// only delayed, not withheld, so every cancelled call's drain genuinely
+// succeeds and the connection never breaks.
+func TestSupervisor_RepeatedCallerCancelsDoNotExhaustRestartBudget(t *testing.T) {
+	reg := &fakeRegistry{}
+	cfg := testSupervisorConfig(filepath.Join(shortSockDir(t), "a.sock"))
+	cfg.CallTimeout = 2 * time.Second
+	cfg.MaxRestarts = 3
+	configure := func(fp *fakeProcess) { fp.replyDelay = 100 * time.Millisecond }
+	sup := newSupervisor(cfg, newFakeLauncher(t, configure, reg))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // bounded: a regression must fail fast
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- sup.Run(ctx) }()
+	waitForHealthy(t, sup, true)
+
+	transport := sup.Transport()
+	for i := 0; i < cfg.MaxRestarts+1; i++ {
+		callCtx, callCancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		_, err := transport.Get(callCtx, []device.FleetGetItem{{Object: "x", Property: "y"}})
+		callCancel()
+		if err == nil {
+			t.Fatalf("Get %d with a 30ms ctx against a 100ms-delayed reply: want error, got nil", i)
+		}
+		// Let this iteration's drain finish (its reply arrives ~100ms
+		// from its own write) before the next iteration writes, so each
+		// cancel is independently proven rather than queuing behind an
+		// unrelated backlog.
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	select {
+	case err := <-runErr:
+		t.Fatalf("Run() exited after %d caller cancels: %v, want it still running (no restart should have been needed)", cfg.MaxRestarts+1, err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if !sup.Healthy() {
+		t.Error("Healthy() after repeated caller cancels alone: want true")
+	}
 }

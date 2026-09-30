@@ -210,3 +210,91 @@ func TestLoadFleetFile_RejectsNoDevices(t *testing.T) {
 		t.Fatal("LoadFleetFile: want error on a fleet with no devices, got nil")
 	}
 }
+
+// Q2 (operator decision 2026-09-30): the fleet file names its own
+// interpreter, validated at load.
+
+func TestLoadFleetFile_InterpreterOmittedIsValid(t *testing.T) {
+	ff := validFleetFile() // no "interpreter" key
+	dir := t.TempDir()
+	path := writeFleetFile(t, dir, ff)
+
+	loaded, err := LoadFleetFile(path)
+	if err != nil {
+		t.Fatalf("LoadFleetFile: %v", err)
+	}
+	if loaded.Interpreter != "" {
+		t.Errorf("Interpreter = %q, want empty (PATH default)", loaded.Interpreter)
+	}
+}
+
+func TestLoadFleetFile_AcceptsAbsoluteExecutableInterpreter(t *testing.T) {
+	dir := t.TempDir()
+	interp := filepath.Join(dir, "python3")
+	if err := os.WriteFile(interp, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatalf("write fake interpreter: %v", err)
+	}
+	ff := validFleetFile()
+	ff["interpreter"] = interp
+	path := writeFleetFile(t, dir, ff)
+
+	loaded, err := LoadFleetFile(path)
+	if err != nil {
+		t.Fatalf("LoadFleetFile: %v", err)
+	}
+	if loaded.Interpreter != interp {
+		t.Errorf("Interpreter = %q, want %q", loaded.Interpreter, interp)
+	}
+}
+
+func TestLoadFleetFile_RejectsRelativeInterpreter(t *testing.T) {
+	ff := validFleetFile()
+	ff["interpreter"] = "python3" // not absolute
+	dir := t.TempDir()
+	path := writeFleetFile(t, dir, ff)
+
+	if _, err := LoadFleetFile(path); err == nil {
+		t.Fatal("LoadFleetFile: want error on a relative interpreter path, got nil")
+	}
+}
+
+func TestLoadFleetFile_RejectsMissingInterpreter(t *testing.T) {
+	dir := t.TempDir()
+	ff := validFleetFile()
+	ff["interpreter"] = filepath.Join(dir, "does-not-exist")
+	path := writeFleetFile(t, dir, ff)
+
+	if _, err := LoadFleetFile(path); err == nil {
+		t.Fatal("LoadFleetFile: want error on a nonexistent interpreter path, got nil")
+	}
+}
+
+func TestLoadFleetFile_RejectsNonExecutableInterpreter(t *testing.T) {
+	dir := t.TempDir()
+	interp := filepath.Join(dir, "python3")
+	if err := os.WriteFile(interp, []byte("not a script"), 0o600); err != nil { // 0600: no +x bit
+		t.Fatalf("write non-executable interpreter: %v", err)
+	}
+	ff := validFleetFile()
+	ff["interpreter"] = interp
+	path := writeFleetFile(t, dir, ff)
+
+	if _, err := LoadFleetFile(path); err == nil {
+		t.Fatal("LoadFleetFile: want error on a non-executable interpreter, got nil")
+	}
+}
+
+func TestLoadFleetFile_RejectsInterpreterThatIsADirectory(t *testing.T) {
+	dir := t.TempDir()
+	interpDir := filepath.Join(dir, "python3")
+	if err := os.Mkdir(interpDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	ff := validFleetFile()
+	ff["interpreter"] = interpDir
+	path := writeFleetFile(t, dir, ff)
+
+	if _, err := LoadFleetFile(path); err == nil {
+		t.Fatal("LoadFleetFile: want error when interpreter names a directory, got nil")
+	}
+}

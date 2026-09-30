@@ -54,8 +54,13 @@ func TestFleetManagerWiredIntoMain(t *testing.T) {
 	}
 	text := string(src)
 	for _, line := range []string{
-		"fleetMgr, err := gridlabd.NewManager(gridlabd.ManagerConfig{",
-		"Role:       cfg.ClientRole,",
+		// Item 1: main builds the ManagerConfig through
+		// buildFleetManagerConfig (the same function a test calls), not a
+		// literal ManagerConfig{} passed straight to NewManager, so the
+		// --sidecar-pythonpath resolution a test exercises is the same
+		// path production takes.
+		"fleetCfg, err := buildFleetManagerConfig(cfg.ClientRole,",
+		"fleetMgr, err := gridlabd.NewManager(fleetCfg)",
 		"os.Exit(1)",
 	} {
 		if !strings.Contains(text, line) {

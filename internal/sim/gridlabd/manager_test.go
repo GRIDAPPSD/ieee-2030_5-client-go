@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -49,7 +50,7 @@ func TestNewManager_AggregatorRole_BuildsSupervisorsAndDevices(t *testing.T) {
 	m, err := NewManager(ManagerConfig{
 		Role:       AggregatorRole,
 		FleetFiles: []string{path},
-		RunDir:     dir,
+		RunDir:     shortSockDir(t), // t.TempDir() here can exceed the AF_UNIX sun_path limit once joined with the fleet name and socket suffix
 	})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
@@ -262,6 +263,9 @@ func TestNewManager_AggregatorRoleNoFleetFiles_IsOrdinaryRun(t *testing.T) {
 	}
 }
 
+// The error text is asserted exactly, not only err != nil, so removing
+// this guard (item 2's coverage LOW) fails the test rather than passing
+// against some other, unrelated error.
 func TestNewManager_RunDirRequiredWithFleetFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := writeFleetFile(t, dir, validFleetFile())
@@ -273,8 +277,15 @@ func TestNewManager_RunDirRequiredWithFleetFiles(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewManager(fleet file, no RunDir): want error, got nil")
 	}
+	const want = "gridlabd: RunDir is required when FleetFiles is non-empty"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
 }
 
+// The error text is asserted exactly, not only err != nil (item 2's
+// coverage LOW): removing this guard would fail with some other error
+// (a nil pointer, or success), and this test would not notice without it.
 func TestNewManager_NoInverterObjectMappedRefuses(t *testing.T) {
 	dir := t.TempDir()
 	ff := validFleetFile()
@@ -282,11 +293,93 @@ func TestNewManager_NoInverterObjectMappedRefuses(t *testing.T) {
 	devices[0]["objects"] = map[string]string{"battery": "probe_bat0"} // no "inverter" key
 	path := writeFleetFile(t, dir, ff)
 
-	if _, err := NewManager(ManagerConfig{
+	_, err := NewManager(ManagerConfig{
 		Role:       AggregatorRole,
 		FleetFiles: []string{path},
-		RunDir:     dir,
-	}); err == nil {
+		RunDir:     shortSockDir(t), // t.TempDir() here can exceed the AF_UNIX sun_path limit once joined with the fleet name and socket suffix
+	})
+	if err == nil {
 		t.Fatal("NewManager(device with no inverter object): want error, got nil")
+	}
+	const want = "fleet probe device probe-000: no inverter object mapped"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+// TestNewManager_RelativeRunDirResolvesToAbsolute is item 2: a relative
+// RunDir must not let the Go side stat a socket path relative to this
+// process's own cwd while the sidecar (whose Dir is RunDir) binds it
+// relative to its own : two different files on any cwd other than
+// RunDir's parent. In-package so the built Supervisor's unexported cfg is
+// directly inspectable, per the design.
+func TestNewManager_RelativeRunDirResolvesToAbsolute(t *testing.T) {
+	dir := shortSockDir(t) // short and absolute: dir/rundir/probe.sock must fit the AF_UNIX sun_path limit
+	t.Chdir(dir)
+	path := writeFleetFile(t, dir, validFleetFile())
+
+	m, err := NewManager(ManagerConfig{
+		Role:       AggregatorRole,
+		FleetFiles: []string{path},
+		RunDir:     "rundir", // relative
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if len(m.Supervisors) != 1 {
+		t.Fatalf("len(Supervisors) = %d, want 1", len(m.Supervisors))
+	}
+	sup := m.Supervisors[0]
+	wantDir := filepath.Join(dir, "rundir")
+	if sup.cfg.Dir != wantDir {
+		t.Errorf("Supervisor Dir = %q, want %q (absolute)", sup.cfg.Dir, wantDir)
+	}
+	wantSock := filepath.Join(wantDir, "probe.sock")
+	if sup.cfg.SocketPath != wantSock {
+		t.Errorf("Supervisor SocketPath = %q, want %q (absolute)", sup.cfg.SocketPath, wantSock)
+	}
+}
+
+// TestNewManager_OverlongSocketPathRefusesNamingFleet is item 2: a socket
+// path over the AF_UNIX sun_path limit is refused at construction, naming
+// the fleet, rather than surfacing as a dial failure after the first
+// start's full StartTimeout.
+func TestNewManager_OverlongSocketPathRefusesNamingFleet(t *testing.T) {
+	base := t.TempDir()
+	long := strings.Repeat("x", maxSocketPathLen)
+	runDir := filepath.Join(base, long)
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := writeFleetFile(t, base, validFleetFile()) // fleet name "probe"
+
+	_, err := NewManager(ManagerConfig{
+		Role:       AggregatorRole,
+		FleetFiles: []string{path},
+		RunDir:     runDir,
+	})
+	if err == nil {
+		t.Fatal("NewManager with an over-long socket path: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "probe") {
+		t.Errorf("error %q does not name the fleet %q", err.Error(), "probe")
+	}
+}
+
+// TestPrepareRunDir_RootIsRefusedByOwner proves the owner check actually
+// fires on a real, unwritable-by-us directory (not just the synthetic
+// 0700 t.TempDir() every other prepareRunDir test constructs): "/" exists,
+// is a directory, and (on any sane host) is not group- or world-writable,
+// so it reaches and is refused by the ownership check specifically.
+func TestPrepareRunDir_RootIsRefusedByOwner(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root: / is root-owned, so the owner check would not fire")
+	}
+	err := prepareRunDir("/")
+	if err == nil {
+		t.Fatal(`prepareRunDir("/"): want error, got nil`)
+	}
+	if !strings.Contains(err.Error(), "not owned by the current user") {
+		t.Errorf(`prepareRunDir("/") error = %q, want it to name the owner check`, err.Error())
 	}
 }

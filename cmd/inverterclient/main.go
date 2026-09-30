@@ -178,26 +178,6 @@ func walkDERProgramTree(
 	return nil
 }
 
-// stopFleetSupervisors stops every fleet's Supervisor and waits for each
-// to finish (by PID, Supervisor.Stop's own contract), so a clean shutdown
-// leaves no sidecar process running instead of relying solely on
-// Pdeathsig. mgr is nil in the der role or the aggregator role with no
-// --fleet-file, in which case this is a no-op.
-func stopFleetSupervisors(mgr *gridlabd.Manager) {
-	if mgr == nil {
-		return
-	}
-	var wg sync.WaitGroup
-	for _, sup := range mgr.Supervisors {
-		wg.Add(1)
-		go func(sup *gridlabd.Supervisor) {
-			defer wg.Done()
-			sup.Stop()
-		}(sup)
-	}
-	wg.Wait()
-}
-
 func main() {
 	cfg := inverter.SimConfig{}
 
@@ -227,12 +207,15 @@ func main() {
 	// construction-time gate: given a fleet file in the der role it
 	// refuses here, before any device, dispatcher, listener or sidecar
 	// process exists, rather than starting a mismatched subset (#70).
-	fleetMgr, err := gridlabd.NewManager(gridlabd.ManagerConfig{
-		Role:       cfg.ClientRole,
-		FleetFiles: []string(*cf.FleetFiles),
-		RunDir:     *cf.RunDir,
-		Env:        fleetSidecarEnv(defaultSidecarPythonPath),
-	})
+	// buildFleetManagerConfig is the one function that resolves
+	// --sidecar-pythonpath into the sidecar's Env (item 1); a test calls
+	// the same function, so it exercises the exact path production uses.
+	fleetCfg, err := buildFleetManagerConfig(cfg.ClientRole, []string(*cf.FleetFiles), *cf.RunDir, *cf.SidecarPythonPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+	fleetMgr, err := gridlabd.NewManager(fleetCfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
@@ -300,28 +283,75 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Start each fleet's supervisor now that ctx exists to bind its
-	// lifetime to (SIGINT/SIGTERM above). fleetMgr is non-nil only in the
+	// notifyReceiver is declared here, ahead of its real construction
+	// further down, so the shutdown closure below can close over the same
+	// variable and see whatever it is finally assigned; shutdown must
+	// exist before fleets are started (a first-start refusal runs it,
+	// Decision 4), which is before the receiver itself is built.
+	var notifyReceiver *inverter.NotifyReceiver
+
+	// Start every fleet's supervisor and wait for each one's first start
+	// to finish before touching certificates or the network (Decision 2:
+	// "fail closed, at startup"). fleetMgr is non-nil only in the
 	// aggregator role with at least one --fleet-file; nothing beyond
 	// starting the sidecar process and the health/restart loop is wired
 	// here; the managed-device sessions, dispatch and fleet control loop
 	// that would consume fleetMgr.Devices are separate, later work.
+	var fleets []fleetSupervisor
 	if fleetMgr != nil {
 		for _, sup := range fleetMgr.Supervisors {
-			go func(sup *gridlabd.Supervisor) {
-				// Exit, not log-and-continue: a fleet Run can return only
-				// on an initial start refused (a version/object/fleet-name
-				// mismatch) or a restart budget exhausted after running.
-				// Either way the fleet is down for good until an operator
-				// intervenes, and the aggregator has no way to bring it
-				// back on its own; running on with other fleets apparently
-				// healthy while this one is silently dead is worse than
-				// exiting so the whole process gets restarted/alerted on.
-				if err := sup.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-					log.Fatalf("fleet sidecar exited: %v", err)
-				}
-			}(sup)
+			fleets = append(fleets, sup)
 		}
+	}
+	fleetStop, err := startFleets(ctx, fleets, log.Printf)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// A signal arrived during the first-start wait: reported as an
+			// ordinary cancellation, not a refusal (exit path table,
+			// Decision 4). startFleets has already stopped every fleet
+			// that did start.
+			log.Println("Shutting down (signal during fleet start)...")
+			return
+		}
+		// A fleet refused its first start: startFleets has already
+		// stopped every other fleet that did start. Nothing past this
+		// point (certificates, HMI, the notify receiver) has started
+		// either, so there is nothing else to shut down.
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+
+	// One shutdown, idempotent, for every exit path reached from here on
+	// (Decision 4, steps 2 to 4): stop the notify receiver, then every
+	// fleet supervisor, in parallel, waiting for all. defer covers every
+	// ordinary return (a ctx-cancel idle loop, Phase 5's own ctx.Done()
+	// case, scenario completion); fatalf (below) covers every log.Fatalf
+	// site that follows fleet start, since os.Exit skips deferred calls.
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			if notifyReceiver != nil {
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := notifyReceiver.Stop(shutdownCtx); err != nil {
+					log.Printf("notify receiver stop: %v", err)
+				}
+			}
+			fleetStop()
+		})
+	}
+	defer shutdown()
+
+	// fatalf replaces log.Fatalf for every exit reached after fleets have
+	// started: it logs exactly as log.Fatalf would, then runs shutdown
+	// before exiting, so a sidecar process (and its socket) and the
+	// notify receiver are never left behind by an os.Exit that skips
+	// every deferred call. log_fatalf_scan_test.go's allowlist covers
+	// this helper's own call sites, not log.Fatalf's.
+	fatalf := func(format string, args ...any) {
+		log.Printf(format, args...)
+		shutdown()
+		os.Exit(1)
 	}
 
 	// Start HMI
@@ -364,7 +394,7 @@ func main() {
 	// require it; the inverter has working polling for every function set
 	// in scope. If cert load, TCP bind, or address resolution fails, log
 	// the error and continue with polling-only rather than crash.
-	notifyReceiver := startNotifyReceiver(cfg, *notifyListen, hmi, notifyDispatcher.Dispatch)
+	notifyReceiver = startNotifyReceiver(cfg, *notifyListen, hmi, notifyDispatcher.Dispatch)
 	// effectiveAdvertiseHost is the host:port the notify URL actually
 	// names: --notify-advertise-host's own port when it gives one,
 	// otherwise --notify-advertise-host's host combined with the port the
@@ -372,15 +402,11 @@ func main() {
 	// the bound address unchanged. Computed once here so both the
 	// loopback warning below and the subscription POST (registerSubscriptions,
 	// further down) agree on the same address.
+	//
+	// Stopping the receiver is shutdown's job now (declared above, before
+	// fleet start), not a defer here: this block only builds it.
 	var effectiveAdvertiseHost string
 	if notifyReceiver != nil {
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := notifyReceiver.Stop(shutdownCtx); err != nil {
-				log.Printf("notify receiver stop: %v", err)
-			}
-		}()
 		if boundAddr, err := notifyReceiver.Addr(); err == nil {
 			effectiveAdvertiseHost = effectiveNotifyAdvertiseHost(*notifyAdvertiseHost, boundAddr)
 			if isUnreachableAdvertiseHost(effectiveAdvertiseHost) {
@@ -395,7 +421,7 @@ func main() {
 	// Create 2030.5 client
 	client, err := inverter.NewSEP2Client(cfg)
 	if err != nil {
-		log.Fatalf("create client: %v", err)
+		fatalf("create client: %v", err)
 	}
 	log.Printf("Device identity : SFDI: %s LFDI: %s", client.SFDI(), client.LFDI())
 
@@ -403,7 +429,7 @@ func main() {
 	log.Println("=== Phase 1: Discovery ===")
 	dcap, err := client.Discover(ctx)
 	if err != nil {
-		log.Fatalf("discover: %v", err)
+		fatalf("discover: %v", err)
 	}
 	log.Printf("DeviceCapability: href=%s pollRate=%d", dcap.Href, dcap.PollRate)
 	if dcap.TimeLink != nil {
@@ -421,7 +447,7 @@ func main() {
 	// See GRIDAPPSD/ieee-2030_5-server-go#34.
 	dcap, err = client.WaitForAdvertisedLinks(ctx, dcap)
 	if err != nil {
-		log.Fatalf("wait for advertised links: %v", err)
+		fatalf("wait for advertised links: %v", err)
 	}
 
 	// Phase 1b: Server-time sync. Per IEEE 2030.5 section 10 / CSIP,
@@ -471,7 +497,7 @@ func main() {
 	if endDeviceAcquisitionUsesLookup(cfg) {
 		log.Println("=== Phase 2: EndDevice Lookup ===")
 		if edevListHref == "" {
-			log.Fatalf("EndDevice lookup required but DeviceCapability has no EndDeviceListLink")
+			fatalf("EndDevice lookup required but DeviceCapability has no EndDeviceListLink")
 		}
 		for {
 			// On 301 LookupOwnEndDevice surfaces the new edev-list
@@ -488,7 +514,7 @@ func main() {
 				break
 			}
 			if !errors.Is(err, inverter.ErrEndDeviceNotFound) {
-				log.Fatalf("lookup own EndDevice: %v", err)
+				fatalf("lookup own EndDevice: %v", err)
 			}
 			pollEvery := time.Duration(dcap.PollRate) * time.Second
 			if pollEvery <= 0 {
@@ -505,7 +531,7 @@ func main() {
 	} else {
 		log.Println("=== Phase 2: Registration ===")
 		if edevListHref == "" {
-			log.Fatalf("DeviceCapability has no EndDeviceListLink; registration impossible")
+			fatalf("DeviceCapability has no EndDeviceListLink; registration impossible")
 		}
 		// On 301 Register surfaces the new edev-list base href;
 		// store it locally so any downstream phase that re-uses edevListHref
@@ -513,7 +539,7 @@ func main() {
 		var newEdevListHref string
 		edev, newEdevListHref, err = client.Register(ctx, edevListHref)
 		if err != nil {
-			log.Fatalf("register: %v", err)
+			fatalf("register: %v", err)
 		}
 		if newEdevListHref != "" {
 			log.Printf("Phase 2 register: 301 follow : cached edev-list href %s -> %s",
@@ -541,7 +567,7 @@ func main() {
 		if err != nil {
 			var fe *phase2bFatal
 			if errors.As(err, &fe) {
-				log.Fatalf("%s", fe.Error())
+				fatalf("%s", fe.Error())
 			}
 			return
 		}
@@ -591,7 +617,7 @@ func main() {
 	if err != nil {
 		var fe *fsaListFatal
 		if errors.As(err, &fe) {
-			log.Fatalf("%s", fe.Error())
+			fatalf("%s", fe.Error())
 		}
 		return
 	}
@@ -634,7 +660,7 @@ func main() {
 		if err != nil {
 			var fe *derProgramWalkFatal
 			if errors.As(err, &fe) {
-				log.Fatalf("%s", fe.Error())
+				fatalf("%s", fe.Error())
 			}
 			return
 		}
@@ -959,7 +985,7 @@ func main() {
 		var err error
 		reporter, err = inverter.NewReporter(client, client.LFDI(), "", "")
 		if err != nil {
-			log.Fatalf("build reporter: %v", err)
+			fatalf("build reporter: %v", err)
 		}
 	} else {
 		reporter = runPhase4Metering(ctx, client, dcap, derStatusHref)
@@ -1018,8 +1044,7 @@ func main() {
 		select {
 		case <-ctx.Done():
 			log.Println("Shutting down...")
-			stopFleetSupervisors(fleetMgr)
-			return
+			return // deferred shutdown() runs steps 2 to 4 (Decision 4)
 		case <-ticker.C:
 			if skipDERPipelineForRole(cfg) {
 				// The aggregator's own EndDevice is not a DER: no

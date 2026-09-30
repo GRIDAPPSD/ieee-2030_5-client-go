@@ -327,6 +327,76 @@ func TestSidecarIntegration_RealGridlabd(t *testing.T) {
 	}
 }
 
+// TestNewManager_RelativeRunDir_RealSidecarHealthy is item 2 (a relative
+// RunDir resolves to absolute before it becomes both the sidecar's cwd and
+// the socket path Go dials) proven against the real sidecar, combined with
+// Q2 (the fleet file, not a manager-wide flag, names the interpreter):
+// production's own NewManager, a fleet file whose own "interpreter" field
+// is the pinned venv's python, and a RunDir given as a bare relative name.
+func TestNewManager_RelativeRunDir_RealSidecarHealthy(t *testing.T) {
+	python := sidecarPython(t)
+
+	base := shortSockDir(t)
+	t.Chdir(base)
+
+	fleetDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fleetDir, "probe.glm"), []byte(battery2GLM), 0o600); err != nil {
+		t.Fatalf("write glm: %v", err)
+	}
+	ff := validFleetFile()
+	ff["interpreter"] = python
+	fleetFilePath := writeFleetFile(t, fleetDir, ff)
+
+	// Q2 names the interpreter; it does not replace item 1's PYTHONPATH
+	// mechanism, which this Env still needs: gldsidecar is not
+	// pip-installed into the pinned venv (ci.yml installs only its
+	// dependencies), so even the right interpreter cannot import it
+	// without this.
+	env := append(DefaultEnv(), "PYTHONPATH="+filepath.Join(repoRoot(t), "sim", "gridlabd"))
+
+	m, err := NewManager(ManagerConfig{
+		Role:         AggregatorRole,
+		FleetFiles:   []string{fleetFilePath},
+		RunDir:       "rundir", // relative: resolved against base, the t.Chdir'd cwd
+		Env:          env,
+		StartTimeout: 15 * time.Second,
+		CallTimeout:  10 * time.Second,
+		StopGrace:    2 * time.Second,
+		Stderr:       testWriter{t},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if len(m.Supervisors) != 1 {
+		t.Fatalf("len(Supervisors) = %d, want 1", len(m.Supervisors))
+	}
+	sup := m.Supervisors[0]
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- sup.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-runErr:
+		case <-time.After(5 * time.Second):
+			t.Error("Supervisor.Run did not return after ctx cancel")
+		}
+	})
+
+	deadline := time.Now().Add(15 * time.Second)
+	for !sup.Healthy() && time.Now().Before(deadline) {
+		select {
+		case err := <-runErr:
+			t.Fatalf("Run exited before becoming healthy: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if !sup.Healthy() {
+		t.Fatal("sidecar did not become healthy within 15s via a relative RunDir and the fleet file's own interpreter")
+	}
+}
+
 func fleetControls(activePowerW, reactivePowerVAr float64) inverter.ControlOutputs {
 	return inverter.ControlOutputs{
 		ActivePowerW:     activePowerW,

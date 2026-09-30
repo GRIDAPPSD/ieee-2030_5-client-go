@@ -30,6 +30,7 @@ type cliFlags struct {
 	NotifyAdvertiseHost *string
 	FleetFiles          *repeatedStringFlag
 	RunDir              *string
+	SidecarPythonPath   *string
 }
 
 // repeatedStringFlag implements flag.Value so --fleet-file may be given
@@ -135,6 +136,15 @@ func registerFlags(fs *flag.FlagSet, cfg *inverter.SimConfig) *cliFlags {
 	fs.Var(&fleetFiles, "fleet-file", "path to a fleet JSON (aggregator role only; repeatable, one per fleet)")
 	runDir := fs.String("run-dir", "", "directory for fleet sidecar sockets (aggregator role, required with --fleet-file)")
 
+	// SidecarPythonPath names where gldsidecar (sim/gridlabd) lives, so a
+	// fleet's PYTHONPATH can be resolved to an absolute path at startup
+	// rather than left relative to whatever directory the sidecar's own
+	// cwd (RunDir) happens to be. Default matches this binary being run
+	// from the repo root, the same convention --cert/--key/--ca use.
+	// Empty means gldsidecar is already installed in the interpreter's
+	// own environment: no PYTHONPATH is added.
+	sidecarPythonPath := fs.String("sidecar-pythonpath", defaultSidecarPythonPath, "directory containing the gldsidecar package (aggregator role with --fleet-file only; empty if gldsidecar is installed in the interpreter's own environment)")
+
 	return &cliFlags{
 		HMIPort:             hmiPort,
 		ListScenarios:       listScenarios,
@@ -143,5 +153,6 @@ func registerFlags(fs *flag.FlagSet, cfg *inverter.SimConfig) *cliFlags {
 		NotifyAdvertiseHost: notifyAdvertiseHost,
 		FleetFiles:          &fleetFiles,
 		RunDir:              runDir,
+		SidecarPythonPath:   sidecarPythonPath,
 	}
 }

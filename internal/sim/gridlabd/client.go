@@ -123,102 +123,17 @@ func validateReplyMatchesRequest(op string, want, got []objProp) error {
 	return nil
 }
 
-// call sends one request and returns its result, or an error: *RemoteError
-// for an ordinary refusal (the wire stays in sync: one request got one
-// reply), or one wrapping ErrConnectionBroken or ErrWorkerDead when it does
-// not.
-//
-// Every call is bounded even when ctx carries no deadline of its own
-// (c.timeout), and ctx.Done() is honored directly by running the round
-// trip in a goroutine and selecting on it: SetDeadline alone only reacts
-// to wall-clock expiry, never to an explicit cancel.
-//
-// The protocol serializes every call behind c.mu (one request in flight
-// per socket), so a caller can queue behind another call already in
-// progress. Two things follow, and both matter for N devices sharing one
-// fleet's connection: c.timeout is applied only after the lock is held,
-// so time spent queued is never charged against this call's own budget;
-// and ctx is checked again right after the lock, so a caller whose own
-// ctx expired while queued is answered with its ctx error and nothing
-// else, never touching the wire or marking the connection broken. Only a
-// timeout or cancellation reached DURING this call's own round trip (the
-// select below) risks a reply still in flight and must break the
-// connection.
-func (c *Client) call(ctx context.Context, op string, args map[string]any) (json.RawMessage, error) {
-	select {
-	case <-c.broken:
-		return nil, fmt.Errorf("%s: %w", op, ErrConnectionBroken)
-	default:
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	select {
-	case <-c.broken:
-		return nil, fmt.Errorf("%s: %w", op, ErrConnectionBroken)
-	default:
-	}
-
-	// Answer a caller whose own ctx is already done now, before this call
-	// has written anything: the connection stays exactly as it was, so
-	// there is nothing to break.
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("%s: %w", op, err)
-	}
-
-	if c.timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.timeout)
-		defer cancel()
-	}
-
-	id := c.nextID
-	c.nextID++
-	req := wireRequest{ID: id, Op: op, Args: args}
-	line, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("encode %s request: %w", op, err)
-	}
-	if dl, ok := ctx.Deadline(); ok {
-		if err := c.conn.SetDeadline(dl); err != nil {
-			cause := fmt.Errorf("%s: %w: set deadline: %w", op, ErrConnectionBroken, err)
-			c.markBroken(cause)
-			return nil, cause
-		}
-	}
-
-	done := make(chan callResult, 1)
-	go func() {
-		if _, err := c.conn.Write(append(line, '\n')); err != nil {
-			done <- callResult{err: fmt.Errorf("write %s request: %w", op, err)}
-			return
-		}
-		replyLine, err := c.reader.ReadString('\n')
-		if err != nil {
-			done <- callResult{err: fmt.Errorf("read %s reply: %w", op, err)}
-			return
-		}
-		done <- callResult{line: replyLine}
-	}()
-
-	var res callResult
-	select {
-	case res = <-done:
-	case <-ctx.Done():
-		cause := fmt.Errorf("%s: %w: %w", op, ErrConnectionBroken, ctx.Err())
-		c.markBroken(cause) // unblocks the goroutine's Write/Read above
-		<-done              // wait for it to exit so this call never leaks it
-		return nil, cause
-	}
-	if res.err != nil {
-		cause := fmt.Errorf("%s: %w: %w", op, ErrConnectionBroken, res.err)
-		c.markBroken(cause)
-		return nil, cause
-	}
-
+// decodeReply parses one reply line for request id, and returns its
+// result or an error: *RemoteError for an ordinary refusal (the wire
+// stayed in sync: one request got one matching reply), or one wrapping
+// ErrConnectionBroken or ErrWorkerDead when a decode failure, an id
+// mismatch, or worker_dead means the connection can no longer be trusted.
+// Shared between call's own reply path and drain's (below): both apply
+// exactly the same rule to decide whether this connection is still good
+// for the next caller.
+func (c *Client) decodeReply(op string, id int64, line string) (json.RawMessage, error) {
 	var reply wireReply
-	if err := json.Unmarshal([]byte(res.line), &reply); err != nil {
+	if err := json.Unmarshal([]byte(line), &reply); err != nil {
 		cause := fmt.Errorf("decode %s reply: %w: %w", op, ErrConnectionBroken, err)
 		c.markBroken(cause)
 		return nil, cause
@@ -241,6 +156,146 @@ func (c *Client) call(ctx context.Context, op string, args map[string]any) (json
 		return nil, &RemoteError{Op: op, Code: code, Message: msg}
 	}
 	return reply.Result, nil
+}
+
+// drain finishes a call whose caller has already given up on it (call's
+// ctx.Done() path, below): the request for id was already written, so
+// exactly one reply for it is still owed on the wire, and it must be read
+// before this connection may serve another request, or the next caller
+// desyncs (reads this abandoned reply as its own). call hands drain the
+// connection lock rather than releasing it, so drain is the only thing
+// touching the wire until this reply is accounted for.
+//
+// No timer of its own: the conn deadline was already set to c.timeout
+// from when the request was written (call, below), and the read this
+// waits on already honors that deadline at the socket level, so drain's
+// own wait is naturally bounded by "up to c.timeout from when the request
+// was written" (design Decision 3) with no separate clock to keep in
+// sync with it.
+//
+// Design Decision 3: the connection breaks only when this drain fails
+// (the bound above passes, the reply does not decode, its id does not
+// match, or it is worker_dead); a clean, matching reply is decoded and
+// discarded, and the connection stays good for the next caller. A caller
+// cancelling its own round trip must never, by itself, cost the fleet a
+// restart.
+func (c *Client) drain(op string, id int64, done <-chan callResult) {
+	defer c.mu.Unlock()
+	res := <-done
+	if res.err != nil {
+		cause := fmt.Errorf("%s: %w: %w", op, ErrConnectionBroken, res.err)
+		c.markBroken(cause)
+		return
+	}
+	// Discarded: the caller that owned this id is long gone, and
+	// decodeReply already marks the connection broken on the only
+	// outcomes this drain needs to act on (a bad decode, a mismatched
+	// id, or worker_dead); a clean, matching reply needs no further
+	// action beyond being read off the wire.
+	_, _ = c.decodeReply(op, id, res.line)
+}
+
+// call sends one request and returns its result, or an error: *RemoteError
+// for an ordinary refusal (the wire stays in sync: one request got one
+// reply), or one wrapping ErrConnectionBroken or ErrWorkerDead when it does
+// not.
+//
+// Every call is bounded even when ctx carries no deadline of its own
+// (c.timeout), and ctx.Done() is honored directly by running the round
+// trip in a goroutine and selecting on it: SetDeadline alone only reacts
+// to wall-clock expiry, never to an explicit cancel.
+//
+// The protocol serializes every call behind c.mu (one request in flight
+// per socket), so a caller can queue behind another call already in
+// progress. Two things follow, and both matter for N devices sharing one
+// fleet's connection: c.timeout is applied only after the lock is held,
+// so time spent queued is never charged against this call's own budget;
+// and ctx is checked again right after the lock, so a caller whose own
+// ctx expired while queued is answered with its ctx error and nothing
+// else, never touching the wire or marking the connection broken.
+//
+// Design Decision 3 (detach and drain, not break): once the request is
+// written, this caller's OWN ctx being cancelled no longer breaks the
+// connection. call returns the caller's error at once and hands the
+// connection lock to drain (above), which finishes reading the one reply
+// still owed on the wire. The conn deadline is set from c.timeout ALONE,
+// computed once here before the write, never from the caller's own
+// (possibly shorter) ctx deadline: a short caller deadline must end only
+// THIS caller's wait, never make the socket read itself fail and break
+// the connection for whoever is queued behind it. A Set whose ctx errors
+// this way has an UNKNOWN outcome: the sidecar may have applied the
+// write; see Set's own doc comment.
+func (c *Client) call(ctx context.Context, op string, args map[string]any) (json.RawMessage, error) {
+	select {
+	case <-c.broken:
+		return nil, fmt.Errorf("%s: %w", op, ErrConnectionBroken)
+	default:
+	}
+
+	c.mu.Lock()
+
+	select {
+	case <-c.broken:
+		c.mu.Unlock()
+		return nil, fmt.Errorf("%s: %w", op, ErrConnectionBroken)
+	default:
+	}
+
+	// Answer a caller whose own ctx is already done now, before this call
+	// has written anything: the connection stays exactly as it was, so
+	// there is nothing to break, and nothing to drain either.
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	id := c.nextID
+	c.nextID++
+	req := wireRequest{ID: id, Op: op, Args: args}
+	line, err := json.Marshal(req)
+	if err != nil {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("encode %s request: %w", op, err)
+	}
+	if c.timeout > 0 {
+		if err := c.conn.SetDeadline(time.Now().Add(c.timeout)); err != nil {
+			cause := fmt.Errorf("%s: %w: set deadline: %w", op, ErrConnectionBroken, err)
+			c.markBroken(cause)
+			c.mu.Unlock()
+			return nil, cause
+		}
+	}
+
+	done := make(chan callResult, 1)
+	go func() {
+		if _, err := c.conn.Write(append(line, '\n')); err != nil {
+			done <- callResult{err: fmt.Errorf("write %s request: %w", op, err)}
+			return
+		}
+		replyLine, err := c.reader.ReadString('\n')
+		if err != nil {
+			done <- callResult{err: fmt.Errorf("read %s reply: %w", op, err)}
+			return
+		}
+		done <- callResult{line: replyLine}
+	}()
+
+	var res callResult
+	select {
+	case res = <-done:
+	case <-ctx.Done():
+		cerr := ctx.Err()
+		go c.drain(op, id, done) // takes over c.mu; releases it once this reply is accounted for
+		return nil, fmt.Errorf("%s: %w", op, cerr)
+	}
+	defer c.mu.Unlock()
+
+	if res.err != nil {
+		cause := fmt.Errorf("%s: %w: %w", op, ErrConnectionBroken, res.err)
+		c.markBroken(cause)
+		return nil, cause
+	}
+	return c.decodeReply(op, id, res.line)
 }
 
 // HelloResult is the sidecar's answer to hello: its versions, the fleet
@@ -286,6 +341,16 @@ type SetResult struct {
 
 // Set writes every item, all-or-nothing (the adapter restores any already
 // applied item if a later one in the batch fails).
+//
+// If ctx is done while the request is on the wire, Set returns ctx's own
+// error, and the OUTCOME IS UNKNOWN: the sidecar may have already applied
+// the write before this caller gave up on hearing back (call, in
+// client.go, detaches rather than breaking the connection to find out).
+// The caller must not read a ctx error here as "not applied". The design
+// this relies on: every ApplySetpoint tick re-sends the caller's current
+// setpoint regardless of the previous tick's outcome, so a lost
+// acknowledgement converges on the next tick rather than needing its own
+// retry or reconciliation logic.
 func (c *Client) Set(ctx context.Context, items []SetItem) ([]SetResult, error) {
 	wireItems := make([]map[string]any, len(items))
 	for i, it := range items {

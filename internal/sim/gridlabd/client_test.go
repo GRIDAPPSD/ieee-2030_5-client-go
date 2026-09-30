@@ -229,6 +229,101 @@ func TestClient_Call_CtxCancelIsHonoredIndependentlyOfDeadline(t *testing.T) {
 	}
 }
 
+// TestClient_Call_CancelDetachesInsteadOfBreaking is item 6, design
+// Decision 3: a caller ctx cancelled during its own round trip must not
+// cost the connection. The reply is only delayed (100ms), not withheld
+// (fp.replyDelay, not stallOp), so the drain call hands the lock to
+// genuinely succeeds within this test: Broken() must stay unfired, and a
+// later call on the SAME connection must still work.
+func TestClient_Call_CancelDetachesInsteadOfBreaking(t *testing.T) {
+	client, _ := dialFakeWithTimeout(t, func(fp *fakeProcess) { fp.replyDelay = 100 * time.Millisecond }, 5*time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := client.Get(ctx, []GetItem{{Object: "a", Property: "x"}})
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Get with a cancel mid-round-trip: err = %v, want context.Canceled", err)
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("Get took %v to return after cancel, want near the 20ms cancel delay", elapsed)
+	}
+
+	select {
+	case <-client.Broken():
+		t.Error("Broken() fired after a caller cancel alone: want it to stay open")
+	default:
+	}
+
+	// The abandoned reply is still in flight (the fake replies ~100ms
+	// after the original write); this call must still succeed once drain
+	// has read and discarded it, proving the connection stayed usable for
+	// the next caller.
+	if _, err := client.Hello(context.Background()); err != nil {
+		t.Fatalf("Hello after the cancelled call: %v, want nil (the connection must still be usable)", err)
+	}
+}
+
+// TestClient_Call_QueuedBehindDrainGetsOwnCtxErrorWithoutWriting proves a
+// second caller, queued behind a first call's drain (the first caller
+// already cancelled and detached), is answered with ITS OWN ctx error
+// once it is finally given the lock, and never writes to the wire: the
+// existing "ctx already done" fast path in call fires for it exactly as
+// it would for any other queued caller, drain or not.
+func TestClient_Call_QueuedBehindDrainGetsOwnCtxErrorWithoutWriting(t *testing.T) {
+	client, fp := dialFakeWithTimeout(t, func(fp *fakeProcess) { fp.replyDelay = 150 * time.Millisecond }, 5*time.Second)
+
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		firstCancel()
+	}()
+	if _, err := client.Get(firstCtx, []GetItem{{Object: "a", Property: "x"}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("first Get: err = %v, want context.Canceled", err)
+	}
+
+	// The first call's own write already reached the server (that write
+	// is exactly what the drain is now waiting to hear back on); wait for
+	// the server side to have actually recorded it before taking the
+	// baseline, so the assertion below is not racing the drain's own
+	// request against the count snapshot.
+	deadline := time.Now().Add(2 * time.Second)
+	for fp.reqCount("get") < 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	callsBefore := fp.reqCount("get")
+	if callsBefore != 1 {
+		t.Fatalf("get request count before the second call = %d, want 1 (the first call's own write)", callsBefore)
+	}
+
+	// The first call's drain holds the lock until ~150ms from its OWN
+	// write; a ctx already expired before this call is even made
+	// guarantees the second caller is still queued (or, at best, just
+	// acquiring the lock) when its own deadline has already passed.
+	secondCtx, secondCancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer secondCancel()
+	<-secondCtx.Done() // wait for it to actually expire, not race it
+	_, err := client.Get(secondCtx, []GetItem{{Object: "b", Property: "y"}})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("second Get, queued behind the first's drain: err = %v, want context.DeadlineExceeded", err)
+	}
+	// Give any write the second call might have started (a regression
+	// would launch one asynchronously, in a goroutine this call does not
+	// wait on) time to reach the server before checking it never did: the
+	// first call's own drain finishes around 150ms after its write, well
+	// past this margin, so a real write from the second call would show
+	// up here if one happened.
+	time.Sleep(250 * time.Millisecond)
+	if got := fp.reqCount("get"); got != callsBefore {
+		t.Errorf("second Get reached the wire (get request count %d -> %d), want unchanged: an already-expired ctx must be answered without writing", callsBefore, got)
+	}
+}
+
 func TestClient_Get_RejectsShortReply(t *testing.T) {
 	client, _ := dialFake(t, func(fp *fakeProcess) { fp.shortReplyBy = 1 })
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

@@ -41,6 +41,15 @@ type FleetFile struct {
 	// an empty value falls back to the generator's known convention
 	// (defaultFleetMeterObject); a later generator may set it explicitly.
 	Meter string `json:"meter,omitempty"`
+	// Interpreter is the absolute path to the Python interpreter this
+	// fleet's sidecar is launched with (operator decision 2026-09-30, Q2:
+	// the interpreter is named per fleet, not by a manager-wide flag).
+	// Optional: empty means "python3 resolved from PATH", the existing
+	// default. Validated at load time (Validate below): must be an
+	// absolute path to an existing, executable file, so a wrong value is a
+	// fleet-file load error naming the fleet, not a launch failure once
+	// the sidecar process is already being started.
+	Interpreter string `json:"interpreter,omitempty"`
 
 	path string // absolute path this was loaded from; anchors GLMPath
 }
@@ -117,6 +126,21 @@ func (f *FleetFile) Validate() error {
 				return fmt.Errorf("fleet file %s: object %s is mapped to two devices (%s and %s)", f.Fleet, obj, other, dev.Name)
 			}
 			seenObject[obj] = dev.Name
+		}
+	}
+	if f.Interpreter != "" {
+		if !filepath.IsAbs(f.Interpreter) {
+			return fmt.Errorf("fleet file %s: interpreter %q must be an absolute path", f.Fleet, f.Interpreter)
+		}
+		info, err := os.Stat(f.Interpreter)
+		if err != nil {
+			return fmt.Errorf("fleet file %s: interpreter %s: %w", f.Fleet, f.Interpreter, err)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("fleet file %s: interpreter %s is a directory, not an executable", f.Fleet, f.Interpreter)
+		}
+		if info.Mode().Perm()&0o111 == 0 {
+			return fmt.Errorf("fleet file %s: interpreter %s is not executable", f.Fleet, f.Interpreter)
 		}
 	}
 	return nil

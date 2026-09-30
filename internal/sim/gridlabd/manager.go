@@ -28,6 +28,14 @@ const AggregatorRole = "aggregator"
 // when a fleet file does not name its own meter object.
 const defaultFleetMeterObject = "fleet_meter"
 
+// maxSocketPathLen is the Linux sun_path limit (108 bytes, including a
+// mandatory trailing NUL the kernel appends) less that NUL: the longest
+// path bind(2)/connect(2) can actually accept for an AF_UNIX socket.
+// Refusing over this at construction turns a 30-second dial timeout deep
+// inside a Supervisor's first start into an immediate, readable error
+// naming the fleet and the path.
+const maxSocketPathLen = 107
+
 // ManagerConfig builds a Manager from a set of fleet files.
 type ManagerConfig struct {
 	Role       string   // the process's client role, e.g. "der" or "aggregator"
@@ -93,6 +101,18 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	if cfg.RunDir == "" {
 		return nil, fmt.Errorf("gridlabd: RunDir is required when FleetFiles is non-empty")
 	}
+	// Resolve RunDir to an absolute path before anything derives a
+	// socket path from it: a relative RunDir is stat'd by the Go side
+	// relative to THIS process's cwd but bound by the sidecar relative to
+	// ITS OWN cwd (which Supervisor sets to RunDir itself, Dir below), so
+	// a relative value names two different files across that boundary.
+	// "--run-dir run" stays usable; it just always resolves rather than
+	// being refused.
+	absRunDir, err := filepath.Abs(cfg.RunDir)
+	if err != nil {
+		return nil, fmt.Errorf("gridlabd: resolve RunDir %s: %w", cfg.RunDir, err)
+	}
+	cfg.RunDir = absRunDir
 	if err := prepareRunDir(cfg.RunDir); err != nil {
 		return nil, err
 	}
@@ -125,11 +145,27 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 			seenLFDIs[norm] = ff.Fleet + "/" + dev.Name
 		}
 
+		sockPath := filepath.Join(cfg.RunDir, ff.Fleet+".sock")
+		if len(sockPath) > maxSocketPathLen {
+			return nil, fmt.Errorf("fleet %s: socket path %s is %d bytes, exceeds the %d-byte AF_UNIX sun_path limit; use a shorter RunDir or fleet name",
+				ff.Fleet, sockPath, len(sockPath), maxSocketPathLen)
+		}
+
+		// Q2 (operator decision 2026-09-30): the fleet file's own
+		// interpreter is more specific than the manager-wide Command
+		// template and wins when both are set. Empty (the common case)
+		// leaves command nil, so Supervisor's own default applies
+		// ("python3" resolved from PATH).
+		command := cfg.Command
+		if ff.Interpreter != "" {
+			command = []string{ff.Interpreter, "-P", "-m", "gldsidecar"}
+		}
+
 		sup := NewSupervisor(SupervisorConfig{
 			Fleet:         ff.Fleet,
-			SocketPath:    filepath.Join(cfg.RunDir, ff.Fleet+".sock"),
+			SocketPath:    sockPath,
 			FleetFilePath: ff.path, // absolute; the sidecar's --fleet-file argument
-			Command:       cfg.Command,
+			Command:       command,
 			Env:           cfg.Env,
 			Dir:           cfg.RunDir,
 			StartTimeout:  cfg.StartTimeout,

@@ -97,6 +97,38 @@ func (cfg SupervisorConfig) withDefaults() SupervisorConfig {
 	return cfg
 }
 
+// SupervisorState is a fleet's lifecycle state (design, item 3): Starting
+// until the first start completes, Up while healthy, Restarting between a
+// lost connection/process and the next attempt, Down once the restart
+// budget is exhausted (or the first start was refused), Stopped after an
+// orderly Stop or ctx cancel.
+type SupervisorState int
+
+const (
+	StateStarting SupervisorState = iota
+	StateUp
+	StateRestarting
+	StateDown
+	StateStopped
+)
+
+func (s SupervisorState) String() string {
+	switch s {
+	case StateStarting:
+		return "Starting"
+	case StateUp:
+		return "Up"
+	case StateRestarting:
+		return "Restarting"
+	case StateDown:
+		return "Down"
+	case StateStopped:
+		return "Stopped"
+	default:
+		return "Unknown"
+	}
+}
+
 // Supervisor starts, health-checks, restarts and stops one fleet's sidecar
 // process. One Supervisor per fleet (design: "one sidecar process per
 // fleet").
@@ -104,17 +136,26 @@ type Supervisor struct {
 	cfg    SupervisorConfig
 	launch processLauncher
 
-	mu         sync.RWMutex
-	clientConn *Client
-	proc       sidecarProcess
-	healthy    bool
-	gen        uint64 // incremented on every successful (re)start
-	started    bool   // Run has begun
-	stopped    bool   // Stop has been called; set under mu so Run and Stop agree on order
+	mu          sync.RWMutex
+	clientConn  *Client
+	proc        sidecarProcess
+	healthy     bool
+	gen         uint64 // incremented on every successful (re)start
+	started     bool   // Run has begun
+	stopped     bool   // Stop has been called; set under mu so Run and Stop agree on order
+	state       SupervisorState
+	stateReason error // valid for StateDown; nil otherwise
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
 	doneCh   chan struct{}
+
+	// startedOnce/startedCh/startErr back WaitStarted: startedCh closes
+	// exactly once, when the first start (this Run's only unretried
+	// attempt) completes, success or failure; startErr is nil on success.
+	startedOnce sync.Once
+	startedCh   chan struct{}
+	startErr    error
 }
 
 // NewSupervisor constructs a Supervisor that execs the real sidecar.
@@ -127,10 +168,11 @@ func NewSupervisor(cfg SupervisorConfig) *Supervisor {
 // injected test launcher never has to fill in every timing field itself.
 func newSupervisor(cfg SupervisorConfig, launch processLauncher) *Supervisor {
 	return &Supervisor{
-		cfg:    cfg.withDefaults(),
-		launch: launch,
-		stopCh: make(chan struct{}),
-		doneCh: make(chan struct{}),
+		cfg:       cfg.withDefaults(),
+		launch:    launch,
+		stopCh:    make(chan struct{}),
+		doneCh:    make(chan struct{}),
+		startedCh: make(chan struct{}),
 	}
 }
 
@@ -187,16 +229,90 @@ func (s *Supervisor) process() sidecarProcess {
 	return s.proc
 }
 
-// setState records the current connection and health, and bumps the
-// restart generation on every transition into healthy: a device backend
-// reads generation() to notice that the model underneath it was reset.
-func (s *Supervisor) setState(client *Client, proc sidecarProcess, healthy bool) {
+// Fleet returns the fleet name this Supervisor was configured for.
+// startFleets (cmd/inverterclient) uses this to log a later DOWN
+// transition by fleet name without holding its own copy.
+func (s *Supervisor) Fleet() string { return s.cfg.Fleet }
+
+// State reports the supervisor's current lifecycle state and, for
+// StateDown, the reason it stopped trying; reason is nil in every other
+// state.
+func (s *Supervisor) State() (SupervisorState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state, s.stateReason
+}
+
+// WaitStarted blocks until this Supervisor's first start completes and
+// returns nil if it became healthy, or the refusal error if it did not.
+// ctx bounds only this wait, independent of Run's own ctx: a caller that
+// gives up waiting does not stop Run. Safe to call before Run ever starts
+// (blocks until it does) and safe to call more than once or from more
+// than one goroutine (every caller sees the same result).
+func (s *Supervisor) WaitStarted(ctx context.Context) error {
+	select {
+	case <-s.startedCh:
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return s.startErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// markStarted closes startedCh exactly once, recording err (nil on
+// success) for WaitStarted. A second call is a no-op: Run only ever
+// reaches its first-start outcome once.
+func (s *Supervisor) markStarted(err error) {
+	s.startedOnce.Do(func() {
+		s.mu.Lock()
+		s.startErr = err
+		s.mu.Unlock()
+		close(s.startedCh)
+	})
+}
+
+// setUp records a successful (re)start: the connection and process are
+// live, health is true, and the restart generation advances (a device
+// backend reads generation() to notice a restart reset the model
+// underneath it). State becomes Up.
+func (s *Supervisor) setUp(client *Client, proc sidecarProcess) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.clientConn, s.proc, s.healthy = client, proc, healthy
-	if healthy {
-		s.gen++
-	}
+	s.clientConn, s.proc, s.healthy = client, proc, true
+	s.gen++
+	s.state, s.stateReason = StateUp, nil
+}
+
+// setRestarting records that the sidecar is no longer reachable (exited,
+// or its connection can no longer be trusted) and a restart attempt is
+// about to begin.
+func (s *Supervisor) setRestarting() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clientConn, s.proc, s.healthy = nil, nil, false
+	s.state = StateRestarting
+}
+
+// setDown records a terminal failure: the restart budget was exhausted,
+// or the first start was refused outright. Logs the transition exactly
+// once ("logs the fleet and cause once per state change", design Decision
+// 2), through cfg.Log, so a DOWN fleet is visible without parsing logs.
+func (s *Supervisor) setDown(reason error) {
+	s.mu.Lock()
+	s.clientConn, s.proc, s.healthy = nil, nil, false
+	s.state, s.stateReason = StateDown, reason
+	s.mu.Unlock()
+	s.cfg.Log("fleet %s DOWN: %v", s.cfg.Fleet, reason)
+}
+
+// setStopped records an orderly shutdown: Stop was called, or Run's own
+// ctx was cancelled.
+func (s *Supervisor) setStopped() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clientConn, s.proc, s.healthy = nil, nil, false
+	s.state = StateStopped
 }
 
 // Run starts the sidecar and supervises it until ctx is cancelled or Stop
@@ -213,7 +329,9 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		// start. Without this, Stop() called before Run() would have to
 		// choose between hanging forever (nothing will ever close doneCh)
 		// or not waiting at all (racing a Run() that is about to start).
+		s.state = StateStopped
 		s.mu.Unlock()
+		s.markStarted(context.Canceled) // unblock any WaitStarted caller
 		return nil
 	}
 	s.started = true
@@ -222,9 +340,13 @@ func (s *Supervisor) Run(ctx context.Context) error {
 
 	proc, client, err := s.startOnce(ctx)
 	if err != nil {
-		return fmt.Errorf("fleet %s: initial start refused: %w", s.cfg.Fleet, err)
+		reason := fmt.Errorf("fleet %s: initial start refused: %w", s.cfg.Fleet, err)
+		s.setDown(reason)
+		s.markStarted(reason)
+		return reason
 	}
-	s.setState(client, proc, true)
+	s.setUp(client, proc)
+	s.markStarted(nil)
 
 	var restarts []time.Time
 	for {
@@ -236,7 +358,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			s.shutdown(context.WithoutCancel(ctx), client, proc)
 			return nil
 		case werr := <-proc.Wait():
-			s.setState(nil, nil, false)
+			s.setRestarting()
 			_ = client.Close() // the process is already gone; nothing left to flush
 			s.cfg.Log("fleet %s: sidecar exited (%v)", s.cfg.Fleet, werr)
 		case <-client.Broken():
@@ -245,7 +367,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			// flight, so it can never be reused. The process might still be
 			// alive but unresponsive; kill it rather than try to resync.
 			reason := client.BrokenReason()
-			s.setState(nil, nil, false)
+			s.setRestarting()
 			if errors.Is(reason, ErrWorkerDead) {
 				s.cfg.Log("fleet %s: sidecar worker died, restarting: %v", s.cfg.Fleet, reason)
 			} else {
@@ -258,10 +380,24 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		// one succeeds. A failed restart attempt must never fall through
 		// to the select above with a stale or nil proc/client.
 		for {
+			// Checked before the budget, not after (item 3): a signal or
+			// Stop arriving exactly as the budget would be exhausted must
+			// still be reported as a cancellation, not a budget-exhausted
+			// refusal, since the caller asked to stop and got exactly
+			// that, not a crash-loop diagnosis.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-s.stopCh:
+				return nil
+			default:
+			}
 			restarts = pruneRestarts(restarts, s.cfg.RestartWindow)
 			if len(restarts) >= s.cfg.MaxRestarts {
-				return fmt.Errorf("fleet %s: restart budget exhausted after %d attempts in %s, staying down",
+				reason := fmt.Errorf("fleet %s: restart budget exhausted after %d attempts in %s, staying down",
 					s.cfg.Fleet, len(restarts), s.cfg.RestartWindow)
+				s.setDown(reason)
+				return reason
 			}
 			delay := backoffDelay(len(restarts), s.cfg.BackoffMin, s.cfg.BackoffMax)
 			restarts = append(restarts, time.Now())
@@ -280,7 +416,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 				s.cfg.Log("fleet %s: restart attempt failed: %v", s.cfg.Fleet, err)
 				continue
 			}
-			s.setState(client, proc, true)
+			s.setUp(client, proc)
 			break
 		}
 	}
@@ -387,7 +523,7 @@ func waitForSocket(ctx context.Context, sockPath string, proc sidecarProcess, di
 // SIGKILL by PID (design: "shutdown request, wait 5 s, SIGTERM, wait 5 s,
 // SIGKILL, by PID; remove the socket; confirm the child reaped").
 func (s *Supervisor) shutdown(ctx context.Context, client *Client, proc sidecarProcess) {
-	s.setState(nil, nil, false)
+	s.setStopped()
 	if client != nil {
 		shutdownCtx, cancel := context.WithTimeout(ctx, s.cfg.CallTimeout)
 		_ = client.Shutdown(shutdownCtx) // best effort: proc is stopped below regardless of whether this succeeds

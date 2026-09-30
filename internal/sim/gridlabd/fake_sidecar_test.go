@@ -110,6 +110,19 @@ type fakeProcess struct {
 	done     chan error
 	doneOnce sync.Once
 	finished bool
+
+	// reqCounts counts every request handle() actually received, by op:
+	// a test proves a caller never wrote to the wire by checking this
+	// stays unchanged, which a mere "got an error back" assertion cannot
+	// distinguish from "wrote, then the reply was discarded."
+	reqCounts map[string]int
+}
+
+// reqCount reads how many requests of op this fake has handled so far.
+func (fp *fakeProcess) reqCount(op string) int {
+	fp.mu.Lock()
+	defer fp.mu.Unlock()
+	return fp.reqCounts[op]
 }
 
 func extractArg(args []string, flag string) string {
@@ -297,6 +310,11 @@ func (fp *fakeProcess) serve() {
 func (fp *fakeProcess) handle(req wireRequest) (wireReply, bool) {
 	fp.mu.Lock()
 	defer fp.mu.Unlock()
+
+	if fp.reqCounts == nil {
+		fp.reqCounts = map[string]int{}
+	}
+	fp.reqCounts[req.Op]++
 
 	if fp.workerDeadOn != "" && req.Op == fp.workerDeadOn {
 		return wireReply{ID: req.ID, OK: false, Error: &wireErrorBody{Code: "worker_dead", Message: "worker process is dead"}}, true
