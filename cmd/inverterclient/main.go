@@ -322,8 +322,8 @@ func main() {
 		}()
 		if boundAddr, err := notifyReceiver.Addr(); err == nil {
 			effectiveAdvertiseHost = effectiveNotifyAdvertiseHost(*notifyAdvertiseHost, boundAddr)
-			if isLoopbackHost(effectiveAdvertiseHost) {
-				log.Printf("WARNING: notify URL advertises a loopback address (%s); a server on another host cannot reach it. Set --notify-listen and --notify-advertise-host to a reachable interface, or expect polling-only behavior against a remote server.", effectiveAdvertiseHost)
+			if isUnreachableAdvertiseHost(effectiveAdvertiseHost) {
+				log.Printf("WARNING: notify URL advertises a loopback or unspecified address (%s); a server on another host cannot reach it. Set --notify-listen and --notify-advertise-host to a reachable interface, or expect polling-only behavior against a remote server.", effectiveAdvertiseHost)
 			}
 		}
 	}
