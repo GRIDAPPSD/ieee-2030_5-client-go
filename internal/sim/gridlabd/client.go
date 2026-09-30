@@ -17,6 +17,13 @@ import (
 // recovered on this connection; the caller must redial after a restart.
 var ErrWorkerDead = errors.New("gridlabd worker process is dead")
 
+// ErrConnectionBroken marks a Client whose wire state can no longer be
+// trusted: a timeout, a decode error, a reply id mismatch, or worker_dead.
+// In every one of those cases a reply for the abandoned request might
+// still arrive later, so the connection is closed and refused for any
+// further call rather than risking a later call reading that stale reply.
+var ErrConnectionBroken = errors.New("gridlabd connection is broken")
+
 // timeLayout is the format the sidecar's model clock returns from step_to
 // and get: no trailing Z, no offset (probed 2026-09-29 against a running
 // sidecar: get_clock() returned "2020-01-01T00:01:00"). This differs from
@@ -36,17 +43,23 @@ type Client struct {
 	conn   net.Conn
 	reader *bufio.Reader
 	nextID int64
+
+	timeout    time.Duration // bounds every call when ctx carries no earlier deadline
+	broken     chan struct{}
+	brokenOnce sync.Once
 }
 
 // Dial connects to a sidecar listening on sockPath. ctx bounds the dial
-// only; per-call deadlines are set by Call's ctx.
-func Dial(ctx context.Context, sockPath string) (*Client, error) {
+// only. timeout bounds every subsequent call whose own ctx carries no
+// earlier deadline, so a caller with a bare context.Background() still
+// gets a bounded round trip rather than blocking forever.
+func Dial(ctx context.Context, sockPath string, timeout time.Duration) (*Client, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", sockPath)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", sockPath, err)
 	}
-	return &Client{conn: conn, reader: bufio.NewReader(conn)}, nil
+	return &Client{conn: conn, reader: bufio.NewReader(conn), timeout: timeout, broken: make(chan struct{})}, nil
 }
 
 // Close closes the underlying connection.
@@ -56,12 +69,55 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
+// Broken returns a channel that is closed once this connection can no
+// longer be trusted and must not be reused; see ErrConnectionBroken.
+func (c *Client) Broken() <-chan struct{} { return c.broken }
+
+// markBroken closes broken (once) and closes the connection, so any I/O
+// blocked on it (this call's own goroutine, or a concurrent one queued
+// behind c.mu) unblocks immediately instead of waiting out a timeout.
+func (c *Client) markBroken() {
+	c.brokenOnce.Do(func() {
+		close(c.broken)
+		_ = c.conn.Close() // forces any blocked Read/Write on this conn to return
+	})
+}
+
+type callResult struct {
+	line string
+	err  error
+}
+
 // call sends one request and returns its result, or an error: *RemoteError
-// for an ordinary refusal, or one wrapping ErrWorkerDead when the sidecar
-// reports its worker died.
+// for an ordinary refusal (the wire stays in sync: one request got one
+// reply), or one wrapping ErrConnectionBroken or ErrWorkerDead when it does
+// not.
+//
+// Every call is bounded even when ctx carries no deadline of its own
+// (c.timeout), and ctx.Done() is honored directly by running the round
+// trip in a goroutine and selecting on it: SetDeadline alone only reacts
+// to wall-clock expiry, never to an explicit cancel.
 func (c *Client) call(ctx context.Context, op string, args map[string]any) (json.RawMessage, error) {
+	select {
+	case <-c.broken:
+		return nil, fmt.Errorf("%s: %w", op, ErrConnectionBroken)
+	default:
+	}
+
+	if c.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	select {
+	case <-c.broken:
+		return nil, fmt.Errorf("%s: %w", op, ErrConnectionBroken)
+	default:
+	}
 
 	id := c.nextID
 	c.nextID++
@@ -72,24 +128,46 @@ func (c *Client) call(ctx context.Context, op string, args map[string]any) (json
 	}
 	if dl, ok := ctx.Deadline(); ok {
 		if err := c.conn.SetDeadline(dl); err != nil {
+			c.markBroken()
 			return nil, fmt.Errorf("set %s deadline: %w", op, err)
 		}
-	} else {
-		_ = c.conn.SetDeadline(time.Time{})
 	}
-	if _, err := c.conn.Write(append(line, '\n')); err != nil {
-		return nil, fmt.Errorf("write %s request: %w", op, err)
+
+	done := make(chan callResult, 1)
+	go func() {
+		if _, err := c.conn.Write(append(line, '\n')); err != nil {
+			done <- callResult{err: fmt.Errorf("write %s request: %w", op, err)}
+			return
+		}
+		replyLine, err := c.reader.ReadString('\n')
+		if err != nil {
+			done <- callResult{err: fmt.Errorf("read %s reply: %w", op, err)}
+			return
+		}
+		done <- callResult{line: replyLine}
+	}()
+
+	var res callResult
+	select {
+	case res = <-done:
+	case <-ctx.Done():
+		c.markBroken() // unblocks the goroutine's Write/Read above
+		<-done         // wait for it to exit so this call never leaks it
+		return nil, fmt.Errorf("%s: %w: %w", op, ErrConnectionBroken, ctx.Err())
 	}
-	replyLine, err := c.reader.ReadString('\n')
-	if err != nil {
-		return nil, fmt.Errorf("read %s reply: %w", op, err)
+	if res.err != nil {
+		c.markBroken()
+		return nil, res.err
 	}
+
 	var reply wireReply
-	if err := json.Unmarshal([]byte(replyLine), &reply); err != nil {
-		return nil, fmt.Errorf("decode %s reply: %w", op, err)
+	if err := json.Unmarshal([]byte(res.line), &reply); err != nil {
+		c.markBroken()
+		return nil, fmt.Errorf("decode %s reply: %w: %w", op, ErrConnectionBroken, err)
 	}
 	if reply.ID != id {
-		return nil, fmt.Errorf("%s reply id %d does not match request id %d", op, reply.ID, id)
+		c.markBroken()
+		return nil, fmt.Errorf("%s reply id %d does not match request id %d: %w", op, reply.ID, id, ErrConnectionBroken)
 	}
 	if !reply.OK {
 		code, msg := "", ""
@@ -97,6 +175,7 @@ func (c *Client) call(ctx context.Context, op string, args map[string]any) (json
 			code, msg = reply.Error.Code, reply.Error.Message
 		}
 		if code == "worker_dead" {
+			c.markBroken()
 			return nil, fmt.Errorf("%s: %w: %s", op, ErrWorkerDead, msg)
 		}
 		return nil, &RemoteError{Op: op, Code: code, Message: msg}
@@ -164,8 +243,15 @@ func (c *Client) Set(ctx context.Context, items []SetItem) ([]SetResult, error) 
 	if err := json.Unmarshal(raw, &results); err != nil {
 		return nil, fmt.Errorf("decode set result: %w", err)
 	}
+	if len(results) != len(items) {
+		return nil, fmt.Errorf("set: sidecar replied with %d results for %d items", len(results), len(items))
+	}
 	out := make([]SetResult, len(results))
 	for i, r := range results {
+		if r.Object != items[i].Object || r.Property != items[i].Property {
+			return nil, fmt.Errorf("set: result %d is %s.%s, want %s.%s (reordered or mismatched reply)",
+				i, r.Object, r.Property, items[i].Object, items[i].Property)
+		}
 		out[i] = SetResult{Object: r.Object, Property: r.Property, Value: r.Value}
 	}
 	return out, nil
@@ -189,7 +275,9 @@ type GetResult struct {
 }
 
 // Get reads every item. A nonexistent object or property fails the whole
-// call (protocol.py: get_property's status 3 covers both).
+// call (protocol.py: get_property's status 3 covers both). The reply is
+// checked against the request: a short, long or reordered reply is an
+// error, never read positionally and never a silent 0.
 func (c *Client) Get(ctx context.Context, items []GetItem) ([]GetResult, error) {
 	wireItems := make([]map[string]any, len(items))
 	for i, it := range items {
@@ -208,8 +296,15 @@ func (c *Client) Get(ctx context.Context, items []GetItem) ([]GetResult, error) 
 	if err := json.Unmarshal(raw, &results); err != nil {
 		return nil, fmt.Errorf("decode get result: %w", err)
 	}
+	if len(results) != len(items) {
+		return nil, fmt.Errorf("get: sidecar replied with %d results for %d items", len(results), len(items))
+	}
 	out := make([]GetResult, len(results))
 	for i, r := range results {
+		if r.Object != items[i].Object || r.Property != items[i].Property {
+			return nil, fmt.Errorf("get: result %d is %s.%s, want %s.%s (reordered or mismatched reply)",
+				i, r.Object, r.Property, items[i].Object, items[i].Property)
+		}
 		out[i] = GetResult{Object: r.Object, Property: r.Property, Value: r.Value, ModelTime: r.Time}
 	}
 	return out, nil

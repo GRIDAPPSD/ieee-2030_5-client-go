@@ -29,6 +29,11 @@ type FleetFile struct {
 	AggregatorPEN   string        `json:"aggregator_pen"`
 	GLM             string        `json:"glm"`
 	Devices         []DeviceEntry `json:"devices"`
+	// Meter is the shared coupling-point object read for grid voltage and
+	// frequency. Optional: today's generator does not write this field, so
+	// an empty value falls back to the generator's known convention
+	// (defaultFleetMeterObject); a later generator may set it explicitly.
+	Meter string `json:"meter,omitempty"`
 
 	path string // absolute path this was loaded from; anchors GLMPath
 }

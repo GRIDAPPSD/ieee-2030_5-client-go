@@ -2,12 +2,18 @@ package gridlabd
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
 func dialFake(t *testing.T, configure func(*fakeProcess)) (*Client, *fakeProcess) {
+	t.Helper()
+	return dialFakeWithTimeout(t, configure, 2*time.Second)
+}
+
+func dialFakeWithTimeout(t *testing.T, configure func(*fakeProcess), clientTimeout time.Duration) (*Client, *fakeProcess) {
 	t.Helper()
 	reg := &fakeRegistry{}
 	launch := newFakeLauncher(t, configure, reg)
@@ -20,7 +26,7 @@ func dialFake(t *testing.T, configure func(*fakeProcess)) (*Client, *fakeProcess
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	client, err := waitForSocket(ctx, sockPath)
+	client, err := waitForSocket(ctx, sockPath, proc, clientTimeout)
 	if err != nil {
 		t.Fatalf("dial fake: %v", err)
 	}
@@ -132,5 +138,78 @@ func TestClient_Shutdown_ClosesConnection(t *testing.T) {
 	case <-fp.Wait():
 	case <-time.After(2 * time.Second):
 		t.Fatal("fake process did not exit after Shutdown")
+	}
+}
+
+// TestClient_Call_BoundedEvenWithNoDeadlineCtx proves the client-timeout
+// fallback: a sidecar that never answers, called with a bare
+// context.Background() (no deadline of its own), must still give up
+// within roughly the client's configured timeout rather than blocking
+// forever. Then proves the second half of item 1: a call issued after a
+// timed-out one fails immediately with ErrConnectionBroken, never reading
+// a reply that might still be in flight for the abandoned request.
+func TestClient_Call_BoundedEvenWithNoDeadlineCtx(t *testing.T) {
+	client, _ := dialFakeWithTimeout(t, func(fp *fakeProcess) { fp.stallOp = "hello" }, 150*time.Millisecond)
+
+	start := time.Now()
+	_, err := client.Hello(context.Background())
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("Hello against a sidecar that never answers, with context.Background(): want error, got nil")
+	}
+	if elapsed > time.Second {
+		t.Errorf("Hello against a stalled sidecar took %v to give up, want roughly its 150ms client timeout", elapsed)
+	}
+
+	start2 := time.Now()
+	_, err2 := client.Hello(context.Background())
+	elapsed2 := time.Since(start2)
+	if !errors.Is(err2, ErrConnectionBroken) {
+		t.Errorf("Hello after a timed-out call: err = %v, want ErrConnectionBroken", err2)
+	}
+	if elapsed2 > 50*time.Millisecond {
+		t.Errorf("Hello after the connection was already broken took %v, want near-instant (fast path)", elapsed2)
+	}
+}
+
+// TestClient_Call_CtxCancelIsHonoredIndependentlyOfDeadline proves
+// ctx.Done() is honored directly, not only a socket deadline: a ctx
+// cancelled for a reason other than reaching its own (later) deadline
+// still interrupts the call promptly.
+func TestClient_Call_CtxCancelIsHonoredIndependentlyOfDeadline(t *testing.T) {
+	client, _ := dialFakeWithTimeout(t, func(fp *fakeProcess) { fp.stallOp = "hello" }, 30*time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel() // cancelled well before the 30s deadline and the 30s client timeout
+	}()
+
+	start := time.Now()
+	_, err := client.Hello(ctx)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("Hello with an early-cancelled ctx: want error, got nil")
+	}
+	if elapsed > time.Second {
+		t.Errorf("Hello took %v to honor an explicit cancel, want near the 50ms cancel delay", elapsed)
+	}
+}
+
+func TestClient_Get_RejectsShortReply(t *testing.T) {
+	client, _ := dialFake(t, func(fp *fakeProcess) { fp.shortReplyBy = 1 })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := client.Get(ctx, []GetItem{{Object: "a", Property: "x"}, {Object: "b", Property: "y"}}); err == nil {
+		t.Fatal("Get with a short reply: want error, got nil")
+	}
+}
+
+func TestClient_Get_RejectsReorderedReply(t *testing.T) {
+	client, _ := dialFake(t, func(fp *fakeProcess) { fp.reorderReply = true })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := client.Get(ctx, []GetItem{{Object: "a", Property: "x"}, {Object: "b", Property: "y"}}); err == nil {
+		t.Fatal("Get with a reordered reply: want error, got nil")
 	}
 }

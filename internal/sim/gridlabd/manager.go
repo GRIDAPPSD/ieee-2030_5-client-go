@@ -3,6 +3,9 @@ package gridlabd
 import (
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -18,6 +21,12 @@ var ErrNotAggregatorRole = errors.New("fleet sidecars are only built in the aggr
 // AggregatorRole is the client role value that permits building fleets.
 const AggregatorRole = "aggregator"
 
+// defaultFleetMeterObject is the shared coupling-point object every fleet
+// the one existing generator (models/battery_fleet.py) writes into its
+// GLM, literally named "fleet_meter" regardless of fleet name. It is used
+// when a fleet file does not name its own meter object.
+const defaultFleetMeterObject = "fleet_meter"
+
 // ManagerConfig builds a Manager from a set of fleet files.
 type ManagerConfig struct {
 	Role       string   // the process's client role, e.g. "der" or "aggregator"
@@ -29,7 +38,15 @@ type ManagerConfig struct {
 	BackoffMin, BackoffMax, RestartWindow time.Duration
 	MaxRestarts                           int
 	Now                                   func() time.Time
-	Log                                   func(format string, args ...any)
+
+	// Stderr and Log are diagnostics: without them a sidecar's startup
+	// traceback, and every restart and health-transition log line, are
+	// silently discarded, which is exactly what made an earlier startup
+	// failure invisible. Nil defaults to os.Stderr and log.Printf, not to
+	// io.Discard: a caller must opt OUT of diagnostics explicitly (an
+	// io.Discard Stderr, a no-op Log), not get silence by omission.
+	Stderr io.Writer
+	Log    func(format string, args ...any)
 }
 
 // Manager owns one Supervisor per fleet file and the FleetDevice backends
@@ -59,6 +76,12 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	if cfg.RunDir == "" {
 		return nil, fmt.Errorf("gridlabd: RunDir is required in the aggregator role")
 	}
+	if cfg.Stderr == nil {
+		cfg.Stderr = os.Stderr
+	}
+	if cfg.Log == nil {
+		cfg.Log = log.Printf
+	}
 
 	m := &Manager{}
 	for _, path := range cfg.FleetFiles {
@@ -78,17 +101,22 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 			BackoffMax:    cfg.BackoffMax,
 			MaxRestarts:   cfg.MaxRestarts,
 			RestartWindow: cfg.RestartWindow,
+			Stderr:        cfg.Stderr,
 			Log:           cfg.Log,
 		})
 		m.Supervisors = append(m.Supervisors, sup)
 
+		meterObj := ff.Meter
+		if meterObj == "" {
+			meterObj = defaultFleetMeterObject
+		}
 		transport := sup.Transport()
 		for _, dev := range ff.Devices {
 			invObj, ok := dev.Objects["inverter"]
 			if !ok {
 				return nil, fmt.Errorf("fleet %s device %s: no inverter object mapped", ff.Fleet, dev.Name)
 			}
-			fd, err := device.NewFleetDevice(transport, dev.LFDI, invObj, cfg.Now)
+			fd, err := device.NewFleetDevice(transport, dev.LFDI, invObj, meterObj, cfg.Now)
 			if err != nil {
 				return nil, fmt.Errorf("fleet %s device %s: %w", ff.Fleet, dev.Name, err)
 			}

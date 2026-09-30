@@ -46,6 +46,16 @@ type fakeProcess struct {
 
 	helloErr *wireErrorBody
 
+	// stallOp, when set, makes the fake never reply to that op: the
+	// handler blocks on reading the connection (which the client never
+	// writes more to while awaiting a reply) until the client gives up
+	// and closes it, simulating an unresponsive sidecar.
+	stallOp string
+	// shortReplyBy truncates a "get" reply by this many items.
+	shortReplyBy int
+	// reorderReply swaps the first two items of a "get" reply.
+	reorderReply bool
+
 	done     chan error
 	doneOnce sync.Once
 	finished bool
@@ -180,6 +190,15 @@ func (fp *fakeProcess) serve() {
 		if err := json.Unmarshal([]byte(line), &req); err != nil {
 			continue
 		}
+		if fp.stallOp != "" && req.Op == fp.stallOp {
+			// Block on a read the client never satisfies (it is waiting on
+			// its own read for our reply), until the client gives up and
+			// closes the connection.
+			buf := make([]byte, 1)
+			_, _ = conn.Read(buf)
+			fp.finish(nil)
+			return
+		}
 		reply, stop := fp.handle(req)
 		b, _ := json.Marshal(reply)
 		if _, err := conn.Write(append(b, '\n')); err != nil {
@@ -236,6 +255,12 @@ func (fp *fakeProcess) handle(req wireRequest) (wireReply, bool) {
 				"value": fp.objects[[2]string{obj, prop}],
 				"time":  fp.model.Format(modelTimeLayout),
 			})
+		}
+		if fp.reorderReply && len(out) >= 2 {
+			out[0], out[1] = out[1], out[0]
+		}
+		if fp.shortReplyBy > 0 && fp.shortReplyBy <= len(out) {
+			out = out[:len(out)-fp.shortReplyBy]
 		}
 		result, _ := json.Marshal(out)
 		return wireReply{ID: req.ID, OK: true, Result: result}, false

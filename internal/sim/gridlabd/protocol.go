@@ -8,6 +8,7 @@ package gridlabd
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 )
 
 // ProtocolVersion is the protocol version this client speaks. It must match
@@ -49,10 +50,9 @@ func (e *RemoteError) Error() string {
 
 // Value is one property value carried on the wire: a plain JSON scalar, or
 // gridlabd's complex-number shape {"re":.., "im":..} for quantities such as
-// VA_Out (protocol.py's own docstring, IEEE-2030.5-Client probe 2026-09-29).
-// Float64 is the only accessor this package needs; a complex reply with a
-// nonzero imaginary part is refused rather than silently truncated, per
-// data-invariants: a dropped imaginary part would misreport delivered power.
+// VA_Out or a phase voltage (protocol.py's own docstring, probed
+// 2026-09-29). Float64 and Magnitude are the two accessors: Float64 for a
+// genuinely scalar property, Magnitude for a phasor one.
 type Value struct {
 	raw json.RawMessage
 }
@@ -81,21 +81,60 @@ func (v *Value) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Float64 returns the value as a real number.
-func (v Value) Float64() (float64, error) {
-	var f float64
-	if err := json.Unmarshal(v.raw, &f); err == nil {
-		return f, nil
+// components decodes the wire value strictly: a JSON number is a real pair
+// (re, 0); a JSON object is the complex shape only when it carries both
+// "re" and "im" as numbers. Anything else, including null (which
+// encoding/json leaves a *float64 destination silently unchanged, the
+// classic Go gotcha) and {} (which decodes into a struct as zero values
+// with no error), is refused here rather than read as a false 0. That is
+// the fix for a short or malformed reply reading as 0 instead of erroring.
+func (v Value) components() (re, im float64, err error) {
+	var raw any
+	if err := json.Unmarshal(v.raw, &raw); err != nil {
+		return 0, 0, fmt.Errorf("value %s is not valid JSON: %w", v.raw, err)
 	}
-	var c struct {
-		Re float64 `json:"re"`
-		Im float64 `json:"im"`
-	}
-	if err := json.Unmarshal(v.raw, &c); err == nil {
-		if c.Im != 0 {
-			return 0, fmt.Errorf("value %g+%gi is complex, not real", c.Re, c.Im)
+	switch x := raw.(type) {
+	case float64:
+		return x, 0, nil
+	case map[string]any:
+		reRaw, hasRe := x["re"]
+		imRaw, hasIm := x["im"]
+		if !hasRe || !hasIm {
+			return 0, 0, fmt.Errorf("value %s is an object but not the complex {re,im} shape", v.raw)
 		}
-		return c.Re, nil
+		reF, reOK := reRaw.(float64)
+		imF, imOK := imRaw.(float64)
+		if !reOK || !imOK {
+			return 0, 0, fmt.Errorf("value %s has non-numeric re/im", v.raw)
+		}
+		return reF, imF, nil
+	default:
+		return 0, 0, fmt.Errorf("value %s is neither a real number nor a complex object", v.raw)
 	}
-	return 0, fmt.Errorf("value %s is neither a real number nor a complex object", v.raw)
+}
+
+// Float64 returns the value as a real number. A complex value with a
+// nonzero imaginary part is refused rather than silently truncated, per
+// data-invariants: a dropped imaginary part would misreport delivered
+// power. Use for a genuinely scalar property (P_Out, Q_Out, rated_power).
+func (v Value) Float64() (float64, error) {
+	re, im, err := v.components()
+	if err != nil {
+		return 0, err
+	}
+	if im != 0 {
+		return 0, fmt.Errorf("value %g+%gi is complex, not real", re, im)
+	}
+	return re, nil
+}
+
+// Magnitude returns sqrt(re^2+im^2): the correct reading for a phasor
+// quantity such as a phase voltage, where gridlabd's own representation
+// may carry a nonzero angle and only the magnitude is wanted.
+func (v Value) Magnitude() (float64, error) {
+	re, im, err := v.components()
+	if err != nil {
+		return 0, err
+	}
+	return math.Hypot(re, im), nil
 }

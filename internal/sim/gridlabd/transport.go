@@ -26,6 +26,8 @@ func (s *Supervisor) Transport() device.FleetTransport {
 
 func (t *supervisorTransport) Healthy() bool { return t.sup.Healthy() }
 
+func (t *supervisorTransport) Generation() uint64 { return t.sup.generation() }
+
 func (t *supervisorTransport) Set(ctx context.Context, items []device.FleetSetItem) ([]float64, error) {
 	c := t.sup.client()
 	if c == nil {
@@ -36,30 +38,6 @@ func (t *supervisorTransport) Set(ctx context.Context, items []device.FleetSetIt
 		wireItems[i] = SetItem{Object: it.Object, Property: it.Property, Value: FloatValue(it.Value)}
 	}
 	results, err := c.Set(ctx, wireItems)
-	if err != nil {
-		return nil, err
-	}
-	return valuesToFloat64(results)
-}
-
-func (t *supervisorTransport) StepTo(ctx context.Context, target time.Time) (time.Time, error) {
-	c := t.sup.client()
-	if c == nil {
-		return time.Time{}, fmt.Errorf("fleet %s: sidecar is down", t.sup.cfg.Fleet)
-	}
-	return c.StepTo(ctx, target)
-}
-
-func (t *supervisorTransport) Get(ctx context.Context, items []device.FleetGetItem) ([]float64, error) {
-	c := t.sup.client()
-	if c == nil {
-		return nil, fmt.Errorf("fleet %s: sidecar is down", t.sup.cfg.Fleet)
-	}
-	wireItems := make([]GetItem, len(items))
-	for i, it := range items {
-		wireItems[i] = GetItem{Object: it.Object, Property: it.Property}
-	}
-	results, err := c.Get(ctx, wireItems)
 	if err != nil {
 		return nil, err
 	}
@@ -74,14 +52,38 @@ func (t *supervisorTransport) Get(ctx context.Context, items []device.FleetGetIt
 	return out, nil
 }
 
-func valuesToFloat64(results []SetResult) ([]float64, error) {
-	out := make([]float64, len(results))
+func (t *supervisorTransport) StepTo(ctx context.Context, target time.Time) (time.Time, error) {
+	c := t.sup.client()
+	if c == nil {
+		return time.Time{}, fmt.Errorf("fleet %s: sidecar is down", t.sup.cfg.Fleet)
+	}
+	return c.StepTo(ctx, target)
+}
+
+// Get returns each item's value as a device.FleetValue rather than a bare
+// float64: a phasor property (a phase voltage) and a scalar property
+// (P_Out, rated_power) decode differently, and that choice belongs to the
+// caller, which knows which property it asked for.
+func (t *supervisorTransport) Get(ctx context.Context, items []device.FleetGetItem) ([]device.FleetValue, error) {
+	c := t.sup.client()
+	if c == nil {
+		return nil, fmt.Errorf("fleet %s: sidecar is down", t.sup.cfg.Fleet)
+	}
+	wireItems := make([]GetItem, len(items))
+	for i, it := range items {
+		wireItems[i] = GetItem{Object: it.Object, Property: it.Property}
+	}
+	results, err := c.Get(ctx, wireItems)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]device.FleetValue, len(results))
 	for i, r := range results {
-		f, err := r.Value.Float64()
+		re, im, err := r.Value.components()
 		if err != nil {
 			return nil, fmt.Errorf("%s.%s: %w", r.Object, r.Property, err)
 		}
-		out[i] = f
+		out[i] = device.FleetValue{Re: re, Im: im}
 	}
 	return out, nil
 }

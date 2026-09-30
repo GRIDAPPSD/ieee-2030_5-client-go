@@ -102,21 +102,46 @@ const battery2FleetJSON = `{
 }
 `
 
-// sidecarPython locates a python interpreter with the pinned gldsidecar
+// gldsidecarRequiredEnv, when set (to any value), means this test must not
+// skip: CI sets it so a green run is evidence the real sidecar path
+// actually executed, not that it was silently skipped (go test ./... with
+// no -v gives no other sign either way).
+const gldsidecarRequiredEnv = "GLDSIDECAR_INTEGRATION_REQUIRED"
+
+// sidecarPython locates a python interpreter with the pinned gridlabd
 // package importable, so this test runs the real sidecar exactly as CI's
 // ci.yml does (its Python steps put a matching venv on PATH before `go
 // test`). PYTHON_FOR_GLDSIDECAR_TEST overrides it for a local run against
 // a Scratch-built venv, per this brief's Verification section.
+//
+// A host with python3 on PATH but no gridlabd installed (this sandbox,
+// and likely most dev machines outside CI's venv) skips rather than
+// hard-failing with a traceback, UNLESS gldsidecarRequiredEnv is set, in
+// which case that would be exactly the silent-pass CI must not allow.
 func sidecarPython(t *testing.T) string {
 	t.Helper()
-	if p := os.Getenv("PYTHON_FOR_GLDSIDECAR_TEST"); p != "" {
-		return p
+	p := os.Getenv("PYTHON_FOR_GLDSIDECAR_TEST")
+	if p == "" {
+		found, err := exec.LookPath("python3")
+		if err != nil {
+			failOrSkip(t, "no python3 on PATH and PYTHON_FOR_GLDSIDECAR_TEST unset: %v", err)
+			return ""
+		}
+		p = found
 	}
-	p, err := exec.LookPath("python3")
-	if err != nil {
-		t.Skipf("no python3 on PATH and PYTHON_FOR_GLDSIDECAR_TEST unset: %v", err)
+	if err := exec.Command(p, "-c", "import gridlabd").Run(); err != nil {
+		failOrSkip(t, "gridlabd is not importable via %s: %v", p, err)
+		return ""
 	}
 	return p
+}
+
+func failOrSkip(t *testing.T, format string, args ...any) {
+	t.Helper()
+	if os.Getenv(gldsidecarRequiredEnv) != "" {
+		t.Fatalf(format, args...)
+	}
+	t.Skipf(format, args...)
 }
 
 // repoRoot walks up from this file's directory to find the module root
@@ -201,11 +226,11 @@ func TestSidecarIntegration_RealGridlabd(t *testing.T) {
 	}
 
 	transport := sup.Transport()
-	dev0, err := device.NewFleetDevice(transport, "0FA437FCD2BDADDA3EF8FEFAFF4A3D1612345678", "probe_bat0_inv", nil)
+	dev0, err := device.NewFleetDevice(transport, "0FA437FCD2BDADDA3EF8FEFAFF4A3D1612345678", "probe_bat0_inv", "fleet_meter", nil)
 	if err != nil {
 		t.Fatalf("NewFleetDevice(dev0): %v", err)
 	}
-	dev1, err := device.NewFleetDevice(transport, "AD882EC29CFC0A0B500B663AD841670E12345678", "probe_bat1_inv", nil)
+	dev1, err := device.NewFleetDevice(transport, "AD882EC29CFC0A0B500B663AD841670E12345678", "probe_bat1_inv", "fleet_meter", nil)
 	if err != nil {
 		t.Fatalf("NewFleetDevice(dev1): %v", err)
 	}
@@ -267,6 +292,36 @@ func TestSidecarIntegration_RealGridlabd(t *testing.T) {
 	}
 	if _, err := dev1.ApplySetpoint(callCtx, fleetControls(1, 1)); err == nil {
 		t.Error("dev1.ApplySetpoint after the sidecar died: want error, got nil")
+	}
+
+	// Supervisor.Run auto-restarts (bounded backoff); wait for it, then
+	// prove the chosen recovery: dev0's last commanded 2500 W is
+	// re-applied to the freshly reloaded model, not left at the GLM's
+	// reset default of 0, before ReadState's caller sees "healthy" again.
+	deadline = time.Now().Add(20 * time.Second)
+	for !sup.Healthy() && time.Now().Before(deadline) {
+		select {
+		case err := <-runErr:
+			t.Fatalf("Run exited instead of restarting: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if !sup.Healthy() {
+		t.Fatal("sidecar did not auto-restart within 20s")
+	}
+	if _, err := dev0.ReadState(callCtx); err != nil {
+		t.Fatalf("dev0 ReadState after restart (triggers resync): %v", err)
+	}
+	postRestart, err := transport.Get(callCtx, []device.FleetGetItem{{Object: "probe_bat0_inv", Property: "P_Out"}})
+	if err != nil {
+		t.Fatalf("raw Get of P_Out after restart: %v", err)
+	}
+	gotPOut, err := postRestart[0].Float64()
+	if err != nil {
+		t.Fatalf("P_Out.Float64(): %v", err)
+	}
+	if gotPOut != 2500 {
+		t.Errorf("dev0 P_Out on the restarted model = %v, want 2500 (re-applied, not the GLM's reset default of 0)", gotPOut)
 	}
 }
 

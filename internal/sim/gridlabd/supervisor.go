@@ -2,6 +2,7 @@ package gridlabd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -31,7 +32,7 @@ type SupervisorConfig struct {
 	Command       []string // interpreter plus module, e.g. {"python3","-m","gldsidecar"}; nil defaults to that
 
 	StartTimeout time.Duration // bound on start-through-hello
-	CallTimeout  time.Duration // bound on an ordinary RPC (hello, set, step_to, get)
+	CallTimeout  time.Duration // bound on every RPC (hello, set, step_to, get, shutdown), including one whose caller ctx carries no deadline
 	StopGrace    time.Duration // wait between shutdown, SIGTERM, SIGKILL
 
 	BackoffMin    time.Duration
@@ -88,6 +89,7 @@ type Supervisor struct {
 	clientConn *Client
 	proc       sidecarProcess
 	healthy    bool
+	gen        uint64 // incremented on every successful (re)start
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -126,6 +128,15 @@ func (s *Supervisor) Healthy() bool {
 	return s.healthy
 }
 
+// generation returns the current restart generation: 1 after the first
+// successful start, incremented on every successful restart, 0 before any
+// start has completed.
+func (s *Supervisor) generation() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.gen
+}
+
 // client returns the current connection, or nil when unhealthy. Every
 // FleetTransport method goes through this rather than caching a *Client,
 // so a device backend never holds a stale connection across a restart.
@@ -150,18 +161,25 @@ func (s *Supervisor) process() sidecarProcess {
 	return s.proc
 }
 
+// setState records the current connection and health, and bumps the
+// restart generation on every transition into healthy: a device backend
+// reads generation() to notice that the model underneath it was reset.
 func (s *Supervisor) setState(client *Client, proc sidecarProcess, healthy bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clientConn, s.proc, s.healthy = client, proc, healthy
+	if healthy {
+		s.gen++
+	}
 }
 
 // Run starts the sidecar and supervises it until ctx is cancelled or Stop
 // is called. The first start is not retried: a hello mismatch or a launch
 // failure is refused outright, matching "refuses to run on a version or
-// object mismatch". A crash after a successful start is restarted with
-// bounded backoff; exhausting the restart budget leaves the fleet DOWN and
-// returns an error.
+// object mismatch". A crash after a successful start, or a connection this
+// package can no longer trust (Client.Broken), is restarted with bounded
+// backoff; exhausting the restart budget leaves the fleet DOWN and returns
+// an error.
 func (s *Supervisor) Run(ctx context.Context) error {
 	defer close(s.doneCh)
 
@@ -175,15 +193,23 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			s.shutdown(context.Background(), client, proc)
+			s.shutdown(context.WithoutCancel(ctx), client, proc)
 			return ctx.Err()
 		case <-s.stopCh:
-			s.shutdown(context.Background(), client, proc)
+			s.shutdown(context.WithoutCancel(ctx), client, proc)
 			return nil
 		case werr := <-proc.Wait():
 			s.setState(nil, nil, false)
-			_ = client.Close()
+			_ = client.Close() // the process is already gone; nothing left to flush
 			s.cfg.Log("fleet %s: sidecar exited (%v)", s.cfg.Fleet, werr)
+		case <-client.Broken():
+			// A timeout, a decode error, an id mismatch or worker_dead: the
+			// connection may have a reply for an abandoned request still in
+			// flight, so it can never be reused. The process might still be
+			// alive but unresponsive; kill it rather than try to resync.
+			s.setState(nil, nil, false)
+			s.cfg.Log("fleet %s: connection broken, restarting sidecar", s.cfg.Fleet)
+			killAndReap(proc)
 		}
 
 		// Keep attempting a restart, respecting budget and backoff, until
@@ -233,10 +259,14 @@ func (s *Supervisor) startOnce(ctx context.Context) (sidecarProcess, *Client, er
 		return nil, nil, err
 	}
 
-	client, err := waitForSocket(startCtx, s.cfg.SocketPath)
+	client, err := waitForSocket(startCtx, s.cfg.SocketPath, proc, s.cfg.CallTimeout)
 	if err != nil {
-		_ = proc.Kill()
-		<-proc.Wait()
+		// waitForSocket itself already drained proc.Wait() when the process
+		// was the reason it gave up; killAndReap would read that single-shot
+		// channel a second time and hang forever.
+		if !errors.Is(err, errSidecarExitedDuringStart) {
+			killAndReap(proc)
+		}
 		return nil, nil, fmt.Errorf("connect to fleet %s sidecar: %w", s.cfg.Fleet, err)
 	}
 
@@ -244,29 +274,34 @@ func (s *Supervisor) startOnce(ctx context.Context) (sidecarProcess, *Client, er
 	hello, err := client.Hello(helloCtx)
 	helloCancel()
 	if err != nil {
-		_ = client.Close()
-		_ = proc.Kill()
-		<-proc.Wait()
+		_ = client.Close() // hello failed; nothing on this connection to preserve
+		killAndReap(proc)
 		return nil, nil, fmt.Errorf("fleet %s hello: %w", s.cfg.Fleet, err)
 	}
 	if hello.Protocol != ProtocolVersion {
-		_ = client.Close()
-		_ = proc.Kill()
-		<-proc.Wait()
+		_ = client.Close() // protocol mismatch; this connection is unusable regardless
+		killAndReap(proc)
 		return nil, nil, fmt.Errorf("fleet %s: sidecar speaks protocol %d, this client speaks %d", s.cfg.Fleet, hello.Protocol, ProtocolVersion)
 	}
 	return proc, client, nil
 }
 
+// errSidecarExitedDuringStart marks a waitForSocket failure caused by the
+// process exiting before the socket was ever dialed, so startOnce knows
+// proc.Wait() has already been drained and must not read it again.
+var errSidecarExitedDuringStart = errors.New("sidecar exited before completing start")
+
 // waitForSocket polls for sockPath to appear and dials as soon as it does,
-// bounded by ctx.
-func waitForSocket(ctx context.Context, sockPath string) (*Client, error) {
+// bounded by ctx. It also watches proc directly: a sidecar that dies before
+// binding the socket is noticed at once rather than after the full
+// StartTimeout, since nothing will ever appear at sockPath in that case.
+func waitForSocket(ctx context.Context, sockPath string, proc sidecarProcess, dialTimeout time.Duration) (*Client, error) {
 	const pollInterval = 20 * time.Millisecond
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
 		if _, err := os.Stat(sockPath); err == nil {
-			client, err := Dial(ctx, sockPath)
+			client, err := Dial(ctx, sockPath, dialTimeout)
 			if err == nil {
 				return client, nil
 			}
@@ -274,6 +309,8 @@ func waitForSocket(ctx context.Context, sockPath string) (*Client, error) {
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("waiting for socket %s: %w", sockPath, ctx.Err())
+		case werr := <-proc.Wait():
+			return nil, fmt.Errorf("%w: %v", errSidecarExitedDuringStart, werr)
 		case <-ticker.C:
 		}
 	}
@@ -286,9 +323,9 @@ func (s *Supervisor) shutdown(ctx context.Context, client *Client, proc sidecarP
 	s.setState(nil, nil, false)
 	if client != nil {
 		shutdownCtx, cancel := context.WithTimeout(ctx, s.cfg.CallTimeout)
-		_ = client.Shutdown(shutdownCtx)
+		_ = client.Shutdown(shutdownCtx) // best effort: proc is stopped below regardless of whether this succeeds
 		cancel()
-		_ = client.Close()
+		_ = client.Close() // already shutting down; nothing left to flush
 	}
 	if proc == nil {
 		_ = os.Remove(s.cfg.SocketPath)
@@ -298,14 +335,21 @@ func (s *Supervisor) shutdown(ctx context.Context, client *Client, proc sidecarP
 		_ = os.Remove(s.cfg.SocketPath)
 		return
 	}
-	_ = proc.Signal(syscall.SIGTERM)
+	_ = proc.Signal(syscall.SIGTERM) // best effort; SIGKILL follows if this does not end it in time
 	if waitOrTimeout(proc, s.cfg.StopGrace) {
 		_ = os.Remove(s.cfg.SocketPath)
 		return
 	}
-	_ = proc.Kill()
-	<-proc.Wait()
+	killAndReap(proc)
 	_ = os.Remove(s.cfg.SocketPath)
+}
+
+// killAndReap sends SIGKILL and waits for the process to exit. Used on the
+// startup failure paths, where the process never became usable and a
+// graceful SIGTERM-first shutdown buys nothing.
+func killAndReap(proc sidecarProcess) {
+	_ = proc.Kill() // best effort; Wait below observes the actual exit regardless
+	<-proc.Wait()
 }
 
 func waitOrTimeout(proc sidecarProcess, d time.Duration) bool {
@@ -319,7 +363,8 @@ func waitOrTimeout(proc sidecarProcess, d time.Duration) bool {
 
 // Stop ends supervision: the current sidecar is shut down (by PID) and Run
 // returns. Stop blocks until Run has returned. Calling Stop more than once
-// is safe.
+// is safe. Calling Stop before Run has ever been started is not supported:
+// doneCh is only closed by Run's own deferred close.
 func (s *Supervisor) Stop() {
 	s.stopOnce.Do(func() { close(s.stopCh) })
 	<-s.doneCh

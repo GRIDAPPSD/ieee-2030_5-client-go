@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/device"
 )
 
 func testSupervisorConfig(sockPath string) SupervisorConfig {
@@ -177,4 +179,64 @@ func waitForCreatedCount(t *testing.T, reg *fakeRegistry, want int) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("only %d fake processes created, want at least %d", len(reg.list()), want)
+}
+
+// TestSupervisor_StopWhileCallStalled_BoundedByCallTimeout is item 1's
+// "Stop ... never hang behind c.mu": a device's Get call is stalled inside
+// Client.call, holding c.mu for up to CallTimeout. Stop must still return
+// in roughly that bound, not hang until the stalled call would have timed
+// out on its own accord some other way, and not forever.
+func TestSupervisor_StopWhileCallStalled_BoundedByCallTimeout(t *testing.T) {
+	reg := &fakeRegistry{}
+	cfg := testSupervisorConfig(filepath.Join(shortSockDir(t), "a.sock"))
+	cfg.CallTimeout = 150 * time.Millisecond
+	configure := func(fp *fakeProcess) { fp.stallOp = "get" }
+	sup := newSupervisor(cfg, newFakeLauncher(t, configure, reg))
+
+	go sup.Run(context.Background())
+	waitForHealthy(t, sup, true)
+
+	transport := sup.Transport()
+	go func() {
+		_, _ = transport.Get(context.Background(), []device.FleetGetItem{{Object: "x", Property: "y"}})
+	}()
+	time.Sleep(20 * time.Millisecond) // let the Get call acquire c.mu and start stalling
+
+	start := time.Now()
+	sup.Stop()
+	elapsed := time.Since(start)
+	if elapsed > 2*time.Second {
+		t.Errorf("Stop while a call was stalled took %v, want bounded near CallTimeout (150ms)", elapsed)
+	}
+}
+
+// TestSupervisor_BrokenConnectionTriggersRestart proves the other half of
+// item 1: a connection Client itself gives up on (Broken) restarts the
+// fleet even though the sidecar process never exited on its own, so a
+// later call never risks reading a stale reply from the abandoned request.
+func TestSupervisor_BrokenConnectionTriggersRestart(t *testing.T) {
+	reg := &fakeRegistry{}
+	cfg := testSupervisorConfig(filepath.Join(shortSockDir(t), "a.sock"))
+	cfg.CallTimeout = 100 * time.Millisecond
+	configure := func(fp *fakeProcess) { fp.stallOp = "get" }
+	sup := newSupervisor(cfg, newFakeLauncher(t, configure, reg))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go sup.Run(ctx)
+	waitForHealthy(t, sup, true)
+	first := reg.list()[0]
+
+	transport := sup.Transport()
+	_, err := transport.Get(context.Background(), []device.FleetGetItem{{Object: "x", Property: "y"}})
+	if err == nil {
+		t.Fatal("Get against a stalled sidecar: want error, got nil")
+	}
+
+	waitForCreatedCount(t, reg, 2)
+	waitForHealthy(t, sup, true)
+	second := reg.list()[1]
+	if second.Pid() == first.Pid() {
+		t.Error("restart after a broken connection reused the same process")
+	}
 }
