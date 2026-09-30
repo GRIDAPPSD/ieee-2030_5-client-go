@@ -248,13 +248,25 @@ func TestLoadFleetFile_AcceptsAbsoluteExecutableInterpreter(t *testing.T) {
 }
 
 func TestLoadFleetFile_RejectsRelativeInterpreter(t *testing.T) {
-	ff := validFleetFile()
-	ff["interpreter"] = "python3" // not absolute
+	// The relative name resolves to an executable file from the process
+	// cwd, so the stat and the exec-bit checks would both pass: only the
+	// IsAbs check can refuse it. A relative interpreter would otherwise
+	// mean something different per launch directory.
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "py"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatalf("write interpreter: %v", err)
+	}
+	t.Chdir(dir)
+	ff := validFleetFile()
+	ff["interpreter"] = "py"
 	path := writeFleetFile(t, dir, ff)
 
-	if _, err := LoadFleetFile(path); err == nil {
+	_, err := LoadFleetFile(path)
+	if err == nil {
 		t.Fatal("LoadFleetFile: want error on a relative interpreter path, got nil")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Errorf("err = %v, want the absolute-path refusal", err)
 	}
 }
 

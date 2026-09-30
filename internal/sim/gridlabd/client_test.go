@@ -3,7 +3,9 @@ package gridlabd
 import (
 	"context"
 	"errors"
+	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,12 +40,41 @@ func dialFakeWithTimeout(t *testing.T, configure func(*fakeProcess), clientTimeo
 // since it is also the only bound on how long Close can wait behind a
 // drain; a zero or negative value would leave that wait unbounded.
 func TestDial_RefusesNonPositiveTimeout(t *testing.T) {
+	// A live listener, so the dial itself would succeed: only the timeout
+	// guard can produce the error. Against a nonexistent path the dial
+	// fails anyway and the guard is unpinned (round 6 LOW).
 	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
 	for _, timeout := range []time.Duration{0, -1 * time.Second} {
-		if _, err := Dial(context.Background(), sockPath, timeout); err == nil {
+		c, err := Dial(context.Background(), sockPath, timeout)
+		if err == nil {
+			_ = c.Close()
 			t.Errorf("Dial(timeout=%v): want error, got nil", timeout)
+			continue
+		}
+		if !strings.Contains(err.Error(), "timeout must be positive") {
+			t.Errorf("Dial(timeout=%v): err = %v, want the positive-timeout refusal", timeout, err)
 		}
 	}
+	c, err := Dial(context.Background(), sockPath, time.Nanosecond)
+	if err != nil {
+		t.Fatalf("Dial(timeout=1ns) against a live listener: %v (the guard must be strictly <= 0)", err)
+	}
+	_ = c.Close()
 }
 
 func TestClient_Hello(t *testing.T) {
@@ -290,11 +321,10 @@ func TestClient_Call_CancelDetachesInsteadOfBreaking(t *testing.T) {
 func TestClient_Call_QueuedBehindDrainGetsOwnCtxErrorWithoutWriting(t *testing.T) {
 	client, fp := dialFakeWithTimeout(t, func(fp *fakeProcess) { fp.replyDelay = 150 * time.Millisecond }, 5*time.Second)
 
-	firstCtx, firstCancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		firstCancel()
-	}()
+	// Cancelled once the server has read the request, not after a fixed
+	// sleep: on a slow host a fixed 20ms can land before the write, and the
+	// call then returns without writing at all.
+	firstCtx := cancelOnceReceived(t, fp)
 	if _, err := client.Get(firstCtx, []GetItem{{Object: "a", Property: "x"}}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("first Get: err = %v, want context.Canceled", err)
 	}
@@ -363,6 +393,91 @@ func TestClient_Drain_StalledReplyBreaksConnectionWithinCallTimeout(t *testing.T
 	}
 	if reason := client.BrokenReason(); reason == nil {
 		t.Error("BrokenReason() = nil after the drain's stalled reply broke the connection")
+	}
+}
+
+// cancelOnceReceived returns a ctx that is cancelled as soon as fp has read
+// its first request off the wire, so a cancel provably lands after the write
+// and before any (delayed or stalled) reply.
+func cancelOnceReceived(t *testing.T, fp *fakeProcess) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		deadline := time.Now().Add(2 * time.Second)
+		for fp.received() < 1 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+	}()
+	return ctx
+}
+
+// TestClient_Call_ReplyIDMismatchBreaksConnection: a well-formed ok reply
+// whose id is not the request's must break the connection on the ordinary
+// call path (round 6 MEDIUM: removing decodeReply's id check survived the
+// whole package). RED with `if reply.ID != id {` removed.
+func TestClient_Call_ReplyIDMismatchBreaksConnection(t *testing.T) {
+	client, _ := dialFake(t, func(fp *fakeProcess) { fp.wrongIDReplyOn = "get" })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := client.Get(ctx, []GetItem{{Object: "a", Property: "x"}})
+	if !errors.Is(err, ErrConnectionBroken) {
+		t.Fatalf("Get with a mismatched reply id: err = %v, want ErrConnectionBroken", err)
+	}
+	select {
+	case <-client.Broken():
+	default:
+		t.Error("Broken() not fired after a mismatched reply id")
+	}
+	if reason := client.BrokenReason(); reason == nil || !strings.Contains(reason.Error(), "does not match request id") {
+		t.Errorf("BrokenReason() = %v, want it to name the id mismatch", reason)
+	}
+}
+
+// TestClient_Drain_ReplyIDMismatchBreaksConnection: the same, on the drain
+// path. The reply is valid JSON and ok:true, so only the id check can break
+// the connection; a drain that merely validated JSON would leave it open.
+func TestClient_Drain_ReplyIDMismatchBreaksConnection(t *testing.T) {
+	client, fp := dialFakeWithTimeout(t, func(fp *fakeProcess) {
+		fp.replyDelay = 60 * time.Millisecond
+		fp.wrongIDReplyOn = "get"
+	}, 5*time.Second)
+
+	ctx := cancelOnceReceived(t, fp)
+	if _, err := client.Get(ctx, []GetItem{{Object: "a", Property: "x"}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Get: err = %v, want context.Canceled", err)
+	}
+	select {
+	case <-client.Broken():
+	case <-time.After(time.Second):
+		t.Fatal("Broken() did not fire after a cancel followed by a mismatched-id reply")
+	}
+	if reason := client.BrokenReason(); reason == nil || !strings.Contains(reason.Error(), "does not match request id") {
+		t.Errorf("BrokenReason() = %v, want it to name the id mismatch", reason)
+	}
+}
+
+// TestClient_Drain_WorkerDeadReplyBreaksConnection: a worker_dead reply that
+// arrives at the drain must break the connection with ErrWorkerDead as the
+// reason. The fake closes its end right after replying, but the client only
+// learns of a dead worker by decoding the reply.
+func TestClient_Drain_WorkerDeadReplyBreaksConnection(t *testing.T) {
+	client, fp := dialFakeWithTimeout(t, func(fp *fakeProcess) {
+		fp.replyDelay = 60 * time.Millisecond
+		fp.workerDeadOn = "get"
+	}, 5*time.Second)
+
+	ctx := cancelOnceReceived(t, fp)
+	if _, err := client.Get(ctx, []GetItem{{Object: "a", Property: "x"}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Get: err = %v, want context.Canceled", err)
+	}
+	select {
+	case <-client.Broken():
+	case <-time.After(time.Second):
+		t.Fatal("Broken() did not fire after a cancel followed by a worker_dead reply")
+	}
+	if reason := client.BrokenReason(); !errors.Is(reason, ErrWorkerDead) {
+		t.Errorf("BrokenReason() = %v, want it to wrap ErrWorkerDead", reason)
 	}
 }
 

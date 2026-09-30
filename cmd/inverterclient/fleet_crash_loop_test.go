@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,6 +88,14 @@ func (s *crashLoopLogSpy) log(format string, args ...any) {
 	s.lines = append(s.lines, fmt.Sprintf(format, args...))
 }
 
+// stdLogWriter adapts the spy to an io.Writer for log.SetOutput.
+type stdLogWriter struct{ spy *crashLoopLogSpy }
+
+func (w stdLogWriter) Write(p []byte) (int, error) {
+	w.spy.log("%s", strings.TrimRight(string(p), "\n"))
+	return len(p), nil
+}
+
 func (s *crashLoopLogSpy) lines_() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,6 +123,19 @@ func TestStartFleets_RealCrashLoop_LogsExactlyOneDownLine(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 
 	spy := &crashLoopLogSpy{}
+	// A DOWN line written through package log (what main's own logger
+	// prints) must be counted too: a second layer logging it there would
+	// otherwise slip past a spy that only sees cfg.Log.
+	stdSpy := &crashLoopLogSpy{}
+	prevOut, prevFlags, prevPrefix := log.Writer(), log.Flags(), log.Prefix()
+	log.SetOutput(stdLogWriter{stdSpy})
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+		log.SetPrefix(prevPrefix)
+	})
 	cfg := gridlabd.SupervisorConfig{
 		Fleet:         crashLoopFleetName,
 		SocketPath:    filepath.Join(sockDir, "a.sock"),
@@ -151,12 +173,12 @@ func TestStartFleets_RealCrashLoop_LogsExactlyOneDownLine(t *testing.T) {
 	}
 
 	downLines := 0
-	for _, line := range spy.lines_() {
-		if strings.HasPrefix(line, "fleet "+crashLoopFleetName+" DOWN: ") {
+	for _, line := range append(spy.lines_(), stdSpy.lines_()...) {
+		if strings.Contains(line, "fleet "+crashLoopFleetName+" DOWN: ") {
 			downLines++
 		}
 	}
 	if downLines != 1 {
-		t.Errorf("DOWN log lines = %d, want exactly 1 (got: %v)", downLines, spy.lines_())
+		t.Errorf("DOWN log lines = %d, want exactly 1 (cfg.Log: %v; package log: %v)", downLines, spy.lines_(), stdSpy.lines_())
 	}
 }

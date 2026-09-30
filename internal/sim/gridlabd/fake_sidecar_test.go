@@ -110,6 +110,16 @@ type fakeProcess struct {
 	// broken rather than treating the bad bytes as a clean, discardable
 	// reply.
 	corruptReplyOn string
+	// wrongIDReplyOn, when set, answers that op with a well-formed, ok:true
+	// reply carrying an id that does not match the request's, so a test
+	// can prove the id check (not just JSON validity) is what breaks the
+	// connection, on both the ordinary call path and the drain path.
+	wrongIDReplyOn string
+	// recvCount counts requests the moment they are read off the wire,
+	// before any stall or replyDelay (reqCounts only counts at handle(),
+	// after them): a test cancels its caller once this reaches 1, so the
+	// cancel provably lands after the write and before the reply.
+	recvCount int32
 
 	killCh   chan struct{}
 	killOnce sync.Once
@@ -123,6 +133,9 @@ type fakeProcess struct {
 	// distinguish from "wrote, then the reply was discarded."
 	reqCounts map[string]int
 }
+
+// received reads how many requests have been read off the wire so far.
+func (fp *fakeProcess) received() int { return int(atomic.LoadInt32(&fp.recvCount)) }
 
 // reqCount reads how many requests of op this fake has handled so far.
 func (fp *fakeProcess) reqCount(op string) int {
@@ -289,6 +302,7 @@ func (fp *fakeProcess) serve() {
 		if err := json.Unmarshal([]byte(line), &req); err != nil {
 			continue
 		}
+		atomic.AddInt32(&fp.recvCount, 1)
 		if fp.stallOp != "" && req.Op == fp.stallOp {
 			// Block on killCh, not on reading the connection: this must
 			// NOT unblock just because the client gave up and closed its
@@ -300,6 +314,9 @@ func (fp *fakeProcess) serve() {
 			time.Sleep(fp.replyDelay)
 		}
 		reply, stop := fp.handle(req)
+		if fp.wrongIDReplyOn != "" && req.Op == fp.wrongIDReplyOn {
+			reply.ID = req.ID + 1000
+		}
 		var b []byte
 		if fp.corruptReplyOn != "" && req.Op == fp.corruptReplyOn {
 			b = []byte(`{not valid json`)

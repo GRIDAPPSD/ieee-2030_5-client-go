@@ -229,9 +229,9 @@ func (s *Supervisor) process() sidecarProcess {
 	return s.proc
 }
 
-// Fleet returns the fleet name this Supervisor was configured for.
-// startFleets (cmd/inverterclient) uses this to log a later DOWN
-// transition by fleet name without holding its own copy.
+// Fleet returns the fleet name this Supervisor was configured for. It is
+// part of cmd/inverterclient's fleetSupervisor interface; the "fleet
+// <name> DOWN" line itself is logged here, by setDown, not by any caller.
 func (s *Supervisor) Fleet() string { return s.cfg.Fleet }
 
 // State reports the supervisor's current lifecycle state and, for

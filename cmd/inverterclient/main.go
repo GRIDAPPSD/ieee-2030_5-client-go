@@ -305,11 +305,14 @@ func main() {
 	}
 	fleetStop, err := startFleets(ctx, fleets)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if ctx.Err() != nil {
 			// A signal arrived during the first-start wait: reported as an
 			// ordinary cancellation, not a refusal (exit path table,
 			// Decision 4). startFleets has already stopped every fleet
-			// that did start.
+			// that did start. The decision is main's own signal ctx, never
+			// the shape of the returned error: a fleet that hit its
+			// StartTimeout returns a refusal wrapping DeadlineExceeded
+			// while ctx is still live, and that must exit 1, not 0.
 			log.Println("Shutting down (signal during fleet start)...")
 			return
 		}

@@ -98,16 +98,28 @@ func TestShutdownWiredIntoMain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read main.go: %v", err)
 	}
-	text := string(src)
-	startFleetsIdx := strings.Index(text, "fleetStop, err := startFleets(ctx, fleets)")
-	deferIdx := strings.Index(text, "defer shutdown()")
-	if startFleetsIdx < 0 {
+	// Line by line, comments skipped: a commented-out `// defer shutdown()`
+	// must not satisfy the wiring check.
+	startFleetsLine, deferLine := -1, -1
+	for i, line := range strings.Split(string(src), "\n") {
+		code := strings.TrimSpace(line)
+		if strings.HasPrefix(code, "//") {
+			continue
+		}
+		if startFleetsLine < 0 && strings.Contains(code, "fleetStop, err := startFleets(ctx, fleets)") {
+			startFleetsLine = i
+		}
+		if deferLine < 0 && code == "defer shutdown()" {
+			deferLine = i
+		}
+	}
+	if startFleetsLine < 0 {
 		t.Fatal("main.go does not call startFleets(ctx, fleets) (has it been renamed?)")
 	}
-	if deferIdx < 0 {
-		t.Fatal("main.go has no `defer shutdown()`")
+	if deferLine < 0 {
+		t.Fatal("main.go has no uncommented `defer shutdown()`")
 	}
-	if deferIdx < startFleetsIdx {
+	if deferLine < startFleetsLine {
 		t.Error("defer shutdown() must be positioned after startFleets succeeds, not before")
 	}
 }

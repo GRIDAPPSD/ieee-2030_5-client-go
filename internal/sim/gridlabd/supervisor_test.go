@@ -252,6 +252,172 @@ func TestSupervisor_CancelDuringRestart_EndsStoppedAndRemovesSocket(t *testing.T
 	}
 }
 
+// runWithHookOnExit runs a supervisor whose first sidecar crashes, and
+// calls hook from inside cfg.Log at the exact line Run logs immediately
+// before it reaches the restart loop's top-of-loop select ("sidecar
+// exited"). Whatever hook does is therefore already in effect when that
+// select is evaluated, so the exit it takes is the top one, never the
+// backoff wait's (round 6 LOW: the two top exitDuringRestart calls were
+// only ever reached through the backoff select, which has its own). The
+// backoff is an hour, so the backoff select cannot end the test by
+// timing out either. It returns the supervisor, its Run error channel,
+// the log spy and the socket path.
+func runWithHookOnExit(t *testing.T, hook func(sup *Supervisor, sockPath string, cancel context.CancelFunc)) (*Supervisor, chan error, *logSpy, string) {
+	t.Helper()
+	reg := &fakeRegistry{}
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	cfg := testSupervisorConfig(sockPath)
+	cfg.BackoffMin, cfg.BackoffMax = time.Hour, time.Hour
+	spy := &logSpy{}
+	var sup *Supervisor
+	var hookOnce sync.Once
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	cfg.Log = func(format string, args ...any) {
+		spy.log(format, args...)
+		if strings.Contains(format, "sidecar exited") {
+			hookOnce.Do(func() { hook(sup, sockPath, cancel) })
+		}
+	}
+	sup = newSupervisor(cfg, newFakeLauncher(t, nil, reg))
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- sup.Run(ctx) }()
+	waitForHealthy(t, sup, true)
+	reg.list()[0].SimulateCrash()
+	return sup, runErr, spy, sockPath
+}
+
+func assertTopExit(t *testing.T, sup *Supervisor, runErr chan error, spy *logSpy, sockPath string, want func(error) bool, wantDesc string) {
+	t.Helper()
+	select {
+	case err := <-runErr:
+		if !want(err) {
+			t.Errorf("Run() = %v, want %s", err, wantDesc)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not return")
+	}
+	if state, _ := sup.State(); state != StateStopped {
+		t.Errorf("State() = %v, want StateStopped", state)
+	}
+	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
+		t.Errorf("socket %s still exists (stat err: %v)", sockPath, err)
+	}
+	for _, line := range spy.lines_() {
+		if strings.Contains(line, "restarting in") {
+			t.Errorf("logged %q: the exit must happen at the top of the loop, before any restart is scheduled", line)
+		}
+	}
+}
+
+func plantSocketFromHook(sockPath string) {
+	_ = os.Remove(sockPath)
+	if ln, err := net.Listen("unix", sockPath); err == nil {
+		if uln, ok := ln.(*net.UnixListener); ok {
+			uln.SetUnlinkOnClose(false)
+		}
+		_ = ln.Close()
+	}
+}
+
+// TestSupervisor_CancelAtTopOfRestartLoop_ExitsBeforeScheduling pins the
+// ctx.Done() exit of the top-of-loop select: cancelled before the select
+// is evaluated, Run returns Canceled, Stopped, socket removed, and never
+// logs a scheduled restart. RED with that case's exitDuringRestart call
+// removed (State stays Restarting) or the case itself removed (a
+// "restarting in" line is logged before the backoff select exits).
+func TestSupervisor_CancelAtTopOfRestartLoop_ExitsBeforeScheduling(t *testing.T) {
+	sup, runErr, spy, sockPath := runWithHookOnExit(t, func(_ *Supervisor, sockPath string, cancel context.CancelFunc) {
+		plantSocketFromHook(sockPath)
+		cancel()
+	})
+	assertTopExit(t, sup, runErr, spy, sockPath,
+		func(err error) bool { return errors.Is(err, context.Canceled) }, "context.Canceled")
+}
+
+// TestSupervisor_StopAtTopOfRestartLoop_ExitsBeforeScheduling is the same
+// for the stopCh case. Stop blocks until Run finishes, so the hook calls
+// it on its own goroutine and waits only until stopCh is closed.
+func TestSupervisor_StopAtTopOfRestartLoop_ExitsBeforeScheduling(t *testing.T) {
+	sup, runErr, spy, sockPath := runWithHookOnExit(t, func(sup *Supervisor, sockPath string, _ context.CancelFunc) {
+		plantSocketFromHook(sockPath)
+		go sup.Stop()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			select {
+			case <-sup.stopCh:
+				return
+			default:
+				time.Sleep(time.Millisecond)
+			}
+		}
+	})
+	assertTopExit(t, sup, runErr, spy, sockPath,
+		func(err error) bool { return err == nil }, "nil")
+}
+
+// neverBindsProcess is a process that is alive but never binds its socket;
+// only Kill (or Signal) ends it, as with a real hung interpreter.
+type neverBindsProcess struct {
+	once sync.Once
+	done chan error
+}
+
+func (p *neverBindsProcess) Pid() int           { return os.Getpid() }
+func (p *neverBindsProcess) Wait() <-chan error { return p.done }
+func (p *neverBindsProcess) Signal(os.Signal) error {
+	p.once.Do(func() { p.done <- errors.New("signalled") })
+	return nil
+}
+func (p *neverBindsProcess) Kill() error { return p.Signal(nil) }
+
+// TestSupervisor_FirstStartTimeoutIsRefusalNotCancellation: a first start
+// that hits StartTimeout while the caller's ctx is still live is a
+// refusal, not a cancellation. The refusal wraps context.DeadlineExceeded
+// (startOnce's own derived ctx), so a check that treated any
+// DeadlineExceeded as "the caller cancelled" would end Stopped with no
+// DOWN line and a nil-looking outcome (round 6 HIGH, supervisor side).
+// RED with Run's `if ctx.Err() != nil` widened to also accept
+// errors.Is(err, context.DeadlineExceeded).
+func TestSupervisor_FirstStartTimeoutIsRefusalNotCancellation(t *testing.T) {
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	cfg := testSupervisorConfig(sockPath)
+	cfg.StartTimeout = 150 * time.Millisecond
+	spy := &logSpy{}
+	cfg.Log = spy.log
+	launch := func(context.Context, []string) (sidecarProcess, error) {
+		return &neverBindsProcess{done: make(chan error, 1)}, nil
+	}
+	sup := newSupervisor(cfg, launch)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // live for the whole test
+	defer cancel()
+	runErr := sup.Run(ctx)
+
+	if runErr == nil || !strings.Contains(runErr.Error(), "initial start refused") {
+		t.Fatalf("Run() = %v, want the initial-start refusal", runErr)
+	}
+	if !errors.Is(runErr, context.DeadlineExceeded) {
+		t.Fatalf("Run() = %v, want it to wrap DeadlineExceeded (the StartTimeout), or this test no longer exercises the shape", runErr)
+	}
+	if state, reason := sup.State(); state != StateDown || reason == nil {
+		t.Errorf("State() = %v, %v; want StateDown with a reason", state, reason)
+	}
+	if werr := sup.WaitStarted(context.Background()); werr == nil || !strings.Contains(werr.Error(), "initial start refused") {
+		t.Errorf("WaitStarted() = %v, want the refusal", werr)
+	}
+	downs := 0
+	for _, line := range spy.lines_() {
+		if strings.Contains(line, "DOWN: ") {
+			downs++
+		}
+	}
+	if downs != 1 {
+		t.Errorf("DOWN lines = %d, want 1 (got %v)", downs, spy.lines_())
+	}
+}
+
 // TestSupervisor_RestartBudgetExhausted proves the fleet stays DOWN, and
 // Run returns an error, once restarts exceed MaxRestarts within the
 // window: it does not retry forever.
