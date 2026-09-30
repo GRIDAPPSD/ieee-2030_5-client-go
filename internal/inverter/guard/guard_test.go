@@ -305,11 +305,33 @@ func TestGuard_TargetLFDI_CaseInsensitive(t *testing.T) {
 	}
 }
 
+// TestRefusalError_Message pins the exact message, not just its
+// non-emptiness: fix-round-3 finding 6 (m15) named a mutant that replaces
+// Error() with a constant non-empty string ("refused") that survives an
+// emptiness-only check. Both the non-self and the self case are covered,
+// since self formats the target as "(self)" rather than echoing "".
 func TestRefusalError_Message(t *testing.T) {
 	t.Parallel()
-	err := &RefusalError{Role: RoleDER, Method: http.MethodPost, Kind: KindMirrorPost, TargetLFDI: "BBBB"}
-	if err.Error() == "" {
-		t.Error("RefusalError.Error() returned empty string")
+	tests := []struct {
+		name string
+		err  *RefusalError
+		want string
+	}{
+		{
+			"non-self target",
+			&RefusalError{Role: RoleDER, Method: http.MethodPost, Kind: KindMirrorPost, TargetLFDI: "BBBB"},
+			`guard: role "der" refuses POST MirrorPost for BBBB`,
+		},
+		{
+			"self target formats as (self)",
+			&RefusalError{Role: RoleAggregator, Method: http.MethodPut, Kind: KindDERResourceWrite, TargetLFDI: ""},
+			`guard: role "aggregator" refuses PUT DERResourceWrite for (self)`,
+		},
+	}
+	for _, tt := range tests {
+		if got := tt.err.Error(); got != tt.want {
+			t.Errorf("%s: Error() = %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }
 
@@ -432,5 +454,70 @@ func TestGuard_RefusalLogging_DefaultOff(t *testing.T) {
 	// refusalLog, and must still return the refusal.
 	if err := g.Allow(http.MethodGet, Action{Kind: KindEndDeviceRead, TargetLFDI: testUnmanaged}); err == nil {
 		t.Error("want refusal, got allow")
+	}
+}
+
+// TestGuard_KnownLimit_SameVerbMislabelNotCaught pins the documented
+// limit on Package guard: Allow checks the verb (kindMethod) but not the
+// href's resource family, so a same-verb mislabel is not caught. A mirror
+// POST tagged KindLogEventPost is allowed here exactly as a real
+// KindLogEventPost self-POST would be, because both map to POST and both
+// are self-allowed in both roles: Allow has no signal that tells them
+// apart. This test is not a regression check to keep green; it is the
+// proof that the documented gap is real, so the doc comment and the PR
+// body stay honest about it. If href-family binding is ever added (#72),
+// this test should start failing and should be rewritten to prove the
+// new check instead of deleted.
+func TestGuard_KnownLimit_SameVerbMislabelNotCaught(t *testing.T) {
+	t.Parallel()
+	g := New(RoleDER, testSelf, nil)
+	if err := g.Allow(http.MethodPost, Action{Kind: KindLogEventPost, TargetLFDI: ""}); err != nil {
+		t.Fatalf("a mirror POST mislabelled KindLogEventPost: want allow (documented limit), got %v", err)
+	}
+}
+
+// TestGuard_RefusalLogging_PrunesQuietKeys is fix-round-3 finding 6: the
+// refusalLast map must not grow without bound as distinct refusal shapes
+// (different target LFDIs, once #72 adds real ones) accumulate. A key
+// that has not logged again within refusalPruneFactor windows is dropped
+// on the next logRefusal call, whichever key that call happens to touch.
+func TestGuard_RefusalLogging_PrunesQuietKeys(t *testing.T) {
+	t.Parallel()
+	fake := &fakeRefusalLog{}
+	clk := newFakeClock(time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC))
+	g := New(RoleAggregator, testSelf, fakeManagedSet{}, WithRefusalLogger(fake.log, time.Minute, clk.Now))
+
+	// 5 distinct refusal shapes (distinct targets), each logs once. The
+	// content of each target string does not matter here: Allow only
+	// compares it against selfLFDI, so any distinct strings key the
+	// refusalLast map separately.
+	targets := []string{"target-1", "target-2", "target-3", "target-4", "target-5"}
+	for _, target := range targets {
+		if err := g.Allow(http.MethodGet, Action{Kind: KindEndDeviceRead, TargetLFDI: target}); err == nil {
+			t.Fatalf("target %q: want refusal, got allow", target)
+		}
+	}
+	g.refusalMu.Lock()
+	before := len(g.refusalLast)
+	g.refusalMu.Unlock()
+	if before != len(targets) {
+		t.Fatalf("refusalLast size after %d distinct refusals = %d, want %d", len(targets), before, len(targets))
+	}
+
+	// Advance well past the prune threshold (refusalPruneFactor windows),
+	// then cause exactly one more refusal (a new, sixth shape). Pruning
+	// runs as a side effect of that one call and must clear every key
+	// that has gone quiet, including ones logRefusal itself never directly
+	// touches this call.
+	clk.Advance((refusalPruneFactor + 1) * time.Minute)
+	if err := g.Allow(http.MethodGet, Action{Kind: KindEndDeviceRead, TargetLFDI: "target-6"}); err == nil {
+		t.Fatal("sixth target: want refusal, got allow")
+	}
+
+	g.refusalMu.Lock()
+	after := len(g.refusalLast)
+	g.refusalMu.Unlock()
+	if after != 1 {
+		t.Errorf("refusalLast size after the prune sweep = %d, want 1 (only the key that just logged)", after)
 	}
 }

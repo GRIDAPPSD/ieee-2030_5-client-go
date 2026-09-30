@@ -1,6 +1,16 @@
 // Package guard implements a fail-closed action guard: a closed list, per
 // client role, of what the process may send for a given EndDevice before
 // any request reaches the network.
+//
+// Known limit: Kind pins the HTTP method (kindMethod), not the resource
+// the path actually names. A caller that mislabels a same-verb action
+// (a MirrorUsagePoint POST tagged KindLogEventPost, say) is not caught:
+// Allow has no way to tell the two apart without knowing what a href
+// names, which requires the per-device href provenance tracking #72
+// builds (the session that knows which hrefs it reached from which
+// EndDevice's own tree). Until then, every production caller hardcodes
+// its Kind at the call site (client.go), so this gap is only reachable by
+// a bug in that hardcoding, not by anything a remote server controls.
 package guard
 
 import (
@@ -382,6 +392,15 @@ func (g *Guard) Allow(method string, a Action) error {
 // window for each distinct (role, method, kind, target) shape. A Guard
 // with no logger installed (refusalLog nil, the New default) is a no-op:
 // logging is opt-in so building a Guard for a test never produces output.
+// refusalPruneFactor bounds how long a quiet refusal-shape key survives in
+// refusalLast before logRefusal prunes it: refusalPruneFactor * window. A
+// key that logs again later gets a fresh entry; pruning only drops keys
+// that have gone quiet. #72 will add real per-device targets, and without
+// this the key space (one entry per distinct role|method|kind|target ever
+// refused) would grow without bound; today it does not, because
+// production always passes an empty TargetLFDI.
+const refusalPruneFactor = 4
+
 func (g *Guard) logRefusal(re *RefusalError) {
 	if g.refusalLog == nil {
 		return
@@ -396,6 +415,11 @@ func (g *Guard) logRefusal(re *RefusalError) {
 		return
 	}
 	g.refusalLast[key] = now
+	for k, t := range g.refusalLast {
+		if now.Sub(t) >= refusalPruneFactor*g.refusalWindow {
+			delete(g.refusalLast, k)
+		}
+	}
 	g.refusalMu.Unlock()
 
 	g.refusalLog("%s", re.Error())
