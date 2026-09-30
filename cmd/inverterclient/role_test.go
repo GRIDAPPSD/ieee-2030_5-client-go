@@ -1,5 +1,5 @@
-// Cmd-side wiring test for ADR-009 decision 1: the aggregator role always
-// acquires its own EndDevice by lookup and never POSTs to create one.
+// Cmd-side wiring test: the aggregator role always acquires its own
+// EndDevice by lookup and never POSTs to create one.
 
 package main
 

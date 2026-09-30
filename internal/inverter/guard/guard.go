@@ -1,6 +1,6 @@
-// Package guard implements the ADR-009 decision 2 fail-closed action guard:
-// a closed list, per client role, of what the process may send for a given
-// EndDevice before any request reaches the network.
+// Package guard implements a fail-closed action guard: a closed list, per
+// client role, of what the process may send for a given EndDevice before
+// any request reaches the network.
 package guard
 
 import (
@@ -9,7 +9,7 @@ import (
 )
 
 // Role is the IEEE 2030.5 client role a process runs as, chosen once at
-// start (ADR-009 decision 1: --client-role der|aggregator).
+// start (--client-role der|aggregator).
 type Role string
 
 const (
@@ -29,8 +29,8 @@ func ParseRole(s string) (Role, error) {
 	}
 }
 
-// Kind identifies what an outbound request does, at the granularity
-// ADR-009 decision 4's manager-action table (M1-M8) and its refused shapes
+// Kind identifies what an outbound request does, at the granularity the
+// aggregator manager-action table (M1-M8) and its refused shapes
 // distinguish.
 type Kind int
 
@@ -60,8 +60,8 @@ const (
 	KindEndDeviceCreate
 
 	// KindRegistrationRead, KindEndDeviceWrite and KindDefaultControlWrite
-	// are never a manager action for another device (ADR-009 decision 4,
-	// "Refused for a managed DER, whatever either side allows").
+	// are never a manager action for another device, whatever the server
+	// would otherwise admit.
 	KindRegistrationRead
 	KindEndDeviceWrite
 	KindDefaultControlWrite
@@ -105,7 +105,7 @@ func (k Kind) String() string {
 // KindEndDeviceWrite, KindEndDeviceCreate, KindEndDeviceDelete and
 // KindDefaultControlWrite are excluded even for self: nothing in this
 // design PUTs its own EndDevice record, creates or deletes itself, or PUTs
-// a DefaultDERControl (ADR-009 decision 5: "neither client role PUTs one").
+// a DefaultDERControl (the utility authors it; neither client role PUTs one).
 var selfKinds = map[Kind]bool{
 	KindEndDeviceRead:       true,
 	KindRegistrationRead:    true,
@@ -117,7 +117,7 @@ var selfKinds = map[Kind]bool{
 	KindFlowReservationPost: true,
 }
 
-// managerKinds are ADR-009 decision 4's M1-M6: always open for a managed
+// managerKinds are the M1-M6 manager actions: always open for a managed
 // device once ManagedSet confirms it. M7/M8 (delete/create) are handled
 // separately since each needs its own opt-in.
 var managerKinds = map[Kind]bool{
@@ -164,16 +164,16 @@ func (e *RefusalError) Error() string {
 type Option func(*Guard)
 
 // WithInBandDelete opens M7 (DELETE a managed EndDevice) for a managed
-// device. Off by default per ADR-009 decision 4.
+// device. Off by default.
 func WithInBandDelete() Option { return func(g *Guard) { g.allowInBandDelete = true } }
 
 // WithInBandCreate opens M8 (POST a proposed EndDevice) for the managed
-// EndDeviceList. Off by default per ADR-009 decision 4.
+// EndDeviceList. Off by default.
 func WithInBandCreate() Option { return func(g *Guard) { g.allowInBandCreate = true } }
 
-// Guard is the ADR-009 decision 2 fail-closed action guard, wrapping the
-// process's single client. Every Action is classified by Allow before it
-// reaches the transport; an Action Allow refuses is never sent.
+// Guard is a fail-closed action guard, wrapping the process's single
+// client. Every Action is classified by Allow before it reaches the
+// transport; an Action Allow refuses is never sent.
 type Guard struct {
 	role     Role
 	selfLFDI string
@@ -204,8 +204,8 @@ func (g *Guard) Allow(a Action) error {
 		return &RefusalError{Role: g.role, Kind: a.Kind, TargetLFDI: a.TargetLFDI}
 	}
 
-	// Not self. Per ADR-009 decision 2's der-role enforcement: "anything
-	// naming another device is refused" regardless of kind.
+	// Not self. A der-role process never acts as a manager: anything
+	// naming another device is refused regardless of kind.
 	if g.role != RoleAggregator {
 		return &RefusalError{Role: g.role, Kind: a.Kind, TargetLFDI: a.TargetLFDI}
 	}

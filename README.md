@@ -87,8 +87,8 @@ Key flags:
 
 ## Client role
 
-`--client-role` selects the IEEE 2030.5 client role (ADR-009), independent
-of `--role` above:
+`--client-role` selects the IEEE 2030.5 client role, independent of
+`--role` above:
 
 **der** (default): the process acts for exactly one EndDevice, the one
 named by its own certificate. Every existing invocation is unaffected.

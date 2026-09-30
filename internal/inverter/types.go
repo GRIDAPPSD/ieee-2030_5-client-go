@@ -142,15 +142,15 @@ type SimConfig struct {
 	// is the role. See internal/inverter/dispatch for the factory.
 	Role string
 
-	// ClientRole selects the IEEE 2030.5 client role (ADR-009 decision 1):
+	// ClientRole selects the IEEE 2030.5 client role:
 	//   "der" (default): the process acts for exactly one EndDevice, its
 	//     own certificate's.
 	//   "aggregator": the process holds its own EndDevice and acts for
 	//     managed DER EndDevices only through the manager actions a
 	//     guard.Guard enforces (internal/inverter/guard).
-	// Distinct from Role above (the notification-dispatch policy) to avoid
-	// the ADR-009 naming collision: this field is client_role, "--role" is
-	// the dispatch-policy flag and keeps its meaning.
+	// Distinct from Role above (the notification-dispatch policy), so this
+	// field is client_role, and "--role" is the dispatch-policy flag and
+	// keeps its meaning.
 	ClientRole string
 }
 

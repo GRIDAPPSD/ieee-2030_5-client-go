@@ -117,8 +117,8 @@ func TestGuard_Aggregator_ManagerActions(t *testing.T) {
 }
 
 // TestGuard_Aggregator_InBandOptIn proves M7/M8 open only when the
-// aggregator's own in-band settings are on (ADR-009 decision 4: "only
-// while the client's in-band ... setting is on").
+// aggregator's own in-band settings are on: only while the client's
+// in-band delete or create setting is on, off by default.
 func TestGuard_Aggregator_InBandOptIn(t *testing.T) {
 	t.Parallel()
 	const self = "AAAA000000000000000000000000000000AAAA"

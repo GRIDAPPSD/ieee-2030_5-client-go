@@ -27,7 +27,7 @@ func TestServerFlagDefault(t *testing.T) {
 // TestHMIPortFlagDefault pins --hmi-port default to 0 (disabled). Issue #71:
 // a fixed 8080 default made a second default-flagged process on one host
 // collide; disabled-by-default lets any number of aggregator and DER-client
-// processes start together, per ADR-009 decision 1.
+// processes start together.
 func TestHMIPortFlagDefault(t *testing.T) {
 	t.Parallel()
 	const want = 0
@@ -43,8 +43,8 @@ func TestHMIPortFlagDefault(t *testing.T) {
 	}
 }
 
-// TestClientRoleFlagDefault pins --client-role default to "der" (ADR-009
-// decision 1: every existing invocation keeps the DER Client role).
+// TestClientRoleFlagDefault pins --client-role default to "der": every
+// existing invocation keeps the DER Client role.
 func TestClientRoleFlagDefault(t *testing.T) {
 	t.Parallel()
 	const want = "der"

@@ -189,10 +189,10 @@ func main() {
 	flag.DurationVar(&cfg.TickInterval, "tick", 1*time.Second, "Simulation tick interval")
 	flag.DurationVar(&cfg.ReportInterval, "report-interval", 10*time.Second, "Status report interval")
 
-	// Default 0 (disabled): ADR-009 decision 1 runs any number of
-	// aggregator and DER-client processes of one binary on one host, and a
-	// fixed 8080 default made the second default-flagged process on a host
-	// collide. Operators who want the dashboard set the port explicitly.
+	// Default 0 (disabled): any number of aggregator and DER-client
+	// processes of one binary may run on one host, and a fixed 8080
+	// default made the second default-flagged process on a host collide.
+	// Operators who want the dashboard set the port explicitly.
 	hmiPort := flag.Int("hmi-port", 0, "HMI web dashboard port (0 to disable)")
 	listScenarios := flag.Bool("list-scenarios", false, "List available scenarios and exit")
 	flag.BoolVar(&cfg.CSIP, "csip", false, "CSIP mode: lookup own EndDevice in server's /edev list instead of POST-registering")
@@ -245,9 +245,9 @@ func main() {
 	// ADR-003: NOT a runtime branch in the dispatch path.
 	flag.StringVar(&cfg.Role, "role", "simulator", "consumer-policy role: simulator|production")
 
-	// ClientRole selects the IEEE 2030.5 client role (ADR-009 decision 1),
-	// resolved once at start into which EndDevice(s) the process acts for.
-	// Distinct from --role above (the dispatch policy); --role keeps its
+	// ClientRole selects the IEEE 2030.5 client role, resolved once at
+	// start into which EndDevice(s) the process acts for. Distinct from
+	// --role above (the dispatch policy); --role keeps its
 	// existing meaning.
 	flag.StringVar(&cfg.ClientRole, "client-role", string(guard.RoleDER), "IEEE 2030.5 client role: der|aggregator")
 
