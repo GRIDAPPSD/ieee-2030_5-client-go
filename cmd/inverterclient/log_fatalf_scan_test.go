@@ -44,7 +44,9 @@ var expectedFatalfSitePrefixes = []string{
 	`log.Fatalf("create client: %v", err)`,
 	`log.Fatalf("discover: %v", err)`,
 	`log.Fatalf("wait for advertised links: %v", err)`,
-	`log.Fatalf("--csip set but DeviceCapability has no EndDeviceListLink")`,
+	// #71: the lookup branch now also runs in the aggregator role, not only
+	// under --csip, so the message no longer names --csip specifically.
+	`log.Fatalf("EndDevice lookup required but DeviceCapability has no EndDeviceListLink")`,
 	`log.Fatalf("lookup own EndDevice: %v", err)`,
 	`log.Fatalf("DeviceCapability has no EndDeviceListLink; registration impossible")`,
 	`log.Fatalf("register: %v", err)`,

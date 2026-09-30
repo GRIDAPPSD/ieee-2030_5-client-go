@@ -19,6 +19,7 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/device"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/dispatch"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
@@ -188,7 +189,11 @@ func main() {
 	flag.DurationVar(&cfg.TickInterval, "tick", 1*time.Second, "Simulation tick interval")
 	flag.DurationVar(&cfg.ReportInterval, "report-interval", 10*time.Second, "Status report interval")
 
-	hmiPort := flag.Int("hmi-port", 8080, "HMI web dashboard port (0 to disable)")
+	// Default 0 (disabled): ADR-009 decision 1 runs any number of
+	// aggregator and DER-client processes of one binary on one host, and a
+	// fixed 8080 default made the second default-flagged process on a host
+	// collide. Operators who want the dashboard set the port explicitly.
+	hmiPort := flag.Int("hmi-port", 0, "HMI web dashboard port (0 to disable)")
 	listScenarios := flag.Bool("list-scenarios", false, "List available scenarios and exit")
 	flag.BoolVar(&cfg.CSIP, "csip", false, "CSIP mode: lookup own EndDevice in server's /edev list instead of POST-registering")
 	flag.UintVar(&cfg.ExpectedPIN, "pin", 0, "expected Registration PIN (0 = skip match check; nonzero mismatch is fatal)")
@@ -223,6 +228,13 @@ func main() {
 	}
 	notifyListen := flag.String("notify-listen", defaultNotifyListen, "inbound HTTPS Notification listener address (env: SEP2_NOTIFY_LISTEN; empty disables)")
 
+	// The bind address and the URL advertised in a subscription POST are
+	// separate settings: a listener bound to a reachable interface (e.g.
+	// 0.0.0.0 or a real host IP) may still need a different host (a DNS
+	// name, a NAT'd address) in the notify URL the server calls back on.
+	// Empty (default) keeps today's behavior: advertise the bound address.
+	notifyAdvertiseHost := flag.String("notify-advertise-host", "", "host:port advertised in subscription notify URLs (default: the bound --notify-listen address)")
+
 	// Backend selects the physical-state source for the tick loop. Default
 	// "synthetic" preserves the existing scenario-harness behavior.
 	flag.StringVar(&cfg.Backend, "backend", "synthetic", "device backend: synthetic|gridlabd|realdevice")
@@ -233,7 +245,18 @@ func main() {
 	// ADR-003: NOT a runtime branch in the dispatch path.
 	flag.StringVar(&cfg.Role, "role", "simulator", "consumer-policy role: simulator|production")
 
+	// ClientRole selects the IEEE 2030.5 client role (ADR-009 decision 1),
+	// resolved once at start into which EndDevice(s) the process acts for.
+	// Distinct from --role above (the dispatch policy); --role keeps its
+	// existing meaning.
+	flag.StringVar(&cfg.ClientRole, "client-role", string(guard.RoleDER), "IEEE 2030.5 client role: der|aggregator")
+
 	flag.Parse()
+
+	if _, err := guard.ParseRole(cfg.ClientRole); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
 
 	// Clamp PEN to uint32 range. flag.Uint64Var lets us catch out-of-range
 	// input from CLI / env without silently truncating.
@@ -417,10 +440,10 @@ func main() {
 	}
 
 	var edev sep2.EndDevice
-	if cfg.CSIP {
-		log.Println("=== Phase 2: EndDevice Lookup (CSIP) ===")
+	if endDeviceAcquisitionUsesLookup(cfg) {
+		log.Println("=== Phase 2: EndDevice Lookup ===")
 		if edevListHref == "" {
-			log.Fatalf("--csip set but DeviceCapability has no EndDeviceListLink")
+			log.Fatalf("EndDevice lookup required but DeviceCapability has no EndDeviceListLink")
 		}
 		for {
 			// On 301 LookupOwnEndDevice surfaces the new edev-list
@@ -511,7 +534,7 @@ func main() {
 		ctx,
 		client,
 		edev,
-		notifyURLForReceiver(notifyReceiver),
+		notifyURLForReceiver(notifyReceiver, *notifyAdvertiseHost),
 	)
 	// Wire the registry's Cancel method as the dispatcher's CancelHook so
 	// status=1 notifications (CSIP V1.2 CORE-019 step 13: "subscription

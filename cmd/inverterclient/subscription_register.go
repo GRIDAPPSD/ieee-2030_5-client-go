@@ -24,17 +24,22 @@ import (
 // or its bound address is unavailable : the caller treats an empty URL as
 // "subscription flow disabled, fall back to polling."
 //
+// advertiseAddr, when non-empty, overrides the host:port named in the URL
+// (the --notify-advertise-host flag): the bind address and the address a
+// remote server can reach are not always the same value, for example a
+// listener bound to 0.0.0.0 or behind NAT.
+//
 // Production callers pass *inverter.NotifyReceiver directly; the function
 // adapts via notifyURLForAddrSource so unit tests can stub the Addr() seam
 // without spinning a live TLS listener. The two-level shape (concrete
 // wrapper + small interface helper) makes the nil-receiver branch
 // unambiguous: the typed-nil *NotifyReceiver case is caught before any
 // interface conversion happens.
-func notifyURLForReceiver(rcv *inverter.NotifyReceiver) string {
+func notifyURLForReceiver(rcv *inverter.NotifyReceiver, advertiseAddr string) string {
 	if rcv == nil {
 		return ""
 	}
-	return notifyURLForAddrSource(rcv)
+	return notifyURLForAddrSource(rcv, advertiseAddr)
 }
 
 // addrSource is the narrow consumer-side seam notifyURLForAddrSource needs.
@@ -46,7 +51,10 @@ type addrSource interface {
 // notifyURLForAddrSource is the unit-testable inner helper. Assumes a
 // non-nil source; the *inverter.NotifyReceiver wrapper above does the
 // typed-nil guard.
-func notifyURLForAddrSource(src addrSource) string {
+func notifyURLForAddrSource(src addrSource, advertiseAddr string) string {
+	if advertiseAddr != "" {
+		return fmt.Sprintf("https://%s/notify", advertiseAddr)
+	}
 	addr, err := src.Addr()
 	if err != nil || addr == "" {
 		return ""

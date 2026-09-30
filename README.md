@@ -73,15 +73,33 @@ Key flags:
 | `--ca` | `certs/ca.crt` | CA certificate PEM |
 | `--scenario` | `normal` | Scenario name (see below) |
 | `--role` | `simulator` | Consumer-policy role: `simulator` or `production` |
+| `--client-role` | `der` | IEEE 2030.5 client role: `der` or `aggregator` |
 | `--backend` | `synthetic` | Device backend: `synthetic`, `gridlabd`, or `realdevice` |
 | `--timescale` | `60.0` | Simulation speed multiplier (60 = 1 real minute = 1 sim hour) |
 | `--tick` | `1s` | Simulation tick interval |
-| `--hmi-port` | `8080` | Local HMI web dashboard port (0 to disable) |
+| `--hmi-port` | `0` | Local HMI web dashboard port (0 to disable; a nonzero default would collide across processes on one host) |
 | `--csip` | false | CSIP mode: discover own EndDevice instead of POST-registering |
 | `--pin` | `0` | Expected registration PIN (0 = skip check; nonzero mismatch is fatal) |
 | `--notify-listen` | `127.0.0.1:0` | Inbound HTTPS Notification listener (empty to disable) |
+| `--notify-advertise-host` | | `host:port` advertised in subscription notify URLs (default: the bound `--notify-listen` address) |
 | `--pen` | `0` | IANA Private Enterprise Number for outbound LogEvents (env: SEP2_PEN) |
 | `--list-scenarios` | | Print available scenarios and exit |
+
+## Client role
+
+`--client-role` selects the IEEE 2030.5 client role (ADR-009), independent
+of `--role` above:
+
+**der** (default): the process acts for exactly one EndDevice, the one
+named by its own certificate. Every existing invocation is unaffected.
+
+**aggregator**: the process holds its own EndDevice and, for a managed DER,
+takes only the manager actions IEEE 2030.5 grants an Aggregator: read the
+device's EndDevice tree, write its DER resources, post its log events,
+subscribe on its behalf, and post Responses and mirrors naming it. A guard
+refuses anything else before it is sent. The aggregator finds its own
+EndDevice by certificate and never creates it. The managed-device set,
+fleet loops and provisioning are a separate piece of work.
 
 ## Scenarios
 
