@@ -882,40 +882,9 @@ func main() {
 		}
 	}
 
-	// Phase 4: Metering Setup : POST a MirrorUsagePoint to the list href
-	// advertised by DeviceCapability. The response Location is then GET to
-	// read back the MirrorMeterReadingListLink for Phase 5 readings.
-	log.Println("=== Phase 4: Metering Setup ===")
-	var mmrHref string
-	if dcap.MirrorUsagePointListLink == nil {
-		log.Println("DeviceCapability has no MirrorUsagePointListLink; metering disabled")
-	} else {
-		mupLoc, err := client.CreateMirrorUsagePoint(ctx, dcap.MirrorUsagePointListLink.Href, client.LFDI(), sep2.MirrorUsagePoint{
-			MRID:                "mup-" + client.SFDI()[:8],
-			Description:         "PV Inverter Metering",
-			ServiceCategoryKind: 0,
-			Status:              1,
-		})
-		if err != nil {
-			log.Printf("create MirrorUsagePoint: %v (metering disabled)", err)
-		} else if mupLoc == "" {
-			log.Println("MirrorUsagePoint POST returned empty Location; metering disabled")
-		} else {
-			log.Printf("MirrorUsagePoint: %s", mupLoc)
-			// core removed MirrorMeterReadingListLink: sep.xsd has no such
-			// child (MirrorUsagePoint carries MirrorMeterReading inline,
-			// repeated, not a link to a list). The server mounts the
-			// reading list at mupLoc+"/mr" by CSIP convention, matching
-			// PostMeterReading's own doc and this package's test fixtures,
-			// so derive it directly rather than reading a link that no
-			// longer exists on the wire.
-			mmrHref = mupLoc + "/mr"
-		}
-	}
-
-	// Create reporter : empty hrefs cause the corresponding channel to be
-	// a silent no-op (see reporter.go).
-	reporter := inverter.NewReporter(client, client.LFDI(), derStatusHref, mmrHref)
+	// Phase 4: Metering Setup. Extracted to runPhase4Metering so a test can
+	// pin the identity wiring (GRIDAPPSD/ieee-2030_5-client-go#68).
+	reporter := runPhase4Metering(ctx, client, dcap, derStatusHref)
 
 	// Wire the LogEvent rate-limiter + alarm transition detector.
 	// See GRIDAPPSD/ieee-2030_5-server-go#190.

@@ -799,7 +799,10 @@ func TestReporter_EmptyHrefsAreNoOps(t *testing.T) {
 	defer stop()
 
 	client := newCSIPClient(t, env, serverURL, true)
-	reporter := inverter.NewReporter(client, testDeviceLFDI, "", "") // both hrefs empty
+	reporter, err := inverter.NewReporter(client, testDeviceLFDI, "", "") // both hrefs empty
+	if err != nil {
+		t.Fatalf("NewReporter: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
