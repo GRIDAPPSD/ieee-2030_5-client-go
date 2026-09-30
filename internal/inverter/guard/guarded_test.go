@@ -184,6 +184,26 @@ func TestGuarded_Put_RefusedSendsNothing(t *testing.T) {
 	}
 }
 
+// TestGuarded_NilGuard_RefusesEverything is fix-round-2 finding 2: a
+// *Guarded built with a nil *Guard must fail closed rather than panic on
+// first use. RED before this fix (proven against the round-1 commit in a
+// standalone probe, not checked in): Guarded.Post on a nil guard panicked
+// with a nil pointer dereference.
+func TestGuarded_NilGuard_RefusesEverything(t *testing.T) {
+	t.Parallel()
+	srv, requests := newCountingServer(t)
+
+	guarded := NewGuarded(&countingTransport{client: srv.Client(), base: srv.URL}, nil)
+
+	_, _, err := guarded.Post(context.Background(), Action{Kind: KindMirrorPost, TargetLFDI: testManaged}, "/mup", nil)
+	if err == nil {
+		t.Fatal("nil guard: want refusal, got nil")
+	}
+	if got := atomic.LoadInt32(requests); got != 0 {
+		t.Errorf("test server saw %d requests, want 0", got)
+	}
+}
+
 // fakeLFDIBearing is a minimal LFDIBearing body double, proving the body
 // cross-check mechanism itself works (production sep2 types do not yet
 // implement it; wiring them is #72's per-device mirror/response work).

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Role is the IEEE 2030.5 client role a process runs as, chosen once at
@@ -240,6 +242,39 @@ func WithInBandDelete() Option { return func(g *Guard) { g.allowInBandDelete = t
 // not-yet-managed device) for the managed EndDeviceList. Off by default.
 func WithInBandCreate() Option { return func(g *Guard) { g.allowInBandCreate = true } }
 
+// DefaultRefusalLogWindow is the per-refusal-shape rate-limit window
+// WithRefusalLogger falls back to when given zero or a negative window:
+// at most one log line per (role, method, kind, target) combination per
+// minute. Mirrors this repo's existing bounded-logging pattern
+// (inverter.DefaultLogEventWindow / PerCodeLogEventLimiter): a caller
+// that retries a refused action on every tick must not flood the log.
+const DefaultRefusalLogWindow = time.Minute
+
+// WithRefusalLogger installs a bounded logger: each distinct refusal
+// (keyed by role, method, kind and target LFDI) is logged via log at most
+// once per window, then silenced until the window elapses. log receives
+// one formatted line naming the action and the LFDI (RefusalError's own
+// Error() string) and its args; a nil log disables logging (the default
+// when this option is not used). A zero or negative window is replaced by
+// DefaultRefusalLogWindow; a nil now defaults to time.Now.
+func WithRefusalLogger(log func(format string, args ...any), window time.Duration, now func() time.Time) Option {
+	return func(g *Guard) {
+		if log == nil {
+			return
+		}
+		if window <= 0 {
+			window = DefaultRefusalLogWindow
+		}
+		if now == nil {
+			now = time.Now
+		}
+		g.refusalLog = log
+		g.refusalWindow = window
+		g.refusalNow = now
+		g.refusalLast = make(map[string]time.Time)
+	}
+}
+
 // Guard is a fail-closed action guard, wrapping the process's single
 // client. Every Action is classified by Allow, against the method actually
 // invoked, before it reaches the transport; an Action Allow refuses is
@@ -251,6 +286,15 @@ type Guard struct {
 
 	allowInBandDelete bool
 	allowInBandCreate bool
+
+	// refusalLog is nil unless WithRefusalLogger installed one: logging is
+	// opt-in so a Guard built with New alone (most existing tests, and any
+	// caller that does not want log output) never logs.
+	refusalLog    func(format string, args ...any)
+	refusalWindow time.Duration
+	refusalNow    func() time.Time
+	refusalMu     sync.Mutex
+	refusalLast   map[string]time.Time
 }
 
 // New builds a Guard for role, whose own EndDevice is identified by
@@ -268,16 +312,35 @@ func New(role Role, selfLFDI string, managed ManagedSet, opts ...Option) *Guard 
 // Allow classifies a request whose actual HTTP method is method (the verb
 // the caller is about to invoke, not a claim). It returns nil when the
 // role's closed list permits the action, or a *RefusalError naming what
-// was refused and for whom.
+// was refused and for whom. A nil *Guard refuses every request (fail
+// closed): Allow is safe to call on an unconstructed Guard.
 //
-// Classification order: first the method itself must match a.Kind's one
-// legitimate verb (closes the caller-mislabeling exploit: a PUT declared
-// as a read-only Kind, or an unset zero-value Action, both fail here,
-// before any self/managed branch is reached). Only a Kind that survives
-// that check is evaluated further.
+// Classification order:
+//  1. The method itself must match a.Kind's one legitimate verb (closes
+//     the caller-mislabeling exploit: a PUT declared as a read-only Kind,
+//     or an unset zero-value Action, both fail here, before any self or
+//     managed branch is reached).
+//  2. TargetLFDI is compared against the process's own LFDI. For self,
+//     the role's self allow-list (derSelfKinds / aggregatorSelfKinds)
+//     decides; nothing past this step runs for a self-targeted request.
+//  3. For a non-self target, a der-role process is refused outright (it
+//     never acts as a manager). An aggregator-role KindEndDeviceCreate
+//     is decided by WithInBandCreate alone, without requiring prior
+//     management (see KindEndDeviceCreate). Every other non-self kind
+//     requires ManagedSet.IsManaged first, then managerKinds (M1-M6) or
+//     WithInBandDelete for KindEndDeviceDelete.
+//
+// Each refusal is logged at most once per window when a logger is
+// installed (WithRefusalLogger); logging never affects the returned
+// error.
 func (g *Guard) Allow(method string, a Action) error {
+	if g == nil {
+		return &RefusalError{Method: method, Kind: a.Kind, TargetLFDI: a.TargetLFDI}
+	}
 	refuse := func() error {
-		return &RefusalError{Role: g.role, Method: method, Kind: a.Kind, TargetLFDI: a.TargetLFDI}
+		re := &RefusalError{Role: g.role, Method: method, Kind: a.Kind, TargetLFDI: a.TargetLFDI}
+		g.logRefusal(re)
+		return re
 	}
 	if kindMethod[a.Kind] != method {
 		return refuse()
@@ -313,4 +376,27 @@ func (g *Guard) Allow(method string, a Action) error {
 		return nil
 	}
 	return refuse()
+}
+
+// logRefusal logs re via the installed WithRefusalLogger, at most once per
+// window for each distinct (role, method, kind, target) shape. A Guard
+// with no logger installed (refusalLog nil, the New default) is a no-op:
+// logging is opt-in so building a Guard for a test never produces output.
+func (g *Guard) logRefusal(re *RefusalError) {
+	if g.refusalLog == nil {
+		return
+	}
+	key := string(re.Role) + "|" + re.Method + "|" + re.Kind.String() + "|" + re.TargetLFDI
+	now := g.refusalNow()
+
+	g.refusalMu.Lock()
+	last, seen := g.refusalLast[key]
+	if seen && now.Sub(last) < g.refusalWindow {
+		g.refusalMu.Unlock()
+		return
+	}
+	g.refusalLast[key] = now
+	g.refusalMu.Unlock()
+
+	g.refusalLog("%s", re.Error())
 }

@@ -1,8 +1,11 @@
 package guard
 
 import (
+	"fmt"
 	"net/http"
+	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -307,5 +310,127 @@ func TestRefusalError_Message(t *testing.T) {
 	err := &RefusalError{Role: RoleDER, Method: http.MethodPost, Kind: KindMirrorPost, TargetLFDI: "BBBB"}
 	if err.Error() == "" {
 		t.Error("RefusalError.Error() returned empty string")
+	}
+}
+
+// TestGuard_NilReceiver_RefusesEverything is fix-round-2 finding 2: a nil
+// *Guard must fail closed (refuse) rather than panic on first use. RED
+// before this fix (proven against the round-1 commit in a standalone
+// probe, not checked in): Allow on a nil *Guard panicked with a nil
+// pointer dereference.
+func TestGuard_NilReceiver_RefusesEverything(t *testing.T) {
+	t.Parallel()
+	var g *Guard
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
+		if err := g.Allow(method, Action{Kind: KindEndDeviceRead, TargetLFDI: ""}); err == nil {
+			t.Errorf("nil guard under %s: want refusal, got allow", method)
+		}
+	}
+}
+
+// fakeClock returns a controllable time.Time, mirroring the pattern in
+// internal/inverter/log_event_ratelimiter_test.go's fakeClock. Tests
+// advance it with Advance(); the guard sees the new time on the next
+// Allow call.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newFakeClock(start time.Time) *fakeClock { return &fakeClock{now: start} }
+
+func (f *fakeClock) Now() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.now
+}
+
+func (f *fakeClock) Advance(d time.Duration) {
+	f.mu.Lock()
+	f.now = f.now.Add(d)
+	f.mu.Unlock()
+}
+
+// fakeRefusalLog records every logged line for assertion.
+type fakeRefusalLog struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (f *fakeRefusalLog) log(format string, args ...any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lines = append(f.lines, fmt.Sprintf(format, args...))
+}
+
+func (f *fakeRefusalLog) len() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.lines)
+}
+
+// TestGuard_RefusalLogging_BoundedPerShape is fix-round-2 finding 1: a
+// refusal is logged, and repeated refusals of the SAME shape (role,
+// method, kind, target) within the window log only once, matching this
+// repo's existing bounded-logging pattern (PerCodeLogEventLimiter).
+func TestGuard_RefusalLogging_BoundedPerShape(t *testing.T) {
+	t.Parallel()
+	fake := &fakeRefusalLog{}
+	clk := newFakeClock(time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC))
+	g := New(RoleAggregator, testSelf, fakeManagedSet{}, WithRefusalLogger(fake.log, time.Minute, clk.Now))
+
+	// Same refused shape, three times, clock not advanced: exactly one
+	// log line (the bound).
+	for i := 0; i < 3; i++ {
+		if err := g.Allow(http.MethodGet, Action{Kind: KindEndDeviceRead, TargetLFDI: testUnmanaged}); err == nil {
+			t.Fatalf("call %d: want refusal, got allow", i)
+		}
+	}
+	if got := fake.len(); got != 1 {
+		t.Fatalf("log lines after 3 identical refusals = %d, want 1 (bounded)", got)
+	}
+	if fake.lines[0] == "" {
+		t.Error("logged line is empty")
+	}
+
+	// A different refusal shape (different target) logs independently:
+	// the bound is per-shape, not global.
+	if err := g.Allow(http.MethodGet, Action{Kind: KindEndDeviceRead, TargetLFDI: "DDDD000000000000000000000000000000DDDD"}); err == nil {
+		t.Fatal("different-target refusal: want refusal, got allow")
+	}
+	if got := fake.len(); got != 2 {
+		t.Fatalf("log lines after a different-shape refusal = %d, want 2", got)
+	}
+
+	// Advance the clock past the window: the original shape logs again.
+	clk.Advance(2 * time.Minute)
+	if err := g.Allow(http.MethodGet, Action{Kind: KindEndDeviceRead, TargetLFDI: testUnmanaged}); err == nil {
+		t.Fatal("refusal after window elapsed: want refusal, got allow")
+	}
+	if got := fake.len(); got != 3 {
+		t.Fatalf("log lines after the window elapsed = %d, want 3 (window reset)", got)
+	}
+
+	// An allowed action never logs.
+	before := fake.len()
+	if err := g.Allow(http.MethodGet, Action{Kind: KindEndDeviceRead, TargetLFDI: ""}); err != nil {
+		t.Fatalf("self read: want allow, got %v", err)
+	}
+	if got := fake.len(); got != before {
+		t.Errorf("an allowed action logged %d new lines, want 0", got-before)
+	}
+}
+
+// TestGuard_RefusalLogging_DefaultOff proves a Guard built without
+// WithRefusalLogger never logs: logging is opt-in, so every existing test
+// in this package (and any Guard built with New alone) sees no output
+// change from this fix.
+func TestGuard_RefusalLogging_DefaultOff(t *testing.T) {
+	t.Parallel()
+	g := New(RoleAggregator, testSelf, fakeManagedSet{})
+	// No logger installed; Allow must not panic reaching for a nil
+	// refusalLog, and must still return the refusal.
+	if err := g.Allow(http.MethodGet, Action{Kind: KindEndDeviceRead, TargetLFDI: testUnmanaged}); err == nil {
+		t.Error("want refusal, got allow")
 	}
 }

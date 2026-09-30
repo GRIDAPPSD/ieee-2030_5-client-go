@@ -183,8 +183,10 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 		pen:     cfg.LogEventPEN,
 		// No ManagedSet and no in-band opts yet: #72 wires the device-
 		// mapping loader and the in-band delete/create settings. Until
-		// then every non-self LFDI is refused (fail closed).
-		guard: guard.New(clientRole, lfdi, nil),
+		// then every non-self LFDI is refused (fail closed). Refusals log
+		// through the standard logger, bounded per refusal shape so a
+		// caller retrying every tick cannot flood the log.
+		guard: guard.New(clientRole, lfdi, nil, guard.WithRefusalLogger(log.Printf, guard.DefaultRefusalLogWindow, nil)),
 	}, nil
 }
 
