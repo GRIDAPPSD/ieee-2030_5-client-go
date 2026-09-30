@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+// fakeFleetName is what every fakeProcess answers hello.Fleet as by
+// default (testSupervisorConfig's SupervisorConfig.Fleet uses the same
+// value), since item 2 refuses a hello whose Fleet does not match.
+const fakeFleetName = "test"
+
 // shortSockDir returns a fresh, short-named directory for a Unix socket,
 // removed at test cleanup. t.TempDir() embeds the test's name, which is
 // long enough in this package (descriptive Go test names) to push a
@@ -36,7 +41,15 @@ func shortSockDir(t *testing.T) string {
 // needing python. Only the real-sidecar test (sidecar_integration_test.go)
 // runs the genuine gldsidecar.
 type fakeProcess struct {
-	pid int
+	// instanceID distinguishes one fake "process" from another (e.g.
+	// across a restart), for tests that assert a restart did not reuse
+	// the crashed instance. Pid() is deliberately NOT this: this fake
+	// runs its listener in-process rather than exec'ing a real child, so
+	// the genuine OS-level peer of its socket is this test binary itself,
+	// and Pid() must answer that (os.Getpid()) for the SO_PEERCRED check
+	// in waitForSocket to accept it, the same as it would a real child.
+	instanceID int
+	pid        int
 
 	mu      sync.Mutex
 	ln      net.Listener
@@ -45,6 +58,28 @@ type fakeProcess struct {
 	model   time.Time
 
 	helloErr *wireErrorBody
+	// fleet is what hello answers as HelloResult.Fleet; must match the
+	// SupervisorConfig.Fleet of whichever Supervisor dials this fake
+	// (fakeFleetName), since item 2 refuses a mismatch.
+	fleet string
+	// helloProtocol overrides the protocol version hello answers with,
+	// when nonzero; 0 (the default) answers ProtocolVersion.
+	helloProtocol int
+
+	// ignoreSignal, when true, makes Signal a no-op instead of ending the
+	// fake, so a test can prove shutdown escalates to Kill.
+	ignoreSignal bool
+	// ignoreShutdown, when true, makes the "shutdown" op reply OK but
+	// keep the connection (and the fake) alive, simulating a sidecar
+	// whose process hangs after acknowledging shutdown.
+	ignoreShutdown bool
+	signalCount    int32
+	killCount      int32
+
+	// workerDeadOn, when set, makes that op return ok:false with code
+	// worker_dead and close the connection (protocol.py's contract),
+	// proving Client.call's ErrWorkerDead mapping.
+	workerDeadOn string
 
 	// stallOp, when set, makes the fake never reply to that op: the
 	// handler blocks on reading the connection (which the client never
@@ -105,11 +140,13 @@ func newFakeLauncher(t *testing.T, configure func(*fakeProcess), reg *fakeRegist
 			return nil, err
 		}
 		fp := &fakeProcess{
-			pid:     int(atomic.AddInt32(&fakePidSeq, 1)),
-			ln:      ln,
-			objects: map[[2]string]float64{},
-			model:   time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
-			done:    make(chan error, 1),
+			instanceID: int(atomic.AddInt32(&fakePidSeq, 1)),
+			pid:        os.Getpid(),
+			ln:         ln,
+			objects:    map[[2]string]float64{},
+			model:      time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+			done:       make(chan error, 1),
+			fleet:      fakeFleetName,
 		}
 		if configure != nil {
 			configure(fp)
@@ -121,6 +158,7 @@ func newFakeLauncher(t *testing.T, configure func(*fakeProcess), reg *fakeRegist
 }
 
 func (fp *fakeProcess) Pid() int           { return fp.pid }
+func (fp *fakeProcess) InstanceID() int    { return fp.instanceID }
 func (fp *fakeProcess) Wait() <-chan error { return fp.done }
 
 // Finished reports whether the process has exited, safe to poll from a
@@ -135,14 +173,25 @@ func (fp *fakeProcess) Finished() bool {
 }
 
 func (fp *fakeProcess) Signal(os.Signal) error {
+	atomic.AddInt32(&fp.signalCount, 1)
+	if fp.ignoreSignal {
+		// A real process that does not exit on SIGTERM: proves the
+		// shutdown sequence actually escalates to SIGKILL instead of
+		// assuming SIGTERM always worked.
+		return nil
+	}
 	fp.die(nil)
 	return nil
 }
 
 func (fp *fakeProcess) Kill() error {
+	atomic.AddInt32(&fp.killCount, 1)
 	fp.die(nil)
 	return nil
 }
+
+func (fp *fakeProcess) SignalCount() int { return int(atomic.LoadInt32(&fp.signalCount)) }
+func (fp *fakeProcess) KillCount() int   { return int(atomic.LoadInt32(&fp.killCount)) }
 
 // SimulateCrash ends the fake sidecar as an unexpected exit, the shape
 // Supervisor's restart-with-backoff path reacts to.
@@ -183,6 +232,14 @@ func (fp *fakeProcess) serve() {
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
+			if fp.ignoreShutdown {
+				// The client gave up on this connection (e.g. closed it
+				// after a shutdown RPC this fake deliberately did not
+				// close its own end for), but the process is simulated as
+				// surviving that: only an explicit Kill or a non-ignored
+				// Signal ends it via die().
+				return
+			}
 			fp.finish(nil)
 			return
 		}
@@ -217,16 +274,24 @@ func (fp *fakeProcess) handle(req wireRequest) (wireReply, bool) {
 	fp.mu.Lock()
 	defer fp.mu.Unlock()
 
+	if fp.workerDeadOn != "" && req.Op == fp.workerDeadOn {
+		return wireReply{ID: req.ID, OK: false, Error: &wireErrorBody{Code: "worker_dead", Message: "worker process is dead"}}, true
+	}
+
 	switch req.Op {
 	case "hello":
 		if fp.helloErr != nil {
 			return wireReply{ID: req.ID, OK: false, Error: fp.helloErr}, false
 		}
+		protocol := fp.helloProtocol
+		if protocol == 0 {
+			protocol = ProtocolVersion
+		}
 		result, _ := json.Marshal(HelloResult{
-			Protocol:        ProtocolVersion,
+			Protocol:        protocol,
 			GridlabdVersion: "fake",
 			PythonVersion:   "fake",
-			Fleet:           "fake-fleet",
+			Fleet:           fp.fleet,
 			Objects:         map[string][]string{},
 		})
 		return wireReply{ID: req.ID, OK: true, Result: result}, false
@@ -277,7 +342,12 @@ func (fp *fakeProcess) handle(req wireRequest) (wireReply, bool) {
 		return wireReply{ID: req.ID, OK: true, Result: result}, false
 
 	case "shutdown":
-		return wireReply{ID: req.ID, OK: true, Result: json.RawMessage("null")}, true
+		// ignoreShutdown answers OK but keeps the connection open and the
+		// fake "alive": a real sidecar that acknowledges shutdown but
+		// whose python process then hangs. Without this, the cooperative
+		// RPC alone would end the fake before a test proving SIGTERM/
+		// SIGKILL escalation ever reaches Signal or Kill.
+		return wireReply{ID: req.ID, OK: true, Result: json.RawMessage("null")}, !fp.ignoreShutdown
 
 	default:
 		return wireReply{ID: req.ID, OK: false, Error: &wireErrorBody{Code: "bad_op", Message: "unknown op"}}, false

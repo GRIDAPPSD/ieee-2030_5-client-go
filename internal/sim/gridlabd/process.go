@@ -30,34 +30,37 @@ type execProcess struct {
 	done chan error
 }
 
-// startExecProcess execs command (interpreter plus args, e.g.
-// {"python3","-m","gldsidecar","--socket",sock,"--fleet-file",path}),
-// inheriting this process's environment. See startExecProcessWithEnv for
-// the env-overriding form a test uses to add PYTHONPATH.
+// execOptions is everything startExecProcess needs beyond the per-launch
+// args, factored out so a test can override Env or Dir without a growing
+// positional parameter list.
+type execOptions struct {
+	Command []string  // interpreter plus module, e.g. {"python3","-P","-m","gldsidecar"}
+	Env     []string  // the sidecar's environment; nil means "inherit everything", which callers should avoid (see defaultEnv)
+	Dir     string    // working directory; "" means exec.Cmd's own default (this process's cwd)
+	Stderr  io.Writer // sidecar stderr destination; nil discards
+}
+
+// startExecProcess execs opts.Command plus args (e.g.
+// {"--socket",sock,"--fleet-file",path}). Pdeathsig is set on Linux so an
+// unclean parent exit still ends the child. Stderr is captured to stderr
+// (the sidecar logs there only, server.py's own contract), never stdout,
+// which carries the protocol.
 //
 // The process's lifetime is intentionally NOT tied to ctx: ctx bounds only
 // this call, and the returned process must keep running after a short
 // startup context expires. Supervisor owns stopping it (Stop, by PID).
-func startExecProcess(ctx context.Context, command []string, stderr io.Writer) (*execProcess, error) {
-	return startExecProcessWithEnv(ctx, command, nil, stderr)
-}
-
-// startExecProcessWithEnv is startExecProcess with an explicit
-// environment; env nil means inherit this process's environment (Cmd's
-// own default), matching exec.Command's usual behavior. Pdeathsig is set
-// on Linux so an unclean parent exit still ends the child. Stderr is
-// captured to stderr (the sidecar logs there only, server.py's own
-// contract), never stdout, which carries the protocol.
-func startExecProcessWithEnv(_ context.Context, command []string, env []string, stderr io.Writer) (*execProcess, error) {
-	if len(command) == 0 {
+func startExecProcess(_ context.Context, opts execOptions, args []string) (*execProcess, error) {
+	if len(opts.Command) == 0 {
 		return nil, fmt.Errorf("gridlabd: empty sidecar command")
 	}
-	cmd := exec.Command(command[0], command[1:]...)
-	cmd.Env = env
-	cmd.Stderr = stderr
+	full := append(append([]string{}, opts.Command...), args...)
+	cmd := exec.Command(full[0], full[1:]...)
+	cmd.Env = opts.Env
+	cmd.Dir = opts.Dir
+	cmd.Stderr = opts.Stderr
 	cmd.SysProcAttr = deathSigAttr()
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start sidecar %v: %w", command, err)
+		return nil, fmt.Errorf("start sidecar %v: %w", full, err)
 	}
 	p := &execProcess{cmd: cmd, done: make(chan error, 1)}
 	go func() { p.done <- cmd.Wait() }()
@@ -68,3 +71,18 @@ func (p *execProcess) Pid() int                 { return p.cmd.Process.Pid }
 func (p *execProcess) Wait() <-chan error       { return p.done }
 func (p *execProcess) Signal(s os.Signal) error { return p.cmd.Process.Signal(s) }
 func (p *execProcess) Kill() error              { return p.cmd.Process.Kill() }
+
+// defaultEnv is the sidecar's environment when the caller supplies none:
+// PATH (to resolve the interpreter's own needs) and HOME (numpy/gridlabd
+// may look for a writable config or cache location there), taken
+// explicitly from this process's environment, not the whole of it.
+func defaultEnv() []string {
+	var env []string
+	if v, ok := os.LookupEnv("PATH"); ok {
+		env = append(env, "PATH="+v)
+	}
+	if v, ok := os.LookupEnv("HOME"); ok {
+		env = append(env, "HOME="+v)
+	}
+	return env
+}

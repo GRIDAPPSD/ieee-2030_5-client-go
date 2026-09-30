@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/device"
@@ -76,6 +77,9 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	if cfg.RunDir == "" {
 		return nil, fmt.Errorf("gridlabd: RunDir is required in the aggregator role")
 	}
+	if err := prepareRunDir(cfg.RunDir); err != nil {
+		return nil, err
+	}
 	if cfg.Stderr == nil {
 		cfg.Stderr = os.Stderr
 	}
@@ -84,16 +88,33 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	}
 
 	m := &Manager{}
+	seenFleetNames := make(map[string]string, len(cfg.FleetFiles)) // fleet name -> source path
+	seenLFDIs := make(map[string]string, len(cfg.FleetFiles))      // normalized LFDI -> "fleet/device"
 	for _, path := range cfg.FleetFiles {
 		ff, err := LoadFleetFile(path)
 		if err != nil {
 			return nil, err
 		}
+		if other, dup := seenFleetNames[ff.Fleet]; dup {
+			return nil, fmt.Errorf("fleet %s: duplicate fleet name, also used by %s", ff.Fleet, other)
+		}
+		seenFleetNames[ff.Fleet] = path
+		for _, dev := range ff.Devices {
+			// dev.LFDI is already uppercased by LoadFleetFile; ToUpper
+			// again here costs nothing and does not depend on that.
+			norm := strings.ToUpper(dev.LFDI)
+			if other, dup := seenLFDIs[norm]; dup {
+				return nil, fmt.Errorf("LFDI %s is used by two devices across fleet files: %s and %s/%s", norm, other, ff.Fleet, dev.Name)
+			}
+			seenLFDIs[norm] = ff.Fleet + "/" + dev.Name
+		}
+
 		sup := NewSupervisor(SupervisorConfig{
 			Fleet:         ff.Fleet,
 			SocketPath:    filepath.Join(cfg.RunDir, ff.Fleet+".sock"),
 			FleetFilePath: ff.path, // absolute; the sidecar's --fleet-file argument
 			Command:       cfg.Command,
+			Dir:           cfg.RunDir,
 			StartTimeout:  cfg.StartTimeout,
 			CallTimeout:   cfg.CallTimeout,
 			StopGrace:     cfg.StopGrace,
@@ -124,4 +145,29 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 		}
 	}
 	return m, nil
+}
+
+// prepareRunDir creates dir with mode 0700 if it does not exist yet, and
+// otherwise refuses to use it as a run directory if it is a symlink, not a
+// directory, or group- or world-writable: a socket for every fleet lives
+// here, and a writable-by-others directory lets another local user replace
+// a socket between our own bind and a later dial.
+func prepareRunDir(dir string) error {
+	info, err := os.Lstat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return os.Mkdir(dir, 0o700)
+	}
+	if err != nil {
+		return fmt.Errorf("run dir %s: %w", dir, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("run dir %s: refusing a symlink", dir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("run dir %s: not a directory", dir)
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("run dir %s: group- or world-writable (mode %o), refusing", dir, info.Mode().Perm())
+	}
+	return nil
 }

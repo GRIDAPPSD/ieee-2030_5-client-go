@@ -29,7 +29,17 @@ type SupervisorConfig struct {
 	Fleet         string
 	SocketPath    string   // never under /tmp; caller picks the run directory
 	FleetFilePath string   // absolute path to the fleet JSON the sidecar loads
-	Command       []string // interpreter plus module, e.g. {"python3","-m","gldsidecar"}; nil defaults to that
+	Command       []string // interpreter plus module, e.g. {"python3","-P","-m","gldsidecar"}; nil defaults to that
+
+	// Dir is the sidecar's working directory. "" (the zero value) leaves
+	// it at exec.Cmd's own default (this process's cwd); the aggregator
+	// wiring (Manager) always sets it to RunDir, so the working directory
+	// is never wherever the aggregator process itself happened to start
+	// from.
+	Dir string
+	// Env is the sidecar's environment; nil defaults to defaultEnv()
+	// (PATH and HOME only), never this process's full environment.
+	Env []string
 
 	StartTimeout time.Duration // bound on start-through-hello
 	CallTimeout  time.Duration // bound on every RPC (hello, set, step_to, get, shutdown), including one whose caller ctx carries no deadline
@@ -46,7 +56,16 @@ type SupervisorConfig struct {
 
 func (cfg SupervisorConfig) withDefaults() SupervisorConfig {
 	if cfg.Command == nil {
-		cfg.Command = []string{"python3", "-m", "gldsidecar"}
+		// -P (added in Python 3.11): the script's directory and the
+		// working directory are never prepended to sys.path, so a file
+		// planted in Dir cannot shadow a stdlib or installed module. -I
+		// (full isolation) is deliberately not used instead: it also
+		// drops PYTHONPATH, which is how gldsidecar becomes importable
+		// today (sim/gridlabd/gldsidecar is not pip-installed).
+		cfg.Command = []string{"python3", "-P", "-m", "gldsidecar"}
+	}
+	if cfg.Env == nil {
+		cfg.Env = defaultEnv()
 	}
 	if cfg.StartTimeout <= 0 {
 		cfg.StartTimeout = defaultStartTimeout
@@ -90,6 +109,8 @@ type Supervisor struct {
 	proc       sidecarProcess
 	healthy    bool
 	gen        uint64 // incremented on every successful (re)start
+	started    bool   // Run has begun
+	stopped    bool   // Stop has been called; set under mu so Run and Stop agree on order
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -115,7 +136,12 @@ func newSupervisor(cfg SupervisorConfig, launch processLauncher) *Supervisor {
 
 func defaultLauncher(cfg SupervisorConfig) processLauncher {
 	return func(ctx context.Context, args []string) (sidecarProcess, error) {
-		return startExecProcess(ctx, append(append([]string{}, cfg.Command...), args...), cfg.Stderr)
+		return startExecProcess(ctx, execOptions{
+			Command: cfg.Command,
+			Env:     cfg.Env,
+			Dir:     cfg.Dir,
+			Stderr:  cfg.Stderr,
+		}, args)
 	}
 }
 
@@ -181,6 +207,17 @@ func (s *Supervisor) setState(client *Client, proc sidecarProcess, healthy bool)
 // backoff; exhausting the restart budget leaves the fleet DOWN and returns
 // an error.
 func (s *Supervisor) Run(ctx context.Context) error {
+	s.mu.Lock()
+	if s.stopped {
+		// Stop() already ran, before Run() ever got here: nothing to
+		// start. Without this, Stop() called before Run() would have to
+		// choose between hanging forever (nothing will ever close doneCh)
+		// or not waiting at all (racing a Run() that is about to start).
+		s.mu.Unlock()
+		return nil
+	}
+	s.started = true
+	s.mu.Unlock()
 	defer close(s.doneCh)
 
 	proc, client, err := s.startOnce(ctx)
@@ -207,8 +244,13 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			// connection may have a reply for an abandoned request still in
 			// flight, so it can never be reused. The process might still be
 			// alive but unresponsive; kill it rather than try to resync.
+			reason := client.BrokenReason()
 			s.setState(nil, nil, false)
-			s.cfg.Log("fleet %s: connection broken, restarting sidecar", s.cfg.Fleet)
+			if errors.Is(reason, ErrWorkerDead) {
+				s.cfg.Log("fleet %s: sidecar worker died, restarting: %v", s.cfg.Fleet, reason)
+			} else {
+				s.cfg.Log("fleet %s: connection broken, restarting sidecar: %v", s.cfg.Fleet, reason)
+			}
 			killAndReap(proc)
 		}
 
@@ -251,7 +293,7 @@ func (s *Supervisor) startOnce(ctx context.Context) (sidecarProcess, *Client, er
 	startCtx, cancel := context.WithTimeout(ctx, s.cfg.StartTimeout)
 	defer cancel()
 
-	_ = os.Remove(s.cfg.SocketPath) // stale socket from an unclean prior exit; the sidecar also does this on bind
+	removeIfSocket(s.cfg.SocketPath) // stale socket from an unclean prior exit; the sidecar also does this on bind
 
 	args := []string{"--socket", s.cfg.SocketPath, "--fleet-file", s.cfg.FleetFilePath}
 	proc, err := s.launch(startCtx, args)
@@ -274,16 +316,28 @@ func (s *Supervisor) startOnce(ctx context.Context) (sidecarProcess, *Client, er
 	hello, err := client.Hello(helloCtx)
 	helloCancel()
 	if err != nil {
-		_ = client.Close() // hello failed; nothing on this connection to preserve
-		killAndReap(proc)
-		return nil, nil, fmt.Errorf("fleet %s hello: %w", s.cfg.Fleet, err)
+		return abortStart(client, proc, fmt.Errorf("fleet %s hello: %w", s.cfg.Fleet, err))
 	}
 	if hello.Protocol != ProtocolVersion {
-		_ = client.Close() // protocol mismatch; this connection is unusable regardless
-		killAndReap(proc)
-		return nil, nil, fmt.Errorf("fleet %s: sidecar speaks protocol %d, this client speaks %d", s.cfg.Fleet, hello.Protocol, ProtocolVersion)
+		return abortStart(client, proc, fmt.Errorf("fleet %s: sidecar speaks protocol %d, this client speaks %d", s.cfg.Fleet, hello.Protocol, ProtocolVersion))
+	}
+	if hello.Fleet != s.cfg.Fleet {
+		// A fleet file pointed at the wrong socket, or a stale sidecar
+		// left over from a different fleet's run directory, would
+		// otherwise pass silently: the wire protocol never named the
+		// fleet again after this.
+		return abortStart(client, proc, fmt.Errorf("fleet %s: sidecar answered hello as fleet %q", s.cfg.Fleet, hello.Fleet))
 	}
 	return proc, client, nil
+}
+
+// abortStart tears down a connection and process that never became usable
+// during startOnce, and returns reason as the failure. Factored out because
+// three startOnce failure sites need exactly this sequence.
+func abortStart(client *Client, proc sidecarProcess, reason error) (sidecarProcess, *Client, error) {
+	_ = client.Close() // the connection never completed handshake; nothing to preserve
+	killAndReap(proc)
+	return nil, nil, reason
 }
 
 // errSidecarExitedDuringStart marks a waitForSocket failure caused by the
@@ -303,6 +357,15 @@ func waitForSocket(ctx context.Context, sockPath string, proc sidecarProcess, di
 		if _, err := os.Stat(sockPath); err == nil {
 			client, err := Dial(ctx, sockPath, dialTimeout)
 			if err == nil {
+				// The path existing and accepting a connection is not
+				// proof of who is on the other end: anything on the host
+				// may have bound sockPath first. SO_PEERCRED asks the
+				// kernel who actually holds the peer fd, which the peer
+				// cannot spoof by writing to the socket.
+				if pidErr := verifyPeerPID(client.conn, proc.Pid()); pidErr != nil {
+					_ = client.Close()
+					return nil, fmt.Errorf("dial %s: %w", sockPath, pidErr)
+				}
 				return client, nil
 			}
 		}
@@ -328,20 +391,34 @@ func (s *Supervisor) shutdown(ctx context.Context, client *Client, proc sidecarP
 		_ = client.Close() // already shutting down; nothing left to flush
 	}
 	if proc == nil {
-		_ = os.Remove(s.cfg.SocketPath)
+		removeIfSocket(s.cfg.SocketPath)
 		return
 	}
 	if waitOrTimeout(proc, s.cfg.StopGrace) {
-		_ = os.Remove(s.cfg.SocketPath)
+		removeIfSocket(s.cfg.SocketPath)
 		return
 	}
 	_ = proc.Signal(syscall.SIGTERM) // best effort; SIGKILL follows if this does not end it in time
 	if waitOrTimeout(proc, s.cfg.StopGrace) {
-		_ = os.Remove(s.cfg.SocketPath)
+		removeIfSocket(s.cfg.SocketPath)
 		return
 	}
 	killAndReap(proc)
-	_ = os.Remove(s.cfg.SocketPath)
+	removeIfSocket(s.cfg.SocketPath)
+}
+
+// removeIfSocket removes path only when it currently names a Unix domain
+// socket: a regular file, directory or symlink planted at this path is
+// left alone rather than silently deleted.
+func removeIfSocket(path string) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return // nothing there
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return // not a socket; refuse to touch it
+	}
+	_ = os.Remove(path) // best effort; a failed cleanup here is not fatal to the caller
 }
 
 // killAndReap sends SIGKILL and waits for the process to exit. Used on the
@@ -363,9 +440,17 @@ func waitOrTimeout(proc sidecarProcess, d time.Duration) bool {
 
 // Stop ends supervision: the current sidecar is shut down (by PID) and Run
 // returns. Stop blocks until Run has returned. Calling Stop more than once
-// is safe. Calling Stop before Run has ever been started is not supported:
-// doneCh is only closed by Run's own deferred close.
+// is safe, and so is calling it before Run has ever been started: Stop
+// records that and returns at once, and a Run called afterward sees it and
+// never starts anything.
 func (s *Supervisor) Stop() {
+	s.mu.Lock()
+	if !s.started {
+		s.stopped = true
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
 	s.stopOnce.Do(func() { close(s.stopCh) })
 	<-s.doneCh
 }

@@ -44,9 +44,10 @@ type Client struct {
 	reader *bufio.Reader
 	nextID int64
 
-	timeout    time.Duration // bounds every call when ctx carries no earlier deadline
-	broken     chan struct{}
-	brokenOnce sync.Once
+	timeout     time.Duration // bounds every call when ctx carries no earlier deadline
+	broken      chan struct{}
+	brokenOnce  sync.Once
+	brokenCause error // set once, before broken is closed; read only after <-Broken()
 }
 
 // Dial connects to a sidecar listening on sockPath. ctx bounds the dial
@@ -73,11 +74,19 @@ func (c *Client) Close() error {
 // longer be trusted and must not be reused; see ErrConnectionBroken.
 func (c *Client) Broken() <-chan struct{} { return c.broken }
 
-// markBroken closes broken (once) and closes the connection, so any I/O
-// blocked on it (this call's own goroutine, or a concurrent one queued
-// behind c.mu) unblocks immediately instead of waiting out a timeout.
-func (c *Client) markBroken() {
+// BrokenReason returns why Broken fired (nil until it has). Safe to call
+// any time after a receive from Broken(): brokenCause is written before
+// the close that receive observed, and channel close/receive is a
+// happens-before edge, so no further synchronization is needed here.
+func (c *Client) BrokenReason() error { return c.brokenCause }
+
+// markBroken records cause, closes broken (once) and closes the
+// connection, so any I/O blocked on it (this call's own goroutine, or a
+// concurrent one queued behind c.mu) unblocks immediately instead of
+// waiting out a timeout.
+func (c *Client) markBroken(cause error) {
 	c.brokenOnce.Do(func() {
+		c.brokenCause = cause
 		close(c.broken)
 		_ = c.conn.Close() // forces any blocked Read/Write on this conn to return
 	})
@@ -128,8 +137,9 @@ func (c *Client) call(ctx context.Context, op string, args map[string]any) (json
 	}
 	if dl, ok := ctx.Deadline(); ok {
 		if err := c.conn.SetDeadline(dl); err != nil {
-			c.markBroken()
-			return nil, fmt.Errorf("set %s deadline: %w", op, err)
+			cause := fmt.Errorf("%s: %w: set deadline: %w", op, ErrConnectionBroken, err)
+			c.markBroken(cause)
+			return nil, cause
 		}
 	}
 
@@ -151,23 +161,27 @@ func (c *Client) call(ctx context.Context, op string, args map[string]any) (json
 	select {
 	case res = <-done:
 	case <-ctx.Done():
-		c.markBroken() // unblocks the goroutine's Write/Read above
-		<-done         // wait for it to exit so this call never leaks it
-		return nil, fmt.Errorf("%s: %w: %w", op, ErrConnectionBroken, ctx.Err())
+		cause := fmt.Errorf("%s: %w: %w", op, ErrConnectionBroken, ctx.Err())
+		c.markBroken(cause) // unblocks the goroutine's Write/Read above
+		<-done              // wait for it to exit so this call never leaks it
+		return nil, cause
 	}
 	if res.err != nil {
-		c.markBroken()
-		return nil, res.err
+		cause := fmt.Errorf("%s: %w: %w", op, ErrConnectionBroken, res.err)
+		c.markBroken(cause)
+		return nil, cause
 	}
 
 	var reply wireReply
 	if err := json.Unmarshal([]byte(res.line), &reply); err != nil {
-		c.markBroken()
-		return nil, fmt.Errorf("decode %s reply: %w: %w", op, ErrConnectionBroken, err)
+		cause := fmt.Errorf("decode %s reply: %w: %w", op, ErrConnectionBroken, err)
+		c.markBroken(cause)
+		return nil, cause
 	}
 	if reply.ID != id {
-		c.markBroken()
-		return nil, fmt.Errorf("%s reply id %d does not match request id %d: %w", op, reply.ID, id, ErrConnectionBroken)
+		cause := fmt.Errorf("%s reply id %d does not match request id %d: %w", op, reply.ID, id, ErrConnectionBroken)
+		c.markBroken(cause)
+		return nil, cause
 	}
 	if !reply.OK {
 		code, msg := "", ""
@@ -175,8 +189,9 @@ func (c *Client) call(ctx context.Context, op string, args map[string]any) (json
 			code, msg = reply.Error.Code, reply.Error.Message
 		}
 		if code == "worker_dead" {
-			c.markBroken()
-			return nil, fmt.Errorf("%s: %w: %s", op, ErrWorkerDead, msg)
+			cause := fmt.Errorf("%s: %w: %w: %s", op, ErrConnectionBroken, ErrWorkerDead, msg)
+			c.markBroken(cause)
+			return nil, cause
 		}
 		return nil, &RemoteError{Op: op, Code: code, Message: msg}
 	}

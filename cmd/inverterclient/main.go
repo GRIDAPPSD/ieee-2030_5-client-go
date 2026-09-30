@@ -19,6 +19,7 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/device"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/dispatch"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/sim/gridlabd"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
@@ -201,6 +202,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Fleet sidecars are aggregator-only. gridlabd.NewManager is the
+	// construction-time gate: given a fleet file in the der role it
+	// refuses here, before any device, dispatcher, listener or sidecar
+	// process exists, rather than starting a mismatched subset (#70).
+	fleetMgr, err := gridlabd.NewManager(gridlabd.ManagerConfig{
+		Role:       cfg.ClientRole,
+		FleetFiles: []string(*cf.FleetFiles),
+		RunDir:     *cf.RunDir,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+
 	// Clamp PEN to uint32 range. flag.Uint64Var lets us catch out-of-range
 	// input from CLI / env without silently truncating.
 	if *penFlag > 0xFFFFFFFF {
@@ -262,6 +277,22 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Start each fleet's supervisor now that ctx exists to bind its
+	// lifetime to (SIGINT/SIGTERM above). fleetMgr is non-nil only in the
+	// aggregator role with at least one --fleet-file; nothing beyond
+	// starting the sidecar process and the health/restart loop is wired
+	// here; the managed-device sessions, dispatch and fleet control loop
+	// that would consume fleetMgr.Devices are separate, later work.
+	if fleetMgr != nil {
+		for _, sup := range fleetMgr.Supervisors {
+			go func(sup *gridlabd.Supervisor) {
+				if err := sup.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+					log.Printf("fleet sidecar exited: %v", err)
+				}
+			}(sup)
+		}
+	}
 
 	// Start HMI
 	var hmi *inverter.HMI

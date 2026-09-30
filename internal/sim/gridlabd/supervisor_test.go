@@ -11,7 +11,7 @@ import (
 
 func testSupervisorConfig(sockPath string) SupervisorConfig {
 	return SupervisorConfig{
-		Fleet:         "test",
+		Fleet:         fakeFleetName,
 		SocketPath:    sockPath,
 		FleetFilePath: "unused.json",
 		StartTimeout:  2 * time.Second,
@@ -88,8 +88,8 @@ func TestSupervisor_RestartsAfterCrash(t *testing.T) {
 	waitForHealthy(t, sup, true) // then healthy again once the restart's hello succeeds
 
 	second := reg.list()[1]
-	if second.Pid() == first.Pid() {
-		t.Error("restart reused the crashed process's pid")
+	if second.InstanceID() == first.InstanceID() {
+		t.Error("restart reused the crashed fake's instance")
 	}
 }
 
@@ -236,7 +236,160 @@ func TestSupervisor_BrokenConnectionTriggersRestart(t *testing.T) {
 	waitForCreatedCount(t, reg, 2)
 	waitForHealthy(t, sup, true)
 	second := reg.list()[1]
-	if second.Pid() == first.Pid() {
-		t.Error("restart after a broken connection reused the same process")
+	if second.InstanceID() == first.InstanceID() {
+		t.Error("restart after a broken connection reused the same fake instance")
+	}
+}
+
+// TestSupervisor_RefusesOnProtocolMismatch is the mutation-killing case
+// for "if hello.Protocol != ProtocolVersion" (a mutant collapsing this to
+// "if false" survives against TestSupervisor_RefusesOnHelloMismatch,
+// which never varies the protocol number at all): the fake answers a real
+// hello, protocol 999.
+func TestSupervisor_RefusesOnProtocolMismatch(t *testing.T) {
+	reg := &fakeRegistry{}
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	configure := func(fp *fakeProcess) { fp.helloProtocol = 999 }
+	sup := newSupervisor(testSupervisorConfig(sockPath), newFakeLauncher(t, configure, reg))
+
+	err := sup.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run(): want error on protocol mismatch, got nil")
+	}
+	if sup.Healthy() {
+		t.Error("Healthy() after a protocol mismatch: want false")
+	}
+}
+
+// TestSupervisor_RefusesOnFleetNameMismatch is item 2's hello.Fleet check.
+func TestSupervisor_RefusesOnFleetNameMismatch(t *testing.T) {
+	reg := &fakeRegistry{}
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	configure := func(fp *fakeProcess) { fp.fleet = "a-different-fleet" }
+	sup := newSupervisor(testSupervisorConfig(sockPath), newFakeLauncher(t, configure, reg))
+
+	err := sup.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run(): want error when hello.Fleet does not match the configured fleet, got nil")
+	}
+	if sup.Healthy() {
+		t.Error("Healthy() after a fleet name mismatch: want false")
+	}
+}
+
+// TestSupervisor_ShutdownEscalatesToSIGKILLWhenSignalIgnored is the
+// mutation-killing case for "return before SIGTERM and SIGKILL": the
+// fake's Signal ignores SIGTERM entirely, so shutdown can only have ended
+// it by reaching Kill.
+func TestSupervisor_ShutdownEscalatesToSIGKILLWhenSignalIgnored(t *testing.T) {
+	reg := &fakeRegistry{}
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	cfg := testSupervisorConfig(sockPath)
+	cfg.StopGrace = 20 * time.Millisecond
+	configure := func(fp *fakeProcess) {
+		fp.ignoreSignal = true
+		// Otherwise the fake's own cooperative reply to "shutdown" ends
+		// it (server.py's stop=True) before the SIGTERM/SIGKILL
+		// escalation this test is proving is ever reached.
+		fp.ignoreShutdown = true
+	}
+	sup := newSupervisor(cfg, newFakeLauncher(t, configure, reg))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go sup.Run(ctx)
+	waitForHealthy(t, sup, true)
+	fp := reg.list()[0]
+
+	cancel()
+	waitForFinished(t, fp)
+	if fp.SignalCount() == 0 {
+		t.Error("SignalCount() = 0, want at least 1 (SIGTERM attempted)")
+	}
+	if fp.KillCount() == 0 {
+		t.Error("KillCount() = 0, want at least 1 (SIGKILL reached after SIGTERM was ignored)")
+	}
+}
+
+// TestSupervisor_StopWithoutRun_DoesNotHang is error-handling's LOW
+// finding: Stop called before Run has ever started must return, not block
+// forever waiting on a doneCh nothing will ever close.
+func TestSupervisor_StopWithoutRun_DoesNotHang(t *testing.T) {
+	reg := &fakeRegistry{}
+	sockPath := filepath.Join(shortSockDir(t), "a.sock")
+	sup := newSupervisor(testSupervisorConfig(sockPath), newFakeLauncher(t, nil, reg))
+
+	done := make(chan struct{})
+	go func() {
+		sup.Stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() without a prior Run() did not return within 2s")
+	}
+
+	// A Run() called afterward must see the stop and do nothing.
+	err := sup.Run(context.Background())
+	if err != nil {
+		t.Errorf("Run() after Stop() preceded it: %v, want nil", err)
+	}
+	if len(reg.list()) != 0 {
+		t.Errorf("Run() after a preceding Stop() started %d process(es), want 0", len(reg.list()))
+	}
+}
+
+func TestBackoffDelay_NeverZeroOrBelowMin(t *testing.T) {
+	min, max := 2*time.Second, 60*time.Second
+	for attempt := 0; attempt < 10; attempt++ {
+		d := backoffDelay(attempt, min, max)
+		if d < min {
+			t.Errorf("backoffDelay(%d) = %v, want >= %v", attempt, d, min)
+		}
+		if d > max {
+			t.Errorf("backoffDelay(%d) = %v, want <= %v", attempt, d, max)
+		}
+	}
+}
+
+func TestBackoffDelay_DoublesThenCaps(t *testing.T) {
+	min, max := 2*time.Second, 60*time.Second
+	tests := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{0, 2 * time.Second},
+		{1, 4 * time.Second},
+		{2, 8 * time.Second},
+		{5, 60 * time.Second}, // 2*2^5=64s, capped
+		{20, 60 * time.Second},
+	}
+	for _, tt := range tests {
+		if got := backoffDelay(tt.attempt, min, max); got != tt.want {
+			t.Errorf("backoffDelay(%d) = %v, want %v", tt.attempt, got, tt.want)
+		}
+	}
+}
+
+func TestPruneRestarts_DropsOutsideWindow(t *testing.T) {
+	now := time.Now()
+	restarts := []time.Time{now.Add(-20 * time.Minute), now.Add(-5 * time.Minute), now.Add(-1 * time.Minute)}
+	got := pruneRestarts(restarts, 10*time.Minute)
+	if len(got) != 2 {
+		t.Fatalf("pruneRestarts kept %d entries, want 2 (the two within the last 10m)", len(got))
+	}
+	for _, r := range got {
+		if now.Sub(r) > 10*time.Minute {
+			t.Errorf("pruneRestarts kept an entry %v old, want <= 10m", now.Sub(r))
+		}
+	}
+}
+
+func TestPruneRestarts_KeepsAllWithinWindow(t *testing.T) {
+	now := time.Now()
+	restarts := []time.Time{now.Add(-1 * time.Minute), now.Add(-2 * time.Minute)}
+	got := pruneRestarts(restarts, 10*time.Minute)
+	if len(got) != 2 {
+		t.Errorf("pruneRestarts kept %d entries, want 2 (both within the window)", len(got))
 	}
 }

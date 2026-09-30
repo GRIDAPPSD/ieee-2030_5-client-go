@@ -181,25 +181,27 @@ func TestSidecarIntegration_RealGridlabd(t *testing.T) {
 	}
 
 	sockDir := shortSockDir(t)
-	// The real gldsidecar package is not pip-installed (ci.yml installs
-	// only its pinned dependencies, per requirements.lock); PYTHONPATH
-	// makes it importable the same way conftest.py does for pytest.
-	env := append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot(t), "sim", "gridlabd"))
+	// A chosen environment, not the whole inherited one (item 4): PATH and
+	// HOME as production's own default would carry, plus PYTHONPATH,
+	// which is this test's own substitute for gldsidecar being
+	// pip-installed (ci.yml installs only its pinned dependencies, per
+	// requirements.lock). -P (below) keeps the working directory and the
+	// script's own directory off sys.path regardless; PYTHONPATH is a
+	// separate, explicit mechanism -P does not touch.
+	env := append(defaultEnv(), "PYTHONPATH="+filepath.Join(repoRoot(t), "sim", "gridlabd"))
 	cfg := SupervisorConfig{
 		Fleet:         "probe",
 		SocketPath:    filepath.Join(sockDir, "probe.sock"),
 		FleetFilePath: fleetFilePath,
-		Command:       []string{python, "-m", "gldsidecar"},
+		Command:       []string{python, "-P", "-m", "gldsidecar"},
+		Dir:           sockDir,
+		Env:           env,
 		StartTimeout:  15 * time.Second,
 		CallTimeout:   10 * time.Second,
 		StopGrace:     2 * time.Second,
 		Stderr:        testWriter{t},
-	}.withDefaults()
-	launch := func(ctx context.Context, args []string) (sidecarProcess, error) {
-		full := append(append([]string{}, cfg.Command...), args...)
-		return startExecProcessWithEnv(ctx, full, env, cfg.Stderr)
 	}
-	sup := newSupervisor(cfg, launch)
+	sup := NewSupervisor(cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runErr := make(chan error, 1)

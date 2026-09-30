@@ -74,8 +74,12 @@ func TestClient_Set_Get_ReadsBackAppliedValue(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
+	p2500, err := FloatValue(2500)
+	if err != nil {
+		t.Fatalf("FloatValue: %v", err)
+	}
 	setResults, err := client.Set(ctx, []SetItem{
-		{Object: "inv0", Property: "P_Out", Value: FloatValue(2500)},
+		{Object: "inv0", Property: "P_Out", Value: p2500},
 	})
 	if err != nil {
 		t.Fatalf("Set: %v", err)
@@ -211,5 +215,27 @@ func TestClient_Get_RejectsReorderedReply(t *testing.T) {
 	defer cancel()
 	if _, err := client.Get(ctx, []GetItem{{Object: "a", Property: "x"}, {Object: "b", Property: "y"}}); err == nil {
 		t.Fatal("Get with a reordered reply: want error, got nil")
+	}
+}
+
+// TestClient_WorkerDead_MapsToErrWorkerDead is the mutation-killing case
+// for "if code == worker_dead" in call: nothing else exercised this
+// mapping, so a mutant that always skips it, or the branch being deleted
+// entirely, would have compiled and passed every other test.
+func TestClient_WorkerDead_MapsToErrWorkerDead(t *testing.T) {
+	client, _ := dialFake(t, func(fp *fakeProcess) { fp.workerDeadOn = "hello" })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := client.Hello(ctx)
+	if !errors.Is(err, ErrWorkerDead) {
+		t.Fatalf("Hello after a worker_dead reply: err = %v, want ErrWorkerDead", err)
+	}
+	if !errors.Is(err, ErrConnectionBroken) {
+		t.Errorf("Hello after a worker_dead reply: err = %v, want also ErrConnectionBroken", err)
+	}
+	select {
+	case <-client.Broken():
+	default:
+		t.Error("Broken() channel not closed after a worker_dead reply")
 	}
 }

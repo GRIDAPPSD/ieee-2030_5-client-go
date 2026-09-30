@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -92,6 +93,86 @@ func TestLoadFleetFile_RejectsDuplicateLFDI(t *testing.T) {
 
 	if _, err := LoadFleetFile(path); err == nil {
 		t.Fatal("LoadFleetFile: want error on a duplicate LFDI, got nil")
+	}
+}
+
+// TestLoadFleetFile_RejectsCaseDifferingDuplicateLFDI is the
+// mutation-killing case for "norm := dev.LFDI" (dropping ToUpper):
+// TestLoadFleetFile_RejectsDuplicateLFDI uses byte-identical strings, so
+// it cannot tell a normalizing compare from a literal one. Two LFDIs
+// differing only in case can.
+func TestLoadFleetFile_RejectsCaseDifferingDuplicateLFDI(t *testing.T) {
+	ff := validFleetFile()
+	devices := ff["devices"].([]map[string]any)
+	original := devices[0]["lfdi"].(string)
+	devices[1]["lfdi"] = strings.ToUpper(original)
+	if devices[0]["lfdi"] == devices[1]["lfdi"] {
+		t.Fatal("test setup: the two LFDIs must differ only in case, not be identical")
+	}
+	dir := t.TempDir()
+	path := writeFleetFile(t, dir, ff)
+
+	if _, err := LoadFleetFile(path); err == nil {
+		t.Fatal("LoadFleetFile: want error on two LFDIs differing only in case, got nil")
+	}
+}
+
+// TestLoadFleetFile_LFDILengthBoundary is the mutation-killing case for
+// "{40}" loosened to "{1,40}": 39 and 41 genuinely-hex characters (no
+// non-hex byte to trip a weaker check first) must both be refused, and 40
+// must be accepted.
+func TestLoadFleetFile_LFDILengthBoundary(t *testing.T) {
+	base := "0FA437FCD2BDADDA3EF8FEFAFF4A3D1612345678" // 40 hex chars (verified: len() below)
+	if len(base) != 40 {
+		t.Fatalf("test setup: base is %d characters, want 40", len(base))
+	}
+	tests := []struct {
+		name    string
+		lfdi    string
+		wantErr bool
+	}{
+		{"39 hex chars", base[:39], true},
+		{"40 hex chars", base, false},
+		{"41 hex chars", base + "8", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ff := validFleetFile()
+			devices := ff["devices"].([]map[string]any)
+			devices[0]["lfdi"] = tt.lfdi
+			devices[1]["lfdi"] = "AD882EC29CFC0A0B500B663AD841670E12345678" // unaffected, unique
+			dir := t.TempDir()
+			path := writeFleetFile(t, dir, ff)
+
+			_, err := LoadFleetFile(path)
+			if tt.wantErr && err == nil {
+				t.Errorf("LoadFleetFile(%d hex chars): want error, got nil", len(tt.lfdi))
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("LoadFleetFile(%d hex chars): %v, want success", len(tt.lfdi), err)
+			}
+		})
+	}
+}
+
+func TestLoadFleetFile_RejectsUnsafeFleetName(t *testing.T) {
+	tests := []string{
+		"../../escape",
+		"a/b",
+		"a\\b",
+		"",
+		strings.Repeat("a", 33), // 33 chars, over the 32 limit
+	}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			ff := validFleetFile()
+			ff["fleet"] = name
+			dir := t.TempDir()
+			path := writeFleetFile(t, dir, ff)
+			if _, err := LoadFleetFile(path); err == nil {
+				t.Errorf("LoadFleetFile(fleet=%q): want error, got nil", name)
+			}
+		})
 	}
 }
 

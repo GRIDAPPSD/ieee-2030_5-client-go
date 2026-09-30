@@ -2,6 +2,7 @@ package gridlabd
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 )
 
@@ -123,7 +124,10 @@ func TestValue_Magnitude_Null(t *testing.T) {
 }
 
 func TestFloatValue_RoundTrips(t *testing.T) {
-	v := FloatValue(-10.5)
+	v, err := FloatValue(-10.5)
+	if err != nil {
+		t.Fatalf("FloatValue: %v", err)
+	}
 	b, err := json.Marshal(v)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -137,5 +141,18 @@ func TestFloatValue_RoundTrips(t *testing.T) {
 	}
 	if got != -10.5 {
 		t.Errorf("Float64() = %v, want -10.5", got)
+	}
+}
+
+// TestFloatValue_NaNReturnsErrorNotPanic proves a NaN setpoint (e.g. from
+// a division by zero headroom in a caller's control-loop math) is refused
+// with an error, not a panic that would crash the whole aggregator process
+// over one bad calculation.
+func TestFloatValue_NaNReturnsErrorNotPanic(t *testing.T) {
+	if _, err := FloatValue(math.NaN()); err == nil {
+		t.Fatal("FloatValue(NaN): want error, got nil")
+	}
+	if _, err := FloatValue(math.Inf(1)); err == nil {
+		t.Fatal("FloatValue(+Inf): want error, got nil")
 	}
 }

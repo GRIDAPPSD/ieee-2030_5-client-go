@@ -3,6 +3,16 @@
 // exposing its devices as device.FleetTransport. The wire protocol (one
 // request in flight per socket, line-delimited JSON) is defined by the
 // Python side, sim/gridlabd/gldsidecar/protocol.py; this file mirrors it.
+//
+// Known limit: the pinned gridlabd wheel itself appends a line to
+// /tmp/gld_debug.log on every GridLabD.stop() call (confirmed 2026-09-30:
+// reproducible outside this package, with TMPDIR set before import making
+// no difference and no exposed API to redirect it), so every sidecar
+// shutdown writes to a path this package does not control and cannot move
+// under RunDir or Scratch. One line per stop(); unbounded growth is a
+// concern only for a long-running aggregator restarting fleets over days,
+// not for a single CI job's worth of test runs. Tracked as a follow-up
+// issue, not fixed here.
 package gridlabd
 
 import (
@@ -57,16 +67,17 @@ type Value struct {
 	raw json.RawMessage
 }
 
-// FloatValue wraps a real number for a set request.
-func FloatValue(f float64) Value {
+// FloatValue wraps a real number for a set request. NaN and Inf are
+// refused with an error rather than a panic: a caller computing a setpoint
+// from live device readings can produce one (a division by a headroom of
+// 0, say), and a bad control-loop calculation must not crash the process
+// that would otherwise have commanded a safe value.
+func FloatValue(f float64) (Value, error) {
 	b, err := json.Marshal(f)
 	if err != nil {
-		// f is a float64; json.Marshal only fails on NaN/Inf, which gridlabd
-		// has no notion of accepting either (probed 2026-09-29 against the
-		// dead-worker case), so this is a caller bug, not a runtime error.
-		panic(fmt.Sprintf("gridlabd: FloatValue(%v): %v", f, err))
+		return Value{}, fmt.Errorf("value %v is not representable (NaN and Inf are not valid JSON): %w", f, err)
 	}
-	return Value{raw: b}
+	return Value{raw: b}, nil
 }
 
 func (v Value) MarshalJSON() ([]byte, error) {

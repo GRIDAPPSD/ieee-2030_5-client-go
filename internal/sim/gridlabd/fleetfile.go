@@ -12,6 +12,13 @@ import (
 // hex40 matches an LFDI: exactly 40 hexadecimal characters (#35's rule).
 var hex40 = regexp.MustCompile(`^[0-9A-Fa-f]{40}$`)
 
+// safeFleetName matches the same character set the one existing generator
+// validates its fleet name against (models/battery_fleet.py's
+// _SAFE_NAME), so a fleet name can never carry a path separator or "..":
+// it becomes a socket file name under RunDir (Fleet+".sock") with no
+// further escaping.
+var safeFleetName = regexp.MustCompile(`^[A-Za-z0-9_]{1,32}$`)
+
 // DeviceEntry is one managed device's identity and simulator mapping, as
 // written by sim/gridlabd/models/battery_fleet.py's generator.
 type DeviceEntry struct {
@@ -75,6 +82,9 @@ func (f *FleetFile) GLMPath() string {
 func (f *FleetFile) Validate() error {
 	if f.Fleet == "" {
 		return fmt.Errorf("fleet file %s: fleet name is required", f.path)
+	}
+	if !safeFleetName.MatchString(f.Fleet) {
+		return fmt.Errorf("fleet file %s: fleet name %q must be 1-32 characters of [A-Za-z0-9_]", f.path, f.Fleet)
 	}
 	if f.GLM == "" {
 		return fmt.Errorf("fleet file %s: glm path is required", f.path)
