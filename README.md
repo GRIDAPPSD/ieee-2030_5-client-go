@@ -98,8 +98,16 @@ takes only the manager actions IEEE 2030.5 grants an Aggregator: read the
 device's EndDevice tree, write its DER resources, post its log events,
 subscribe on its behalf, and post Responses and mirrors naming it. A guard
 refuses anything else before it is sent. The aggregator finds its own
-EndDevice by certificate and never creates it. The managed-device set,
-fleet loops and provisioning are a separate piece of work.
+EndDevice by certificate and never creates it, and its own EndDevice is
+not a DER: it never PUTs DER resources, posts a mirror, or posts a
+Response for itself; those steps are skipped, and the guard refuses them
+too. The managed-device set, fleet loops and provisioning are a separate
+piece of work.
+
+`--csip` is a der-only setting: it has no effect in the aggregator role
+(which always looks up its own EndDevice, never POSTs it), so the binary
+refuses to start with `--client-role aggregator --csip` rather than
+silently ignoring the flag.
 
 ## Scenarios
 
