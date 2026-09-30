@@ -246,7 +246,7 @@ func TestRunTimeSync_GoroutineExitsOnCtxCancel(t *testing.T) {
 // drives SyncServerTime, which (c) stores the expected ~42s offset.
 // Cancellation still exits the goroutine cleanly.
 //
-// Lifts RunTimeSync coverage over the ≥80% exit-criteria gate by
+// Lifts RunTimeSync coverage over the >=80% exit-criteria gate by
 // exercising the body the select.time.After arm leads into.
 func TestRunTimeSync_LoopBodyExecutesAndAppliesOffset(t *testing.T) {
 	t.Parallel()
@@ -325,14 +325,14 @@ func TestRunTimeSync_LoopBodyExecutesAndAppliesOffset(t *testing.T) {
 }
 
 // TestRunTimeSync_PollRateClamps covers the two clamp branches at the
-// top of RunTimeSync: zero/negative pollRate → DefaultTimeSyncPollRate,
-// and below-floor pollRate → minTimeSyncPollRate. Neither needs to
+// top of RunTimeSync: zero/negative pollRate -> DefaultTimeSyncPollRate,
+// and below-floor pollRate -> minTimeSyncPollRate. Neither needs to
 // actually run a loop iteration; we just cover the assignment statement
 // by entering RunTimeSync with the relevant pollRate value and
 // cancelling immediately (the select.Done arm wins regardless of
 // which floor was applied).
 //
-// Lifts RunTimeSync coverage over the ≥80% gate alongside
+// Lifts RunTimeSync coverage over the >=80% gate alongside
 // TestRunTimeSync_LoopBodyExecutesAndAppliesOffset.
 func TestRunTimeSync_PollRateClamps(t *testing.T) {
 	t.Parallel()
@@ -601,20 +601,16 @@ func TestPhase1bSkipsWhenTimeLinkAbsent(t *testing.T) {
 // TestReporterMRID_DerivesFromClientNow exercises case 5: with
 // the client's offset slewed forward by +42s (via SyncServerTime against
 // a stub Time endpoint), the MirrorMeterReading.MRID emitted by
-// Reporter.ReportMetering carries a timestamp suffix that matches
-// client.Now() (server-synced), not time.Now() (local).
+// Reporter.ReportMetering was derived from client.Now() (server-synced),
+// not time.Now() (local).
 //
-// The MRID format is "reading-YYYYMMDD-HHMMSS" per reporter.go:92. We
-// capture the raw POST body, unmarshal it, and assert:
-//   - The MRID parses back into a time matching client.Now() ± 2 seconds.
-//   - The local-time-formatted MRID is NOT what was emitted (i.e. the
-//     suffix is at least many-seconds ahead of time.Now()'s formatting).
-//
-// A regression where reporter.go reverts to time.Now() would land the
-// MRID 42 seconds behind the client.Now() timestamp : well outside the
-// ±2s window. The two-second tolerance absorbs second-rollover at the
-// minute boundary plus the small drift between SyncServerTime returning
-// and the MRID being formatted.
+// readingMRID hashes its inputs into 32 hex characters (mrid.go), so the
+// MRID no longer parses back into a time; instead we recompute the small
+// window of candidate MRIDs readingMRID could have produced, bracketing
+// the ReportMetering call by a client.Now()/time.Now() sample taken just
+// before and just after it, and assert the actual MRID is one of the
+// client.Now() candidates and none of the time.Now() ones. With a +42s
+// offset the two candidate sets cannot overlap.
 func TestReporterMRID_DerivesFromClientNow(t *testing.T) {
 	t.Parallel()
 	env := newCCMTestEnv(t)
@@ -657,7 +653,10 @@ func TestReporterMRID_DerivesFromClientNow(t *testing.T) {
 	// Build a reporter wired to a non-empty MRR href so the metering
 	// path is actually exercised. derStatusHref left empty since this
 	// test only asserts on the MRR POST body.
-	reporter := inverter.NewReporter(client, "", "/mup/1/mr")
+	reporter, err := inverter.NewReporter(client, client.LFDI(), "", "/mup/1/mr")
+	if err != nil {
+		t.Fatalf("NewReporter: %v", err)
+	}
 
 	state := inverter.InverterState{
 		ActivePowerW: 1234,
@@ -667,14 +666,18 @@ func TestReporterMRID_DerivesFromClientNow(t *testing.T) {
 		Time:         time.Now(), // simulation time : independent of MRID source
 	}
 
-	// Capture client.Now() and time.Now() at the instant just before
-	// the report fires so we have ground truth for the assertion.
+	// Bracket the call with a clock sample on each side, so the exact
+	// instant readingMRID formatted internally is guaranteed to fall
+	// inside [before, after] for both clocks.
 	clientNowBefore := client.Now()
 	localNowBefore := time.Now()
 
 	if err := reporter.ReportMetering(ctx, state); err != nil {
 		t.Fatalf("ReportMetering: %v", err)
 	}
+
+	clientNowAfter := client.Now()
+	localNowAfter := time.Now()
 
 	if got := mmrHits.Load(); got != 1 {
 		t.Fatalf("/mup/1/mr POST hits = %d, want exactly 1", got)
@@ -690,39 +693,40 @@ func TestReporterMRID_DerivesFromClientNow(t *testing.T) {
 		t.Fatalf("unmarshal POST body: %v\nbody=%s", err, string(body))
 	}
 
-	const wantPrefix = "reading-"
-	if !strings.HasPrefix(got.MRID, wantPrefix) {
-		t.Fatalf("MRID = %q, want prefix %q", got.MRID, wantPrefix)
-	}
-	suffix := strings.TrimPrefix(got.MRID, wantPrefix)
+	// This is the Reporter's first ReportMetering call, so its counter is
+	// at seq=1 (reporter.go: readingSeq.Add(1) on a zero-value counter).
+	const wantSeq = 1
+	clientCandidates := candidateReadingMRIDs(client.LFDI(), clientNowBefore, clientNowAfter, wantSeq)
+	localCandidates := candidateReadingMRIDs(client.LFDI(), localNowBefore, localNowAfter, wantSeq)
 
-	// Parse the formatted suffix back. The reporter uses
-	// "20060102-150405" : a wall-clock format with no timezone, so
-	// parse it in Local to match how it was produced.
-	parsed, err := time.ParseInLocation("20060102-150405", suffix, time.Local)
-	if err != nil {
-		t.Fatalf("parse MRID suffix %q: %v", suffix, err)
+	if !containsString(clientCandidates, got.MRID) {
+		t.Errorf("MRID = %q, not in the client.Now()-derived candidate set %v : MRID does not derive from client.Now()",
+			got.MRID, clientCandidates)
 	}
-
-	// The parsed timestamp must be close to client.Now() (server-synced),
-	// not to time.Now() (local). At the point ReportMetering ran, the
-	// client.Now() was clientNowBefore (or within microseconds of it);
-	// the local time was localNowBefore.
-	const tolerance = 2 * time.Second // absorbs second-truncation in formatting
-
-	clientSkew := parsed.Sub(clientNowBefore)
-	if clientSkew < -tolerance || clientSkew > tolerance {
-		t.Errorf("MRID parsed=%v vs client.Now()=%v (skew=%v) outside ±%v : MRID does not derive from client.Now()",
-			parsed, clientNowBefore, clientSkew, tolerance)
+	if containsString(localCandidates, got.MRID) {
+		t.Errorf("MRID = %q, matches a time.Now()-derived candidate in %v : reporter reverted to local time (+%ds offset should have separated the sets)",
+			got.MRID, localCandidates, offsetSeconds)
 	}
+}
 
-	// And it must NOT be close to local time : that would mean the
-	// reporter reverted to time.Now(). With a +42s offset the parsed
-	// MRID must be ~42s ahead of localNowBefore.
-	localSkew := parsed.Sub(localNowBefore)
-	wantLocalSkew := offsetSeconds * time.Second
-	if localSkew < wantLocalSkew-tolerance || localSkew > wantLocalSkew+tolerance {
-		t.Errorf("MRID parsed=%v vs time.Now()=%v (skew=%v) : want ~+%ds (offset applied)",
-			parsed, localNowBefore, localSkew, offsetSeconds)
+// candidateReadingMRIDs returns every readingMRID(deviceLFDI, sec, seq)
+// value for each whole second between from and to, inclusive. readingMRID
+// hashes its inputs, so the actual MRID cannot be parsed back into a time;
+// this recomputes the small window of values it could have produced
+// instead.
+func candidateReadingMRIDs(deviceLFDI string, from, to time.Time, seq uint64) []string {
+	var out []string
+	for at := from.Truncate(time.Second); !at.After(to); at = at.Add(time.Second) {
+		out = append(out, inverter.ReadingMRIDForTesting(deviceLFDI, at, seq))
 	}
+	return out
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }

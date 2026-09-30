@@ -408,7 +408,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	var mupID string
 	t.Run("create_mirror_usage_point", func(t *testing.T) {
 		// Pass the MirrorUsagePointList href explicitly.
-		loc, err := client.CreateMirrorUsagePoint(ctx, "/mup", sep2.MirrorUsagePoint{
+		loc, err := client.CreateMirrorUsagePoint(ctx, "/mup", inverter.DeviceLFDI(client.LFDI()), sep2.MirrorUsagePoint{
 			MRID:                "mup-e2e-test",
 			Description:         "E2E Test Inverter",
 			ServiceCategoryKind: 0,

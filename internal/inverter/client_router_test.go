@@ -171,7 +171,7 @@ func TestRouter_PostMaps501ToErrNotImplemented(t *testing.T) {
 	serverURL, _ := startIdleListener(t, env, mux)
 	client := newCSIPClient(t, env, serverURL, true)
 
-	_, err := client.CreateMirrorUsagePoint(testCtx(t), "/mup", sep2.MirrorUsagePoint{})
+	_, err := client.CreateMirrorUsagePoint(testCtx(t), "/mup", testDeviceLFDI, sep2.MirrorUsagePoint{})
 	if !errors.Is(err, inverter.ErrNotImplemented) {
 		t.Fatalf("err = %v, want errors.Is ErrNotImplemented", err)
 	}

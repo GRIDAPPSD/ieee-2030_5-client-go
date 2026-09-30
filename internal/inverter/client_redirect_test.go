@@ -8,8 +8,8 @@
 //  1. 200 OK happy path: no redirect, behavior unchanged from the base router.
 //  2. Single 301 -> 200: follow-once, body returned, newHref surfaced.
 //  3. Two 301s in a row: first followed, second *MovedError propagated
-//     without further retry (no chain following per RFC 7231 §6.4.2 /
-//     CSIP V1.2 §6.6).
+//     without further retry (no chain following per RFC 7231 section 6.4.2 /
+//     CSIP V1.2 section 6.6).
 //  4. 301 with empty Location: *MovedError returned with empty Location;
 //     no follow attempted, no crash.
 //  5. POST with 301: same single-follow behavior; the request body is
@@ -165,12 +165,12 @@ func TestRedirect_ChainedRedirectsNotFollowed(t *testing.T) {
 		t.Errorf("secondHits = %d, want 1 (one follow only)", got)
 	}
 	if got := thirdHits.Load(); got != 0 {
-		t.Errorf("thirdHits = %d, want 0 (no chain following per RFC 7231 §6.4.2)", got)
+		t.Errorf("thirdHits = %d, want 0 (no chain following per RFC 7231 section 6.4.2)", got)
 	}
 }
 
-// Case 4: 301 with empty Location header. RFC 7231 §6.4.2 doesn't
-// require Location on a 301 (it MUST be present per §7.1.2 but servers can
+// Case 4: 301 with empty Location header. RFC 7231 section 6.4.2 doesn't
+// require Location on a 301 (it MUST be present per section 7.1.2 but servers can
 // violate spec), so the wrapper must not attempt to follow and must not
 // crash. The *MovedError propagates with Location="" so the caller can
 // distinguish from a real follow.
@@ -244,7 +244,7 @@ func TestRedirect_Post301FollowsOnceAndResendsBody(t *testing.T) {
 		MRID:        "mup-redir-1",
 		Description: "redirect test",
 	}
-	loc, err := client.CreateMirrorUsagePoint(redirectTestCtx(t), "/mup", mup)
+	loc, err := client.CreateMirrorUsagePoint(redirectTestCtx(t), "/mup", testDeviceLFDI, mup)
 	if err != nil {
 		t.Fatalf("CreateMirrorUsagePoint: %v", err)
 	}

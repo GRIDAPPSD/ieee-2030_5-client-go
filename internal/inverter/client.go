@@ -745,18 +745,30 @@ func (c *SEP2Client) GetDERCurveList(ctx context.Context, derCurveListHref strin
 	return list, nil
 }
 
+// DeviceLFDI is the LFDI of a DER a call acts for, as a distinct type
+// from a plain href string. CreateMirrorUsagePoint's mupListHref and
+// deviceLFDI parameters are otherwise two adjacent strings that a caller
+// could silently swap; the distinct type makes that swap fail to compile.
+type DeviceLFDI string
+
 // CreateMirrorUsagePoint POSTs a MirrorUsagePoint registration to the
-// MirrorUsagePointList href advertised by DeviceCapability. Returns the
-// server-assigned Location of the new MirrorUsagePoint resource.
+// MirrorUsagePointList href advertised by DeviceCapability. deviceLFDI is
+// the LFDI of the DER the mirror describes, not necessarily this client's
+// own : a DER client passes its own LFDI, a manager passes a managed
+// device's. Returns the server-assigned Location of the new
+// MirrorUsagePoint resource.
 //
 // On 301 the underlying Post follows once internally; the new
 // mup-list href is not surfaced : MUP creation fires exactly once per
 // startup.
-func (c *SEP2Client) CreateMirrorUsagePoint(ctx context.Context, mupListHref string, mup sep2.MirrorUsagePoint) (string, error) {
+func (c *SEP2Client) CreateMirrorUsagePoint(ctx context.Context, mupListHref string, deviceLFDI DeviceLFDI, mup sep2.MirrorUsagePoint) (string, error) {
 	if mupListHref == "" {
 		return "", fmt.Errorf("mup list href required")
 	}
-	mup.DeviceLFDI = c.lfdi
+	if deviceLFDI == "" {
+		return "", fmt.Errorf("device LFDI required")
+	}
+	mup.DeviceLFDI = string(deviceLFDI)
 	loc, _, err := c.Post(ctx, mupListHref, &mup)
 	return loc, err
 }

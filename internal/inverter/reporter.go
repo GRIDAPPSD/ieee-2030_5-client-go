@@ -2,12 +2,17 @@ package inverter
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strconv"
+	"sync/atomic"
+	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
-// Reporter sends periodic DERStatus PUTs and MirrorMeterReading POSTs.
+// Reporter sends periodic DERStatus PUTs and MirrorMeterReading POSTs for
+// one DER, named by deviceLFDI.
 //
 // Hrefs are derived by main.go from the advertised link graph
 // rather than built from ID segments. Empty hrefs cause the corresponding
@@ -17,25 +22,33 @@ import (
 // don't exist on the server side.
 type Reporter struct {
 	client        *SEP2Client
+	deviceLFDI    string
 	derStatusHref string // empty -> skip status PUT
 	mmrHref       string // empty -> skip metering POST
+	readingSeq    atomic.Uint64
 }
 
-// NewReporter creates a reporter that PUTs status to derStatusHref and POSTs
-// meter readings to mmrHref. Either or both may be empty to disable that
-// channel (see Reporter doc).
+// NewReporter creates a reporter for the DER named by deviceLFDI, PUTting
+// status to derStatusHref and POSTing meter readings to mmrHref. Either or
+// both hrefs may be empty to disable that channel (see Reporter doc).
+// deviceLFDI is required : it names the reading in every mRID this
+// reporter mints, so an empty value would mint readings for no device.
 //
 // See TestReporter_EmptyHrefsAreNoOps in client_test.go for coverage:
 //  1. derStatusHref empty -> ReportStatus is a no-op, returns nil, zero HTTP.
 //  2. mmrHref empty -> ReportMetering is a no-op, returns nil, zero HTTP.
 //  3. both set -> exactly one PUT and one POST per ReportStatus/ReportMetering
 //     call, to the exact hrefs passed in.
-func NewReporter(client *SEP2Client, derStatusHref, mmrHref string) *Reporter {
+func NewReporter(client *SEP2Client, deviceLFDI, derStatusHref, mmrHref string) (*Reporter, error) {
+	if deviceLFDI == "" {
+		return nil, fmt.Errorf("device LFDI required")
+	}
 	return &Reporter{
 		client:        client,
+		deviceLFDI:    deviceLFDI,
 		derStatusHref: derStatusHref,
 		mmrHref:       mmrHref,
-	}
+	}, nil
 }
 
 // ReportStatus sends a DERStatus PUT to the server. Returns nil immediately
@@ -87,8 +100,11 @@ func (r *Reporter) ReportMetering(ctx context.Context, state InverterState) erro
 	// reading payload fields : replacing it would jump reported timestamps
 	// out of the simulation's time domain. The MRID is a unique ID the
 	// server may correlate against its own clock, so it goes through Now().
+	// readingSeq disambiguates two readings for the same device within the
+	// same formatted second, which the clock alone cannot.
+	seq := r.readingSeq.Add(1)
 	mmr := sep2.MirrorMeterReading{
-		MRID:           "reading-" + r.client.Now().Format("20060102-150405"),
+		MRID:           readingMRID(r.deviceLFDI, r.client.Now(), seq),
 		Description:    "Active Power",
 		LastUpdateTime: state.Time.Unix(),
 		ReadingType: &sep2.ReadingType{
@@ -108,4 +124,14 @@ func (r *Reporter) ReportMetering(ctx context.Context, state InverterState) erro
 		log.Printf("reporter: metering POST failed: %v", err)
 	}
 	return err
+}
+
+// readingMRID builds a MirrorMeterReading mRID that is unique per device
+// and per reading, as mRIDType (HexBinary128) requires: 32 hex characters,
+// derived (never literal) since this client has no PEN setting configured.
+// deviceLFDI separates devices; seq is a per-Reporter monotonic counter
+// that separates two readings for one device within the same formatted
+// second, which the clock alone cannot.
+func readingMRID(deviceLFDI string, at time.Time, seq uint64) string {
+	return deriveMRID("reading", deviceLFDI, at.Format("20060102-150405"), strconv.FormatUint(seq, 10))
 }
