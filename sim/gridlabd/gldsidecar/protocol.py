@@ -4,6 +4,11 @@ One request in flight per socket, processed in order. Request:
 {"id": <int>, "op": <string>, "args": {...}}. Reply:
 {"id": <int>, "ok": true, "result": ...} or
 {"id": <int>, "ok": false, "error": {"code": ..., "message": ...}}.
+
+A complex value (gridlabd returns one for VA_Out and similar power
+quantities, probed 2026-09-29: 0j, type complex) encodes as the object
+{"re": <float>, "im": <float>}, never as a bare JSON number and never by
+dropping the imaginary part.
 """
 
 from __future__ import annotations
@@ -51,9 +56,18 @@ class Request:
         return cls(id=req_id, op=op, args=args)
 
 
+def _json_default(obj: Any) -> Any:
+    if isinstance(obj, complex):
+        return {"re": obj.real, "im": obj.imag}
+    raise TypeError(f"object of type {type(obj).__name__} is not JSON serializable")
+
+
 def encode_ok(req_id: int, result: Any) -> str:
-    return json.dumps({"id": req_id, "ok": True, "result": result})
+    return json.dumps({"id": req_id, "ok": True, "result": result}, default=_json_default)
 
 
 def encode_error(req_id: int, code: str, message: str) -> str:
-    return json.dumps({"id": req_id, "ok": False, "error": {"code": code, "message": message}})
+    return json.dumps(
+        {"id": req_id, "ok": False, "error": {"code": code, "message": message}},
+        default=_json_default,
+    )
