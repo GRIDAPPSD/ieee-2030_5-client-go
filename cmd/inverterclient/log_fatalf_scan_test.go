@@ -54,6 +54,13 @@ var expectedFatalfSitePrefixes = []string{
 	// share the same literal call expression so the slice has it once and
 	// the count is enforced separately below.
 	`log.Fatalf("%s", fe.Error())`,
+	// #71: the aggregator role builds its own no-op Reporter inline
+	// (runPhase4Metering is skipped) rather than a startup-config problem,
+	// matching phase4_metering.go's own identical fatal call for the same
+	// operation: client.LFDI() is never empty once the client exists, so
+	// this is unreachable in practice; fail loudly rather than silently
+	// disable metering if that ever changes.
+	`log.Fatalf("build reporter: %v", err)`,
 }
 
 // expectedFatalfPercentSCount is the number of `log.Fatalf("%s", fe.Error())`
