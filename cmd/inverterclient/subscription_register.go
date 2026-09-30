@@ -67,19 +67,19 @@ type subscriptionPoster interface {
 // and the NotifyReceiver is up.
 //
 // Bypass policy (all log + continue, never fatal):
-//   - notifyURL == "" (no receiver up) → log "disabled" and return empty map.
+//   - notifyURL == "" (no receiver up) -> log "disabled" and return empty map.
 //   - edev.SubscriptionListLink == nil (server doesn't advertise the link)
-//     → log "not supported (no SubscriptionListLink)" and return empty map.
-//   - PostSubscription returns ErrMethodNotAllowed (405) on any resource →
+//     -> log "not supported (no SubscriptionListLink)" and return empty map.
+//   - PostSubscription returns ErrMethodNotAllowed (405) on any resource ->
 //     log "subscriptions not supported (405); polling-only fallback" and
 //     ABORT the rest of the per-resource loop. A 405 is a per-server
 //     capability statement, not a per-resource one; trying the next resource
 //     would yield the same 405 and just spam the log.
-//   - PostSubscription returns any other error → log warning, continue with
+//   - PostSubscription returns any other error -> log warning, continue with
 //     the next resource. Future resources may still succeed.
 //
 // Returns a *subscriptionRegistry: a mutex-guarded wrapper
-// around the subscribed-resource-href → server-assigned-subscription-href
+// around the subscribed-resource-href -> server-assigned-subscription-href
 // map. The caller wires registry.CancelHookFunc() as the dispatcher's
 // CancelHook so status=1 notifications free the inverter-side entry.
 // Always returns a non-nil registry so callers can wire it
