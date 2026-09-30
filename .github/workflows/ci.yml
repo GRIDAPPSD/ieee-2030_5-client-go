@@ -152,6 +152,13 @@ jobs:
         run: go build ./...
 
       - name: Test
+        # GLDSIDECAR_INTEGRATION_REQUIRED makes the real-sidecar test fail
+        # rather than silently skip when gridlabd is not importable, so a
+        # green run here is evidence that test actually executed against
+        # the venv installed above, not that it was skipped with no other
+        # sign in a log this step does not run with -v.
+        env:
+          GLDSIDECAR_INTEGRATION_REQUIRED: "1"
         run: go test ./...
 
   gofmt:

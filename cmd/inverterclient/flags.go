@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
@@ -27,6 +28,26 @@ type cliFlags struct {
 	PEN                 *uint64
 	NotifyListen        *string
 	NotifyAdvertiseHost *string
+	FleetFiles          *repeatedStringFlag
+	RunDir              *string
+	SidecarPythonPath   *string
+}
+
+// repeatedStringFlag implements flag.Value so --fleet-file may be given
+// more than once, one per fleet: the stdlib flag package has no repeated
+// string flag of its own.
+type repeatedStringFlag []string
+
+func (f *repeatedStringFlag) String() string {
+	if f == nil {
+		return ""
+	}
+	return strings.Join(*f, ",")
+}
+
+func (f *repeatedStringFlag) Set(v string) error {
+	*f = append(*f, v)
+	return nil
 }
 
 // registerFlags registers every inverterclient flag on fs, writing directly
@@ -106,11 +127,32 @@ func registerFlags(fs *flag.FlagSet, cfg *inverter.SimConfig) *cliFlags {
 	// existing meaning.
 	fs.StringVar(&cfg.ClientRole, "client-role", string(guard.RoleDER), "IEEE 2030.5 client role: der|aggregator")
 
+	// FleetFiles and RunDir are aggregator-only: a fleet file names a
+	// GridLAB-D sidecar fleet (internal/sim/gridlabd) this process
+	// supervises. Given in the der role, gridlabd.NewManager refuses at
+	// start rather than partially running. Repeatable: one flag
+	// occurrence per fleet.
+	var fleetFiles repeatedStringFlag
+	fs.Var(&fleetFiles, "fleet-file", "path to a fleet JSON (aggregator role only; repeatable, one per fleet)")
+	runDir := fs.String("run-dir", "", "directory for fleet sidecar sockets (aggregator role, required with --fleet-file)")
+
+	// SidecarPythonPath names where gldsidecar (sim/gridlabd) lives, so a
+	// fleet's PYTHONPATH can be resolved to an absolute path at startup
+	// rather than left relative to whatever directory the sidecar's own
+	// cwd (RunDir) happens to be. Default matches this binary being run
+	// from the repo root, the same convention --cert/--key/--ca use.
+	// Empty means gldsidecar is already installed in the interpreter's
+	// own environment: no PYTHONPATH is added.
+	sidecarPythonPath := fs.String("sidecar-pythonpath", defaultSidecarPythonPath, "directory containing the gldsidecar package (aggregator role with --fleet-file only; empty if gldsidecar is installed in the interpreter's own environment)")
+
 	return &cliFlags{
 		HMIPort:             hmiPort,
 		ListScenarios:       listScenarios,
 		PEN:                 penFlag,
 		NotifyListen:        notifyListen,
 		NotifyAdvertiseHost: notifyAdvertiseHost,
+		FleetFiles:          &fleetFiles,
+		RunDir:              runDir,
+		SidecarPythonPath:   sidecarPythonPath,
 	}
 }

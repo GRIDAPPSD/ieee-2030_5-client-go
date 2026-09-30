@@ -62,12 +62,24 @@ def _json_default(obj: Any) -> Any:
     raise TypeError(f"object of type {type(obj).__name__} is not JSON serializable")
 
 
+# allow_nan=False on both encoders: item 5's NaN decision. gridlabd can
+# return NaN or +/-Infinity for a property (a divergent or uninitialized
+# solve), and Python's json module, by default, would write the
+# non-standard tokens NaN/Infinity/-Infinity for those, which is not valid
+# JSON. Go's encoding/json rejects those tokens outright, which used to
+# fail the whole reply's decode and mark the CONNECTION broken
+# (ErrConnectionBroken) over one bad value. allow_nan=False makes json.dumps
+# raise ValueError instead of emitting the token; _handle_line's existing
+# catch-all (server.py) turns that into a normal encode_error reply for
+# just this request, so a NaN reading surfaces as a per-request error, not
+# a torn-down connection every other in-flight or future call also pays for.
 def encode_ok(req_id: int, result: Any) -> str:
-    return json.dumps({"id": req_id, "ok": True, "result": result}, default=_json_default)
+    return json.dumps({"id": req_id, "ok": True, "result": result}, default=_json_default, allow_nan=False)
 
 
 def encode_error(req_id: int, code: str, message: str) -> str:
     return json.dumps(
         {"id": req_id, "ok": False, "error": {"code": code, "message": message}},
         default=_json_default,
+        allow_nan=False,
     )
