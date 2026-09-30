@@ -121,7 +121,7 @@ func TestSEP2Client_AggregatorRole_RefusesDERWritesAndMirrorAndResponse(t *testi
 		t.Fatalf("after PutDERCapability: server saw %d requests, want 0", got)
 	}
 
-	if _, err := client.CreateMirrorUsagePoint(ctx, "/mup", sep2.MirrorUsagePoint{}); err == nil {
+	if _, err := client.CreateMirrorUsagePoint(ctx, "/mup", inverter.DeviceLFDI(client.LFDI()), sep2.MirrorUsagePoint{}); err == nil {
 		t.Error("aggregator CreateMirrorUsagePoint (self): want refusal, got nil")
 	}
 	if got := atomic.LoadInt32(requests); got != 0 {
@@ -158,7 +158,7 @@ func TestSEP2Client_DERRole_ControlAllowsTheSameThreeCalls(t *testing.T) {
 		t.Fatalf("after PutDERCapability: server saw %d requests, want 1", got)
 	}
 
-	if _, err := client.CreateMirrorUsagePoint(ctx, "/mup", sep2.MirrorUsagePoint{}); err != nil {
+	if _, err := client.CreateMirrorUsagePoint(ctx, "/mup", inverter.DeviceLFDI(client.LFDI()), sep2.MirrorUsagePoint{}); err != nil {
 		t.Errorf("der CreateMirrorUsagePoint (self): want allow, got %v", err)
 	}
 	if got := atomic.LoadInt32(requests); got != 2 {
