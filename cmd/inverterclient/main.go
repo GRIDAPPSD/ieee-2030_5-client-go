@@ -780,10 +780,10 @@ func main() {
 	log.Println("=== Phase 3: DER Setup ===")
 	var derStatusHref string
 	if skipDERPipelineForRole(cfg) {
-		// ADR-009 decision 4: the aggregator's own EndDevice is not a DER.
-		// It has no DER capability, settings or status of its own; the
-		// guard also refuses these writes for aggregator self as a
-		// backstop (guard.aggregatorSelfKinds).
+		// The aggregator's own EndDevice is not a DER: it has no DER
+		// capability, settings or status of its own; the guard also
+		// refuses these writes for aggregator self as a backstop
+		// (guard.aggregatorSelfKinds).
 		log.Println("aggregator role: own EndDevice is not a DER; skipping Phase 3 DER setup")
 	} else if edev.DERListLink == nil {
 		log.Println("EndDevice has no DERListLink; skipping Phase 3 DER setup")
@@ -862,10 +862,10 @@ func main() {
 
 	// Phase 4: Metering Setup. Extracted to runPhase4Metering so a test can
 	// pin the identity wiring (GRIDAPPSD/ieee-2030_5-client-go#68). The
-	// aggregator's own EndDevice is not a DER and has no MirrorUsagePoint
-	// (ADR-009 decision 4); the guard also refuses a mirror POST for
-	// aggregator self as a backstop (guard.aggregatorSelfKinds), but the
-	// call is skipped here so it is never attempted.
+	// aggregator's own EndDevice is not a DER and has no MirrorUsagePoint;
+	// the guard also refuses a mirror POST for aggregator self as a
+	// backstop (guard.aggregatorSelfKinds), but the call is skipped here
+	// so it is never attempted.
 	var reporter *inverter.Reporter
 	if skipDERPipelineForRole(cfg) {
 		log.Println("=== Phase 4: Metering Setup ===")

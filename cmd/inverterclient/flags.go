@@ -95,9 +95,9 @@ func registerFlags(fs *flag.FlagSet, cfg *inverter.SimConfig) *cliFlags {
 	fs.StringVar(&cfg.Backend, "backend", "synthetic", "device backend: synthetic|gridlabd|realdevice")
 
 	// Role selects the consumer-policy role for notification dispatch.
-	// Default "simulator" preserves the existing behavior. The role
-	// is resolved once at construction into a concrete Dispatcher type per
-	// ADR-003: NOT a runtime branch in the dispatch path.
+	// Default "simulator" preserves the existing behavior. The role is
+	// resolved once at construction into a concrete Dispatcher type: NOT
+	// a runtime branch in the dispatch path.
 	fs.StringVar(&cfg.Role, "role", "simulator", "consumer-policy role: simulator|production")
 
 	// ClientRole selects the IEEE 2030.5 client role, resolved once at
