@@ -3,11 +3,13 @@ package inverter
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
-// Reporter sends periodic DERStatus PUTs and MirrorMeterReading POSTs.
+// Reporter sends periodic DERStatus PUTs and MirrorMeterReading POSTs for
+// one DER, named by deviceLFDI.
 //
 // Hrefs are derived by main.go from the advertised link graph
 // rather than built from ID segments. Empty hrefs cause the corresponding
@@ -17,22 +19,24 @@ import (
 // don't exist on the server side.
 type Reporter struct {
 	client        *SEP2Client
+	deviceLFDI    string
 	derStatusHref string // empty -> skip status PUT
 	mmrHref       string // empty -> skip metering POST
 }
 
-// NewReporter creates a reporter that PUTs status to derStatusHref and POSTs
-// meter readings to mmrHref. Either or both may be empty to disable that
-// channel (see Reporter doc).
+// NewReporter creates a reporter for the DER named by deviceLFDI, PUTting
+// status to derStatusHref and POSTing meter readings to mmrHref. Either or
+// both hrefs may be empty to disable that channel (see Reporter doc).
 //
 // See TestReporter_EmptyHrefsAreNoOps in client_test.go for coverage:
 //  1. derStatusHref empty -> ReportStatus is a no-op, returns nil, zero HTTP.
 //  2. mmrHref empty -> ReportMetering is a no-op, returns nil, zero HTTP.
 //  3. both set -> exactly one PUT and one POST per ReportStatus/ReportMetering
 //     call, to the exact hrefs passed in.
-func NewReporter(client *SEP2Client, derStatusHref, mmrHref string) *Reporter {
+func NewReporter(client *SEP2Client, deviceLFDI, derStatusHref, mmrHref string) *Reporter {
 	return &Reporter{
 		client:        client,
+		deviceLFDI:    deviceLFDI,
 		derStatusHref: derStatusHref,
 		mmrHref:       mmrHref,
 	}
@@ -88,7 +92,7 @@ func (r *Reporter) ReportMetering(ctx context.Context, state InverterState) erro
 	// out of the simulation's time domain. The MRID is a unique ID the
 	// server may correlate against its own clock, so it goes through Now().
 	mmr := sep2.MirrorMeterReading{
-		MRID:           "reading-" + r.client.Now().Format("20060102-150405"),
+		MRID:           readingMRID(r.deviceLFDI, r.client.Now()),
 		Description:    "Active Power",
 		LastUpdateTime: state.Time.Unix(),
 		ReadingType: &sep2.ReadingType{
@@ -108,4 +112,12 @@ func (r *Reporter) ReportMetering(ctx context.Context, state InverterState) erro
 		log.Printf("reporter: metering POST failed: %v", err)
 	}
 	return err
+}
+
+// readingMRID builds a MirrorMeterReading MRID that is unique per device and
+// per reading. The prior format was timestamp-only, so two devices
+// reporting through one process in the same second minted the same MRID;
+// deviceLFDI disambiguates them regardless of timestamp granularity.
+func readingMRID(deviceLFDI string, at time.Time) string {
+	return "reading-" + deviceLFDI + "-" + at.Format("20060102-150405")
 }

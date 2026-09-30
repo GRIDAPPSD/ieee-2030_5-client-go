@@ -890,7 +890,7 @@ func main() {
 	if dcap.MirrorUsagePointListLink == nil {
 		log.Println("DeviceCapability has no MirrorUsagePointListLink; metering disabled")
 	} else {
-		mupLoc, err := client.CreateMirrorUsagePoint(ctx, dcap.MirrorUsagePointListLink.Href, sep2.MirrorUsagePoint{
+		mupLoc, err := client.CreateMirrorUsagePoint(ctx, dcap.MirrorUsagePointListLink.Href, client.LFDI(), sep2.MirrorUsagePoint{
 			MRID:                "mup-" + client.SFDI()[:8],
 			Description:         "PV Inverter Metering",
 			ServiceCategoryKind: 0,
@@ -915,7 +915,7 @@ func main() {
 
 	// Create reporter : empty hrefs cause the corresponding channel to be
 	// a silent no-op (see reporter.go).
-	reporter := inverter.NewReporter(client, derStatusHref, mmrHref)
+	reporter := inverter.NewReporter(client, client.LFDI(), derStatusHref, mmrHref)
 
 	// Wire the LogEvent rate-limiter + alarm transition detector.
 	// See GRIDAPPSD/ieee-2030_5-server-go#190.

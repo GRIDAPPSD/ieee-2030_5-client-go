@@ -604,8 +604,8 @@ func TestPhase1bSkipsWhenTimeLinkAbsent(t *testing.T) {
 // Reporter.ReportMetering carries a timestamp suffix that matches
 // client.Now() (server-synced), not time.Now() (local).
 //
-// The MRID format is "reading-YYYYMMDD-HHMMSS" per reporter.go:92. We
-// capture the raw POST body, unmarshal it, and assert:
+// The MRID format is "reading-<deviceLFDI>-YYYYMMDD-HHMMSS" (reporter.go,
+// readingMRID). We capture the raw POST body, unmarshal it, and assert:
 //   - The MRID parses back into a time matching client.Now() +/- 2 seconds.
 //   - The local-time-formatted MRID is NOT what was emitted (i.e. the
 //     suffix is at least many-seconds ahead of time.Now()'s formatting).
@@ -657,7 +657,7 @@ func TestReporterMRID_DerivesFromClientNow(t *testing.T) {
 	// Build a reporter wired to a non-empty MRR href so the metering
 	// path is actually exercised. derStatusHref left empty since this
 	// test only asserts on the MRR POST body.
-	reporter := inverter.NewReporter(client, "", "/mup/1/mr")
+	reporter := inverter.NewReporter(client, client.LFDI(), "", "/mup/1/mr")
 
 	state := inverter.InverterState{
 		ActivePowerW: 1234,
@@ -690,7 +690,7 @@ func TestReporterMRID_DerivesFromClientNow(t *testing.T) {
 		t.Fatalf("unmarshal POST body: %v\nbody=%s", err, string(body))
 	}
 
-	const wantPrefix = "reading-"
+	wantPrefix := "reading-" + client.LFDI() + "-"
 	if !strings.HasPrefix(got.MRID, wantPrefix) {
 		t.Fatalf("MRID = %q, want prefix %q", got.MRID, wantPrefix)
 	}

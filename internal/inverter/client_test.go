@@ -27,6 +27,10 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
+// testDeviceLFDI is a placeholder DER LFDI for tests that need a
+// CreateMirrorUsagePoint deviceLFDI argument but do not assert on its value.
+const testDeviceLFDI = "AABBCCDD00112233445566778899AABBCCDDEEFF"
+
 // newCSIPClient builds an inverter client against serverURL using the
 // shared ccmTestEnv certs. CSIP is a per-test bool : case 4 needs false.
 func newCSIPClient(t *testing.T, env *ccmTestEnv, serverURL string, csip bool) *inverter.SEP2Client {
@@ -747,7 +751,7 @@ func TestPhase4SkipsWhenMUPListLinkAbsent(t *testing.T) {
 	// Production gating expression: if dcap.MirrorUsagePointListLink ==
 	// nil { skip Phase 4 }. Replicated here.
 	if dcap.MirrorUsagePointListLink != nil {
-		_, _ = client.CreateMirrorUsagePoint(ctx, dcap.MirrorUsagePointListLink.Href, sep2.MirrorUsagePoint{})
+		_, _ = client.CreateMirrorUsagePoint(ctx, dcap.MirrorUsagePointListLink.Href, testDeviceLFDI, sep2.MirrorUsagePoint{})
 	}
 
 	if got := mupHits.Load(); got != 0 {
@@ -756,8 +760,11 @@ func TestPhase4SkipsWhenMUPListLinkAbsent(t *testing.T) {
 
 	// Belt-and-suspenders: the inverter-package contract that defends
 	// the main.go Phase 4 gate.
-	if _, err := client.CreateMirrorUsagePoint(ctx, "", sep2.MirrorUsagePoint{}); err == nil {
+	if _, err := client.CreateMirrorUsagePoint(ctx, "", testDeviceLFDI, sep2.MirrorUsagePoint{}); err == nil {
 		t.Error("CreateMirrorUsagePoint(ctx, \"\") returned nil error; should fail before HTTP")
+	}
+	if _, err := client.CreateMirrorUsagePoint(ctx, "/mup", "", sep2.MirrorUsagePoint{}); err == nil {
+		t.Error("CreateMirrorUsagePoint(ctx, _, \"\") returned nil error; should fail before HTTP")
 	}
 	if err := client.PostMeterReading(ctx, "", sep2.MirrorMeterReading{}); err == nil {
 		t.Error("PostMeterReading(ctx, \"\") returned nil error; should fail before HTTP")
@@ -792,7 +799,7 @@ func TestReporter_EmptyHrefsAreNoOps(t *testing.T) {
 	defer stop()
 
 	client := newCSIPClient(t, env, serverURL, true)
-	reporter := inverter.NewReporter(client, "", "") // both hrefs empty
+	reporter := inverter.NewReporter(client, testDeviceLFDI, "", "") // both hrefs empty
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -244,7 +244,7 @@ func TestRedirect_Post301FollowsOnceAndResendsBody(t *testing.T) {
 		MRID:        "mup-redir-1",
 		Description: "redirect test",
 	}
-	loc, err := client.CreateMirrorUsagePoint(redirectTestCtx(t), "/mup", mup)
+	loc, err := client.CreateMirrorUsagePoint(redirectTestCtx(t), "/mup", testDeviceLFDI, mup)
 	if err != nil {
 		t.Fatalf("CreateMirrorUsagePoint: %v", err)
 	}
