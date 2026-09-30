@@ -53,6 +53,32 @@ func TestSkipDERPipelineForRole(t *testing.T) {
 	}
 }
 
+// TestRunDERSessionForRole is fix-round-3 finding 3: the control poll,
+// event engine, response hook, simulated device tick and alarm detector
+// must not start for the aggregator role even when Phase 2c selected a
+// DERProgram (a program erroneously assigned to a non-DER EndDevice).
+func TestRunDERSessionForRole(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		role     string
+		selected bool
+		want     bool
+	}{
+		{"der, program selected: runs", string(guard.RoleDER), true, true},
+		{"der, no program: does not run", string(guard.RoleDER), false, false},
+		{"aggregator, program selected: still refused", string(guard.RoleAggregator), true, false},
+		{"aggregator, no program: does not run", string(guard.RoleAggregator), false, false},
+	}
+	for _, tt := range tests {
+		cfg := inverter.SimConfig{ClientRole: tt.role}
+		if got := runDERSessionForRole(cfg, tt.selected); got != tt.want {
+			t.Errorf("%s: runDERSessionForRole(role=%q, selected=%v) = %v, want %v",
+				tt.name, tt.role, tt.selected, got, tt.want)
+		}
+	}
+}
+
 // TestDEROnlyFlagUsedInAggregatorRole is fix-round-1 finding 6: --csip is
 // refused at start for the aggregator role rather than silently ignored,
 // and stays unaffected for der (in either --csip state).

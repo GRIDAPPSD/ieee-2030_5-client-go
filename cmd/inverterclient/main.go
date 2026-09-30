@@ -635,6 +635,13 @@ func main() {
 		}
 	}
 
+	// runDERSession additionally gates every DER-only subsystem below
+	// (control poll, event engine, response hook) on role: the
+	// aggregator's own EndDevice is not a DER, so even a program
+	// erroneously assigned to it (selected == true) must not start a
+	// control poll, a state machine, or a Response POST hook for self.
+	runDERSession := runDERSessionForRole(cfg, selected)
+
 	// Phase 5 entry: start the DERControlList polling goroutine on
 	// the active DERProgram's DERControlListLink. The cache surfaces added /
 	// updated / cancelled events for the scheduler and state
@@ -650,7 +657,7 @@ func main() {
 	// conditional on the link existing; a DERProgram without DERControls
 	// (DefaultDERControl-only) is a valid CSIP shape.
 	derControlCache := inverter.NewDERControlCache()
-	if selected && selectedDERProgram.DERControlListLink != nil {
+	if runDERSession && selectedDERProgram.DERControlListLink != nil {
 		dercListHref := selectedDERProgram.DERControlListLink.Href
 		log.Printf("Phase 5: starting DERControlList poll href=%s pollRate=%ds",
 			dercListHref, dcap.PollRate)
@@ -713,7 +720,7 @@ func main() {
 	// hook below is the second consumer of the state machine's hook
 	// surface and must compose with this one. See response_hook.go.
 	curveCache := inverter.NewDERCurveCache()
-	if selected && selectedDERProgram.DERCurveListLink != nil {
+	if runDERSession && selectedDERProgram.DERCurveListLink != nil {
 		curveListHref := selectedDERProgram.DERCurveListLink.Href
 		stateMachine.AddTransitionHook(func(prev, next inverter.EventState, _ *sep2.DERControl) {
 			// Fire only on the start-of-event edge. Cancellation before
@@ -735,7 +742,7 @@ func main() {
 				log.Printf("Phase 5: refreshed %d curve type(s) from %s", curveCache.Len(), curveListHref)
 			}()
 		})
-	} else if selected {
+	} else if runDERSession {
 		log.Println("Phase 5: no DERCurveListLink on selected program; curve refresh disabled (controller falls back to IEEE 1547 defaults)")
 	}
 
@@ -744,12 +751,12 @@ func main() {
 	// mapping internally; here we just register it. lfdi is the inverter's
 	// LFDI hex (set in Phase 2 via SEP2Client.LFDI()).
 	// See GRIDAPPSD/ieee-2030_5-server-go#112.
-	if selected {
+	if runDERSession {
 		stateMachine.AddTransitionHook(responsePOSTHook(client, client.LFDI(), client.Now))
 		log.Println("Phase 6: response POST hook installed")
 	}
 
-	if selected && selectedDERProgram.DERControlListLink != nil {
+	if runDERSession && selectedDERProgram.DERControlListLink != nil {
 		tickInterval := pinPollInterval(dcap.PollRate)
 		log.Printf("Phase 5: starting state-machine tick interval=%s", tickInterval)
 		go func() {
@@ -952,6 +959,14 @@ func main() {
 			log.Println("Shutting down...")
 			return
 		case <-ticker.C:
+			if skipDERPipelineForRole(cfg) {
+				// The aggregator's own EndDevice is not a DER: no
+				// simulated device tick, alarm evaluation, HMI broadcast
+				// or status/metering report applies to it. The tick still
+				// fires so this select stays responsive to ctx.Done();
+				// the aggregator's own work is #72.
+				continue
+			}
 			// ReadState: advance the device's internal clock, walk scenario
 			// steps, and return the current grid conditions + power ceiling.
 			// On error (hardware comms loss), apply the fail-safe and skip
