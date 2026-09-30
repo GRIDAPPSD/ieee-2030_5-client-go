@@ -67,7 +67,7 @@ func (c *SEP2Client) PostSubscription(
 		return "", errors.New("PostSubscription: notifyURL required")
 	}
 
-	// Build the minimum-required Subscription body per IEEE 2030.5 §10.13 /
+	// Build the minimum-required Subscription body per IEEE 2030.5 section 10.13 /
 	// CSIP V1.2 CORE-018 step 2. Encoding=0 selects XML; we leave Limit and
 	// Condition unset (the server picks defaults and the IEEE 2030.5 spec
 	// permits both to be omitted on POST).

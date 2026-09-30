@@ -216,7 +216,7 @@ func TestPostSubscription_BodyParsesAsSubscription(t *testing.T) {
 func TestPostSubscription_301Follow(t *testing.T) {
 	t.Parallel()
 
-	// Two-routed server: /edev/1/sub returns 301 → /v2/edev/1/sub which
+	// Two-routed server: /edev/1/sub returns 301 -> /v2/edev/1/sub which
 	// returns 201 with Location /v2/edev/1/sub/sub-Z.
 	mux := http.NewServeMux()
 	var postsToV2 atomic.Int32
