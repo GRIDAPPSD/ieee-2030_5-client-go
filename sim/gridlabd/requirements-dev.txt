@@ -1,3 +1,0 @@
-# Test runner only, not the simulation payload: install without --require-hashes.
-# requirements.lock is the hash-locked file this issue's pin criteria bind.
-pytest==8.4.1
