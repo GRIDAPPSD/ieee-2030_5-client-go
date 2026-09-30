@@ -179,8 +179,13 @@ func TestRegisterSubscriptions_ContextCancelAborts(t *testing.T) {
 
 func TestNotifyURLForReceiver_Nil(t *testing.T) {
 	t.Parallel()
-	if got := notifyURLForReceiver(nil); got != "" {
+	if got := notifyURLForReceiver(nil, ""); got != "" {
 		t.Errorf("nil receiver URL = %q, want \"\"", got)
+	}
+	// A nil receiver means no listener is up: an advertise override must
+	// not manufacture a URL for a receiver that never bound.
+	if got := notifyURLForReceiver(nil, "example.org:8444"); got != "" {
+		t.Errorf("nil receiver with advertise host URL = %q, want \"\"", got)
 	}
 }
 
@@ -194,16 +199,28 @@ func (f fakeAddrSource) Addr() (string, error) { return f.addr, f.err }
 
 func TestNotifyURLForAddrSource_Happy(t *testing.T) {
 	t.Parallel()
-	got := notifyURLForAddrSource(fakeAddrSource{addr: "127.0.0.1:54321"})
+	got := notifyURLForAddrSource(fakeAddrSource{addr: "127.0.0.1:54321"}, "")
 	want := "https://127.0.0.1:54321/notify"
 	if got != want {
 		t.Errorf("URL = %q, want %q", got, want)
 	}
 }
 
+// TestNotifyURLForAddrSource_AdvertiseOverride is the issue #71 criterion:
+// the notify URL names the configured host, not the bind address the
+// listener is actually bound to (127.0.0.1 by default).
+func TestNotifyURLForAddrSource_AdvertiseOverride(t *testing.T) {
+	t.Parallel()
+	got := notifyURLForAddrSource(fakeAddrSource{addr: "127.0.0.1:54321"}, "example.org:8444")
+	want := "https://example.org:8444/notify"
+	if got != want {
+		t.Errorf("URL = %q, want %q (bound addr must not leak through when an advertise host is set)", got, want)
+	}
+}
+
 func TestNotifyURLForAddrSource_AddrError(t *testing.T) {
 	t.Parallel()
-	got := notifyURLForAddrSource(fakeAddrSource{err: errors.New("not started")})
+	got := notifyURLForAddrSource(fakeAddrSource{err: errors.New("not started")}, "")
 	if got != "" {
 		t.Errorf("URL = %q, want \"\" on Addr error", got)
 	}
@@ -211,7 +228,7 @@ func TestNotifyURLForAddrSource_AddrError(t *testing.T) {
 
 func TestNotifyURLForAddrSource_EmptyAddr(t *testing.T) {
 	t.Parallel()
-	got := notifyURLForAddrSource(fakeAddrSource{addr: ""})
+	got := notifyURLForAddrSource(fakeAddrSource{addr: ""}, "")
 	if got != "" {
 		t.Errorf("URL = %q, want \"\" on empty addr", got)
 	}

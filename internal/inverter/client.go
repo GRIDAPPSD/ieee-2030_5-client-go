@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 	sepTLS "github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2tls"
 	gotls "github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2tls/gotls"
@@ -76,6 +77,12 @@ type SEP2Client struct {
 	// can be a function adapter, a struct, or a stub.
 	// See GRIDAPPSD/ieee-2030_5-server-go#190.
 	logEventLimiter LogEventRateLimiter
+
+	// guard classifies every outbound request before it reaches the
+	// network: the one path Get/Post/Put/PostResponse all share. Built
+	// once at construction from the client's own role and LFDI; never nil
+	// after NewSEP2Client returns.
+	guard *guard.Guard
 }
 
 // NewSEP2Client creates a client with mTLS persistent connections per IEEE 2030.5.
@@ -128,6 +135,19 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 		return nil, fmt.Errorf("parse client cert %q for identity: %w", cfg.CertFile, err)
 	}
 
+	// Default to the der role when unset: matches the --client-role flag's
+	// own default and lets every existing test construct SimConfig without
+	// naming a role. A non-empty, unrecognized value is still a startup
+	// error (fail loud), not a silent fallback.
+	clientRole := guard.RoleDER
+	if cfg.ClientRole != "" {
+		parsedRole, err := guard.ParseRole(cfg.ClientRole)
+		if err != nil {
+			return nil, fmt.Errorf("client role: %w", err)
+		}
+		clientRole = parsedRole
+	}
+
 	transport := &http.Transport{
 		// gotls.Conn implements net.Conn so this composes cleanly with the
 		// stdlib http.Transport. We deliberately do NOT set TLSClientConfig
@@ -140,6 +160,8 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 		MaxIdleConnsPerHost: 1,
 		IdleConnTimeout:     30 * time.Second,
 	}
+
+	lfdi := sepTLS.LFDI(parsedCert)
 
 	return &SEP2Client{
 		httpClient: &http.Client{
@@ -157,8 +179,14 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 		},
 		baseURL: cfg.ServerURL,
 		sfdi:    sepTLS.SFDI(parsedCert),
-		lfdi:    sepTLS.LFDI(parsedCert),
+		lfdi:    lfdi,
 		pen:     cfg.LogEventPEN,
+		// No ManagedSet and no in-band opts yet: #72 wires the device-
+		// mapping loader and the in-band delete/create settings. Until
+		// then every non-self LFDI is refused (fail closed). Refusals log
+		// through the standard logger, bounded per refusal shape so a
+		// caller retrying every tick cannot flood the log.
+		guard: guard.New(clientRole, lfdi, nil, guard.WithRefusalLogger(log.Printf, guard.DefaultRefusalLogWindow, nil)),
 	}, nil
 }
 
@@ -202,7 +230,14 @@ func (c *SEP2Client) SetLogEventRateLimiter(rl LogEventRateLimiter) {
 // redirects on the retry propagate as a *MovedError without further retry
 // (no chain following per RFC 7231 section 6.4.2 / CSIP V1.2 section 6.6). See
 // GRIDAPPSD/ieee-2030_5-server-go#124.
-func (c *SEP2Client) Get(ctx context.Context, path string, out any) (newHref string, err error) {
+//
+// kind classifies the request for the guard (internal/inverter/guard): the
+// one path every caller of Get shares. A refusal returns before any HTTP
+// request is built; see guard.Guard.Allow.
+func (c *SEP2Client) Get(ctx context.Context, kind guard.Kind, path string, out any) (newHref string, err error) {
+	if err := c.guard.Allow(http.MethodGet, guard.Action{Kind: kind}); err != nil {
+		return "", fmt.Errorf("GET %s: %w", path, err)
+	}
 	if err := c.getOnce(ctx, c.baseURL+path, path, out); err != nil {
 		var moved *MovedError
 		if errors.As(err, &moved) && moved.Location != "" {
@@ -277,7 +312,12 @@ func (c *SEP2Client) getOnce(ctx context.Context, rawURL, logPath string, out an
 // in a []byte and wrapped in a fresh bytes.NewReader per attempt so the
 // retry re-sends the same payload (avoids the io.Reader-exhausted-on-retry
 // hazard). newHref is the new URL on follow, "" otherwise.
-func (c *SEP2Client) Post(ctx context.Context, path string, body any) (location string, newHref string, err error) {
+//
+// kind classifies the request for the guard; see Get.
+func (c *SEP2Client) Post(ctx context.Context, kind guard.Kind, path string, body any) (location string, newHref string, err error) {
+	if err := c.guard.Allow(http.MethodPost, guard.Action{Kind: kind}); err != nil {
+		return "", "", fmt.Errorf("POST %s: %w", path, err)
+	}
 	data, err := xml.Marshal(body)
 	if err != nil {
 		return "", "", fmt.Errorf("marshal: %w", err)
@@ -336,7 +376,12 @@ func (c *SEP2Client) postOnce(ctx context.Context, rawURL, logPath string, data 
 //
 // Follow-once semantics: see Get. The marshalled XML body is held
 // in a []byte and wrapped in a fresh bytes.NewReader per attempt.
-func (c *SEP2Client) Put(ctx context.Context, path string, body any) (newHref string, err error) {
+//
+// kind classifies the request for the guard; see Get.
+func (c *SEP2Client) Put(ctx context.Context, kind guard.Kind, path string, body any) (newHref string, err error) {
+	if err := c.guard.Allow(http.MethodPut, guard.Action{Kind: kind}); err != nil {
+		return "", fmt.Errorf("PUT %s: %w", path, err)
+	}
 	data, err := xml.Marshal(body)
 	if err != nil {
 		return "", fmt.Errorf("marshal: %w", err)
@@ -390,7 +435,7 @@ func (c *SEP2Client) putOnce(ctx context.Context, rawURL, logPath string, data [
 // Subsequent polls hit the original path again and re-follow if needed.
 func (c *SEP2Client) Discover(ctx context.Context) (sep2.DeviceCapability, error) {
 	var dcap sep2.DeviceCapability
-	_, err := c.Get(ctx, "/dcap", &dcap)
+	_, err := c.Get(ctx, guard.KindEndDeviceRead, "/dcap", &dcap)
 	return dcap, err
 }
 
@@ -420,7 +465,7 @@ func (c *SEP2Client) Register(ctx context.Context, edevListHref string) (registe
 	enabled := true
 	edev.Enabled = &enabled
 
-	loc, newEdevListHref, err := c.Post(ctx, edevListHref, &edev)
+	loc, newEdevListHref, err := c.Post(ctx, guard.KindEndDeviceCreate, edevListHref, &edev)
 	if err != nil {
 		return sep2.EndDevice{}, "", err
 	}
@@ -429,7 +474,7 @@ func (c *SEP2Client) Register(ctx context.Context, edevListHref string) (registe
 	// new resource itself (not an edev-list redirect), so we do not propagate
 	// its newHref further.
 	if loc != "" {
-		if _, err := c.Get(ctx, loc, &registered); err != nil {
+		if _, err := c.Get(ctx, guard.KindEndDeviceRead, loc, &registered); err != nil {
 			return sep2.EndDevice{}, newEdevListHref, err
 		}
 	}
@@ -482,7 +527,7 @@ func (c *SEP2Client) LookupOwnEndDevice(ctx context.Context, edevListHref string
 	path := edevListHref + sep + "l=255"
 
 	var list sep2.EndDeviceList
-	followedHref, err := c.Get(ctx, path, &list)
+	followedHref, err := c.Get(ctx, guard.KindEndDeviceRead, path, &list)
 	if err != nil {
 		return sep2.EndDevice{}, "", fmt.Errorf("get edev list: %w", err)
 	}
@@ -535,7 +580,7 @@ func (c *SEP2Client) GetRegistration(ctx context.Context, registrationHref strin
 		return sep2.Registration{}, fmt.Errorf("registration href required")
 	}
 	var rg sep2.Registration
-	if _, err := c.Get(ctx, registrationHref, &rg); err != nil {
+	if _, err := c.Get(ctx, guard.KindRegistrationRead, registrationHref, &rg); err != nil {
 		return sep2.Registration{}, fmt.Errorf("GET registration: %w", err)
 	}
 	return rg, nil
@@ -575,7 +620,7 @@ func (c *SEP2Client) GetFSAList(ctx context.Context, fsaListHref string) (list s
 		sep = "&"
 	}
 	path := fsaListHref + sep + "l=255"
-	followedHref, err := c.Get(ctx, path, &list)
+	followedHref, err := c.Get(ctx, guard.KindEndDeviceRead, path, &list)
 	if err != nil {
 		return sep2.FunctionSetAssignmentsList{}, "", fmt.Errorf("GET FSAList: %w", err)
 	}
@@ -595,7 +640,7 @@ func (c *SEP2Client) PutDERCapability(ctx context.Context, dercapHref string, ca
 	// PUT follows once internally; new href not surfaced : DER
 	// setup PUTs fire exactly once per startup and the caller does not
 	// re-issue them.
-	_, err := c.Put(ctx, dercapHref, &cap)
+	_, err := c.Put(ctx, guard.KindDERResourceWrite, dercapHref, &cap)
 	return err
 }
 
@@ -607,7 +652,7 @@ func (c *SEP2Client) PutDERSettings(ctx context.Context, dersettingsHref string,
 	}
 	// PUT follows once internally; new href not surfaced (see
 	// PutDERCapability).
-	_, err := c.Put(ctx, dersettingsHref, &settings)
+	_, err := c.Put(ctx, guard.KindDERResourceWrite, dersettingsHref, &settings)
 	return err
 }
 
@@ -620,7 +665,7 @@ func (c *SEP2Client) PutDERStatus(ctx context.Context, derstatusHref string, sta
 	// PUT follows once internally; new href not surfaced. The
 	// reporter loop calls this on each tick : a stale derStatusHref will
 	// pay one extra redirect per tick until restart. Acceptable scope.
-	_, err := c.Put(ctx, derstatusHref, &status)
+	_, err := c.Put(ctx, guard.KindDERResourceWrite, derstatusHref, &status)
 	return err
 }
 
@@ -663,7 +708,7 @@ func (c *SEP2Client) GetDERProgramList(ctx context.Context, derProgramListHref s
 		sep = "&"
 	}
 	path := derProgramListHref + sep + "l=255"
-	followedHref, err := c.Get(ctx, path, &list)
+	followedHref, err := c.Get(ctx, guard.KindEndDeviceRead, path, &list)
 	if err != nil {
 		return sep2.DERProgramList{}, "", fmt.Errorf("GET DERProgramList: %w", err)
 	}
@@ -687,7 +732,7 @@ func (c *SEP2Client) GetDefaultDERControl(ctx context.Context, defaultDERControl
 	if defaultDERControlHref == "" {
 		return sep2.DefaultDERControl{}, "", fmt.Errorf("DefaultDERControl href required")
 	}
-	newDefaultDERControlHref, err = c.Get(ctx, defaultDERControlHref, &dderc)
+	newDefaultDERControlHref, err = c.Get(ctx, guard.KindEndDeviceRead, defaultDERControlHref, &dderc)
 	if err != nil {
 		return sep2.DefaultDERControl{}, "", fmt.Errorf("GET DefaultDERControl: %w", err)
 	}
@@ -713,7 +758,7 @@ func (c *SEP2Client) GetDERControlList(ctx context.Context, derControlListHref s
 		sep = "&"
 	}
 	path := derControlListHref + sep + "l=255"
-	followedHref, err := c.Get(ctx, path, &list)
+	followedHref, err := c.Get(ctx, guard.KindEndDeviceRead, path, &list)
 	if err != nil {
 		return sep2.DERControlList{}, "", fmt.Errorf("GET DERControlList: %w", err)
 	}
@@ -739,7 +784,7 @@ func (c *SEP2Client) GetDERCurveList(ctx context.Context, derCurveListHref strin
 	}
 	path := derCurveListHref + sep + "l=255"
 	var list sep2.DERCurveList
-	if _, err := c.Get(ctx, path, &list); err != nil {
+	if _, err := c.Get(ctx, guard.KindEndDeviceRead, path, &list); err != nil {
 		return sep2.DERCurveList{}, fmt.Errorf("GET DERCurveList: %w", err)
 	}
 	return list, nil
@@ -769,7 +814,7 @@ func (c *SEP2Client) CreateMirrorUsagePoint(ctx context.Context, mupListHref str
 		return "", fmt.Errorf("device LFDI required")
 	}
 	mup.DeviceLFDI = string(deviceLFDI)
-	loc, _, err := c.Post(ctx, mupListHref, &mup)
+	loc, _, err := c.Post(ctx, guard.KindMirrorPost, mupListHref, &mup)
 	return loc, err
 }
 
@@ -784,7 +829,7 @@ func (c *SEP2Client) PostMeterReading(ctx context.Context, mmrListHref string, m
 	if mmrListHref == "" {
 		return fmt.Errorf("mmr list href required")
 	}
-	_, _, err := c.Post(ctx, mmrListHref, &mmr)
+	_, _, err := c.Post(ctx, guard.KindMirrorPost, mmrListHref, &mmr)
 	return err
 }
 
@@ -860,6 +905,13 @@ func isTransientResponseStatus(code int) bool {
 func (c *SEP2Client) PostResponse(ctx context.Context, replyToHref string, resp sep2.DERControlResponse) error {
 	if replyToHref == "" {
 		return fmt.Errorf("replyTo href required")
+	}
+	// PostResponse builds its own request (postResponseOnce) rather than
+	// routing through Post, because of the replyTo href resolution and
+	// retry loop below; the guard check that Post/Get/Put give every other
+	// caller for free is applied here explicitly instead.
+	if err := c.guard.Allow(http.MethodPost, guard.Action{Kind: guard.KindResponsePost}); err != nil {
+		return fmt.Errorf("POST Response %s: %w", replyToHref, err)
 	}
 
 	target, err := c.resolveServerURL(replyToHref)
@@ -1066,7 +1118,7 @@ func (c *SEP2Client) GetServerTime(ctx context.Context, timeHref string) (sep2.T
 		return sep2.Time{}, fmt.Errorf("time href required")
 	}
 	var t sep2.Time
-	if _, err := c.Get(ctx, timeHref, &t); err != nil {
+	if _, err := c.Get(ctx, guard.KindEndDeviceRead, timeHref, &t); err != nil {
 		return sep2.Time{}, fmt.Errorf("get server time: %w", err)
 	}
 	return t, nil

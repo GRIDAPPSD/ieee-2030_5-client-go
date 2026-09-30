@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 	certs "github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2cert"
 	sepTLS "github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2tls"
@@ -345,7 +346,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 
 		// Verify stored value via a GET (data-invariants Rule 1: assert field values).
 		var cap sep2.DERCapability
-		_, err = client.Get(ctx, "/edev/"+edevID+"/der/"+derID+"/dercap", &cap)
+		_, err = client.Get(ctx, guard.KindEndDeviceRead, "/edev/"+edevID+"/der/"+derID+"/dercap", &cap)
 		if err != nil {
 			t.Fatalf("GET dercap: %v", err)
 		}
@@ -370,7 +371,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 
 		// Verify stored value (data-invariants Rule 1).
 		var derg sep2.DERSettings
-		_, err = client.Get(ctx, "/edev/"+edevID+"/der/"+derID+"/derg", &derg)
+		_, err = client.Get(ctx, guard.KindEndDeviceRead, "/edev/"+edevID+"/der/"+derID+"/derg", &derg)
 		if err != nil {
 			t.Fatalf("GET derg: %v", err)
 		}
@@ -395,7 +396,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 
 		// Verify stored value (data-invariants Rule 1).
 		var status sep2.DERStatus
-		_, err = client.Get(ctx, "/edev/"+edevID+"/der/"+derID+"/ders", &status)
+		_, err = client.Get(ctx, guard.KindEndDeviceRead, "/edev/"+edevID+"/der/"+derID+"/ders", &status)
 		if err != nil {
 			t.Fatalf("GET ders: %v", err)
 		}
@@ -454,7 +455,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	// Phase 6: Time resource
 	t.Run("get_time", func(t *testing.T) {
 		var tm sep2.Time
-		_, err := client.Get(ctx, "/tm", &tm)
+		_, err := client.Get(ctx, guard.KindEndDeviceRead, "/tm", &tm)
 		if err != nil {
 			t.Fatalf("GET /tm: %v", err)
 		}
@@ -469,7 +470,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	// Phase 7: Verify EndDevice list shows our device
 	t.Run("list_end_devices", func(t *testing.T) {
 		var list sep2.EndDeviceList
-		_, err := client.Get(ctx, "/edev", &list)
+		_, err := client.Get(ctx, guard.KindEndDeviceRead, "/edev", &list)
 		if err != nil {
 			t.Fatalf("GET /edev: %v", err)
 		}
@@ -506,7 +507,7 @@ func TestEndToEndInverterLifecycle(t *testing.T) {
 	t.Run("get_default_der_control", func(t *testing.T) {
 		var dderc sep2.DefaultDERControl
 		// This path may not have data seeded, but should return an empty default (200).
-		_, err := client.Get(ctx, "/edev/"+edevID+"/fsa/1/derp/1/dderc", &dderc)
+		_, err := client.Get(ctx, guard.KindEndDeviceRead, "/edev/"+edevID+"/fsa/1/derp/1/dderc", &dderc)
 		if err != nil {
 			t.Fatalf("GET dderc: %v", err)
 		}

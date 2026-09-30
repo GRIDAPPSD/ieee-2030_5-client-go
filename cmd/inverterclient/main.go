@@ -12,13 +12,13 @@ import (
 	"os"
 	"os/signal"
 	"sort"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/device"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/dispatch"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
@@ -179,61 +179,27 @@ func walkDERProgramTree(
 func main() {
 	cfg := inverter.SimConfig{}
 
-	flag.StringVar(&cfg.ServerURL, "server", defaultServerURL, "IEEE 2030.5 server URL")
-	flag.StringVar(&cfg.CertFile, "cert", "certs/device.crt", "Client certificate PEM")
-	flag.StringVar(&cfg.KeyFile, "key", "certs/device.key", "Client private key PEM")
-	flag.StringVar(&cfg.CAFile, "ca", "certs/ca.crt", "CA certificate PEM")
-	flag.StringVar(&cfg.Scenario, "scenario", "normal", "Scenario name")
-	flag.Float64Var(&cfg.TimeScale, "timescale", 60.0, "Simulation speed (60 = 1min real = 1hr sim)")
-	flag.DurationVar(&cfg.TickInterval, "tick", 1*time.Second, "Simulation tick interval")
-	flag.DurationVar(&cfg.ReportInterval, "report-interval", 10*time.Second, "Status report interval")
-
-	hmiPort := flag.Int("hmi-port", 8080, "HMI web dashboard port (0 to disable)")
-	listScenarios := flag.Bool("list-scenarios", false, "List available scenarios and exit")
-	flag.BoolVar(&cfg.CSIP, "csip", false, "CSIP mode: lookup own EndDevice in server's /edev list instead of POST-registering")
-	flag.UintVar(&cfg.ExpectedPIN, "pin", 0, "expected Registration PIN (0 = skip match check; nonzero mismatch is fatal)")
-	flag.BoolVar(&cfg.AllowUnregistered, "allow-unregistered", false, "bypass missing-RegistrationLink check in CSIP mode (dev/test only)")
-
-	// PEN (Private Enterprise Number) stamped into every outbound LogEvent.
-	// See GRIDAPPSD/ieee-2030_5-server-go#189.
-	// Env var SEP2_PEN seeds the default; the CLI
-	// flag still wins per stdlib flag.Parse() precedence. Default 0 means
-	// "no manufacturer namespace" : fine for test / interop, but production
-	// deployments MUST register their own PEN with IANA and pass it here
-	// so server-side log archives can disambiguate codes across vendors.
-	defaultPEN := uint64(0)
-	if envPEN := os.Getenv("SEP2_PEN"); envPEN != "" {
-		if v, perr := strconv.ParseUint(envPEN, 10, 32); perr == nil {
-			defaultPEN = v
-		} else {
-			fmt.Fprintf(os.Stderr, "warning: SEP2_PEN=%q is not a valid uint32: %v\n", envPEN, perr)
-		}
-	}
-	penFlag := flag.Uint64("pen", defaultPEN, "IANA Private Enterprise Number stamped into outbound LogEvents (env: SEP2_PEN; 0 = no manufacturer namespace)")
-
-	// Inbound HTTPS Notification listener. Default 127.0.0.1:0 binds a
-	// random local port; the subscription POST will publish whatever we
-	// actually bound to. Empty string disables the
-	// listener (no subscription/notification flow; fall back to polling).
-	// Env var SEP2_NOTIFY_LISTEN seeds the default but the CLI flag still
-	// wins per stdlib flag.Parse() precedence.
-	defaultNotifyListen := os.Getenv("SEP2_NOTIFY_LISTEN")
-	if defaultNotifyListen == "" {
-		defaultNotifyListen = "127.0.0.1:0"
-	}
-	notifyListen := flag.String("notify-listen", defaultNotifyListen, "inbound HTTPS Notification listener address (env: SEP2_NOTIFY_LISTEN; empty disables)")
-
-	// Backend selects the physical-state source for the tick loop. Default
-	// "synthetic" preserves the existing scenario-harness behavior.
-	flag.StringVar(&cfg.Backend, "backend", "synthetic", "device backend: synthetic|gridlabd|realdevice")
-
-	// Role selects the consumer-policy role for notification dispatch.
-	// Default "simulator" preserves the existing behavior. The role
-	// is resolved once at construction into a concrete Dispatcher type per
-	// ADR-003: NOT a runtime branch in the dispatch path.
-	flag.StringVar(&cfg.Role, "role", "simulator", "consumer-policy role: simulator|production")
+	// registerFlags is shared with the test suite (role_test.go,
+	// main_test.go) so a flag-default test reads the same registration
+	// production runs, not a hand-copied duplicate that can drift from it.
+	cf := registerFlags(flag.CommandLine, &cfg)
+	hmiPort, listScenarios, penFlag := cf.HMIPort, cf.ListScenarios, cf.PEN
+	notifyListen, notifyAdvertiseHost := cf.NotifyListen, cf.NotifyAdvertiseHost
 
 	flag.Parse()
+
+	if _, err := guard.ParseRole(cfg.ClientRole); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+	if name := derOnlyFlagUsedInAggregatorRole(cfg); name != "" {
+		fmt.Fprintf(os.Stderr, "%s is a der-only setting and has no effect in the aggregator role; remove it\n", name)
+		os.Exit(1)
+	}
+	if err := validateNotifyAdvertiseHost(*notifyAdvertiseHost); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
 
 	// Clamp PEN to uint32 range. flag.Uint64Var lets us catch out-of-range
 	// input from CLI / env without silently truncating.
@@ -303,12 +269,22 @@ func main() {
 		hmi = inverter.NewHMI()
 		hmiServer := newHMIServer(*hmiPort)
 		hmiServer.Handler = hmi.Handler()
-		go func() {
-			log.Printf("HMI dashboard: http://localhost:%d", *hmiPort)
-			if err := hmiServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Printf("HMI server error: %v", err)
-			}
-		}()
+		// Bind before logging: listenHMI fails loud on a taken port, and
+		// logging the address the listener actually reports (rather than
+		// reconstructing it from the configured port) is the honest claim
+		// once two default-flagged processes can run on one host.
+		hmiListener, listenErr := listenHMI(hmiServer.Addr)
+		if listenErr != nil {
+			log.Printf("HMI dashboard: listen %s: %v (dashboard disabled)", hmiServer.Addr, listenErr)
+			hmi = nil
+		} else {
+			log.Printf("HMI dashboard: http://%s", hmiListener.Addr())
+			go func() {
+				if err := hmiServer.Serve(hmiListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					log.Printf("HMI server error: %v", err)
+				}
+			}()
+		}
 	}
 
 	// Inbound HTTPS Notification receiver. The listener uses the same gotls
@@ -328,6 +304,14 @@ func main() {
 	// in scope. If cert load, TCP bind, or address resolution fails, log
 	// the error and continue with polling-only rather than crash.
 	notifyReceiver := startNotifyReceiver(cfg, *notifyListen, hmi, notifyDispatcher.Dispatch)
+	// effectiveAdvertiseHost is the host:port the notify URL actually
+	// names: --notify-advertise-host's own port when it gives one,
+	// otherwise --notify-advertise-host's host combined with the port the
+	// listener actually bound (never a stale or guessed port), otherwise
+	// the bound address unchanged. Computed once here so both the
+	// loopback warning below and the subscription POST (registerSubscriptions,
+	// further down) agree on the same address.
+	var effectiveAdvertiseHost string
 	if notifyReceiver != nil {
 		defer func() {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -336,6 +320,12 @@ func main() {
 				log.Printf("notify receiver stop: %v", err)
 			}
 		}()
+		if boundAddr, err := notifyReceiver.Addr(); err == nil {
+			effectiveAdvertiseHost = effectiveNotifyAdvertiseHost(*notifyAdvertiseHost, boundAddr)
+			if isUnreachableAdvertiseHost(effectiveAdvertiseHost) {
+				log.Printf("WARNING: notify URL advertises a loopback or unspecified address (%s); a server on another host cannot reach it. Set --notify-listen and --notify-advertise-host to a reachable interface, or expect polling-only behavior against a remote server.", effectiveAdvertiseHost)
+			}
+		}
 	}
 
 	log.Printf("Inverter Simulator : scenario: %s (%s)", scenario.Name, scenario.Description)
@@ -417,10 +407,10 @@ func main() {
 	}
 
 	var edev sep2.EndDevice
-	if cfg.CSIP {
-		log.Println("=== Phase 2: EndDevice Lookup (CSIP) ===")
+	if endDeviceAcquisitionUsesLookup(cfg) {
+		log.Println("=== Phase 2: EndDevice Lookup ===")
 		if edevListHref == "" {
-			log.Fatalf("--csip set but DeviceCapability has no EndDeviceListLink")
+			log.Fatalf("EndDevice lookup required but DeviceCapability has no EndDeviceListLink")
 		}
 		for {
 			// On 301 LookupOwnEndDevice surfaces the new edev-list
@@ -511,7 +501,7 @@ func main() {
 		ctx,
 		client,
 		edev,
-		notifyURLForReceiver(notifyReceiver),
+		notifyURLForReceiver(notifyReceiver, effectiveAdvertiseHost),
 	)
 	// Wire the registry's Cancel method as the dispatcher's CancelHook so
 	// status=1 notifications (CSIP V1.2 CORE-019 step 13: "subscription
@@ -645,6 +635,13 @@ func main() {
 		}
 	}
 
+	// runDERSession additionally gates every DER-only subsystem below
+	// (control poll, event engine, response hook) on role: the
+	// aggregator's own EndDevice is not a DER, so even a program
+	// erroneously assigned to it (selected == true) must not start a
+	// control poll, a state machine, or a Response POST hook for self.
+	runDERSession := runDERSessionForRole(cfg, selected)
+
 	// Phase 5 entry: start the DERControlList polling goroutine on
 	// the active DERProgram's DERControlListLink. The cache surfaces added /
 	// updated / cancelled events for the scheduler and state
@@ -660,7 +657,7 @@ func main() {
 	// conditional on the link existing; a DERProgram without DERControls
 	// (DefaultDERControl-only) is a valid CSIP shape.
 	derControlCache := inverter.NewDERControlCache()
-	if selected && selectedDERProgram.DERControlListLink != nil {
+	if runDERSession && selectedDERProgram.DERControlListLink != nil {
 		dercListHref := selectedDERProgram.DERControlListLink.Href
 		log.Printf("Phase 5: starting DERControlList poll href=%s pollRate=%ds",
 			dercListHref, dcap.PollRate)
@@ -723,7 +720,7 @@ func main() {
 	// hook below is the second consumer of the state machine's hook
 	// surface and must compose with this one. See response_hook.go.
 	curveCache := inverter.NewDERCurveCache()
-	if selected && selectedDERProgram.DERCurveListLink != nil {
+	if runDERSession && selectedDERProgram.DERCurveListLink != nil {
 		curveListHref := selectedDERProgram.DERCurveListLink.Href
 		stateMachine.AddTransitionHook(func(prev, next inverter.EventState, _ *sep2.DERControl) {
 			// Fire only on the start-of-event edge. Cancellation before
@@ -745,7 +742,7 @@ func main() {
 				log.Printf("Phase 5: refreshed %d curve type(s) from %s", curveCache.Len(), curveListHref)
 			}()
 		})
-	} else if selected {
+	} else if runDERSession {
 		log.Println("Phase 5: no DERCurveListLink on selected program; curve refresh disabled (controller falls back to IEEE 1547 defaults)")
 	}
 
@@ -754,12 +751,12 @@ func main() {
 	// mapping internally; here we just register it. lfdi is the inverter's
 	// LFDI hex (set in Phase 2 via SEP2Client.LFDI()).
 	// See GRIDAPPSD/ieee-2030_5-server-go#112.
-	if selected {
+	if runDERSession {
 		stateMachine.AddTransitionHook(responsePOSTHook(client, client.LFDI(), client.Now))
 		log.Println("Phase 6: response POST hook installed")
 	}
 
-	if selected && selectedDERProgram.DERControlListLink != nil {
+	if runDERSession && selectedDERProgram.DERControlListLink != nil {
 		tickInterval := pinPollInterval(dcap.PollRate)
 		log.Printf("Phase 5: starting state-machine tick interval=%s", tickInterval)
 		go func() {
@@ -807,7 +804,13 @@ func main() {
 	// goes through the reporter loop in Phase 5 against DERStatusLink.
 	log.Println("=== Phase 3: DER Setup ===")
 	var derStatusHref string
-	if edev.DERListLink == nil {
+	if skipDERPipelineForRole(cfg) {
+		// The aggregator's own EndDevice is not a DER: it has no DER
+		// capability, settings or status of its own; the guard also
+		// refuses these writes for aggregator self as a backstop
+		// (guard.aggregatorSelfKinds).
+		log.Println("aggregator role: own EndDevice is not a DER; skipping Phase 3 DER setup")
+	} else if edev.DERListLink == nil {
 		log.Println("EndDevice has no DERListLink; skipping Phase 3 DER setup")
 	} else {
 		// On 301 client.Get surfaces the new DERList URL; one-shot
@@ -883,8 +886,23 @@ func main() {
 	}
 
 	// Phase 4: Metering Setup. Extracted to runPhase4Metering so a test can
-	// pin the identity wiring (GRIDAPPSD/ieee-2030_5-client-go#68).
-	reporter := runPhase4Metering(ctx, client, dcap, derStatusHref)
+	// pin the identity wiring (GRIDAPPSD/ieee-2030_5-client-go#68). The
+	// aggregator's own EndDevice is not a DER and has no MirrorUsagePoint;
+	// the guard also refuses a mirror POST for aggregator self as a
+	// backstop (guard.aggregatorSelfKinds), but the call is skipped here
+	// so it is never attempted.
+	var reporter *inverter.Reporter
+	if skipDERPipelineForRole(cfg) {
+		log.Println("=== Phase 4: Metering Setup ===")
+		log.Println("aggregator role: own EndDevice is not a DER; skipping Phase 4 metering setup")
+		var err error
+		reporter, err = inverter.NewReporter(client, client.LFDI(), "", "")
+		if err != nil {
+			log.Fatalf("build reporter: %v", err)
+		}
+	} else {
+		reporter = runPhase4Metering(ctx, client, dcap, derStatusHref)
+	}
 
 	// Wire the LogEvent rate-limiter + alarm transition detector.
 	// See GRIDAPPSD/ieee-2030_5-server-go#190.
@@ -941,6 +959,14 @@ func main() {
 			log.Println("Shutting down...")
 			return
 		case <-ticker.C:
+			if skipDERPipelineForRole(cfg) {
+				// The aggregator's own EndDevice is not a DER: no
+				// simulated device tick, alarm evaluation, HMI broadcast
+				// or status/metering report applies to it. The tick still
+				// fires so this select stays responsive to ctx.Done();
+				// the aggregator's own work is #72.
+				continue
+			}
 			// ReadState: advance the device's internal clock, walk scenario
 			// steps, and return the current grid conditions + power ceiling.
 			// On error (hardware comms loss), apply the fail-safe and skip

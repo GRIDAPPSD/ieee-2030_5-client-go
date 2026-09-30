@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
@@ -32,11 +33,16 @@ import (
 // directly.
 func newTestSEP2Client(t *testing.T, baseURL string, transport http.RoundTripper) *SEP2Client {
 	t.Helper()
+	const lfdi = "0000000000000000000000000000000000000001"
 	return &SEP2Client{
 		httpClient: &http.Client{Transport: transport, Timeout: 5 * time.Second},
 		baseURL:    strings.TrimSuffix(baseURL, "/"),
 		sfdi:       "1",
-		lfdi:       "0000000000000000000000000000000000000001",
+		lfdi:       lfdi,
+		// Matches what NewSEP2Client builds for the default der role: no
+		// managed set, no in-band opts. Tests that need aggregator-role or
+		// managed-device behavior build their own *guard.Guard.
+		guard: guard.New(guard.RoleDER, lfdi, nil),
 	}
 }
 
@@ -216,7 +222,7 @@ func TestPostSubscription_BodyParsesAsSubscription(t *testing.T) {
 func TestPostSubscription_301Follow(t *testing.T) {
 	t.Parallel()
 
-	// Two-routed server: /edev/1/sub returns 301 → /v2/edev/1/sub which
+	// Two-routed server: /edev/1/sub returns 301 -> /v2/edev/1/sub which
 	// returns 201 with Location /v2/edev/1/sub/sub-Z.
 	mux := http.NewServeMux()
 	var postsToV2 atomic.Int32

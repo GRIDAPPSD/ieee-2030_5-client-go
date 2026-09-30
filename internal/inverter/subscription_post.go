@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
@@ -67,7 +68,7 @@ func (c *SEP2Client) PostSubscription(
 		return "", errors.New("PostSubscription: notifyURL required")
 	}
 
-	// Build the minimum-required Subscription body per IEEE 2030.5 §10.13 /
+	// Build the minimum-required Subscription body per IEEE 2030.5 section 10.13 /
 	// CSIP V1.2 CORE-018 step 2. Encoding=0 selects XML; we leave Limit and
 	// Condition unset (the server picks defaults and the IEEE 2030.5 spec
 	// permits both to be omitted on POST).
@@ -81,7 +82,7 @@ func (c *SEP2Client) PostSubscription(
 	// one-shot 301 follow. We get the Location header on 201
 	// directly; on 405 / other non-2xx we get a typed error from
 	// classifyResponse.
-	location, _, postErr := c.Post(ctx, subscriptionListHref, &sub)
+	location, _, postErr := c.Post(ctx, guard.KindSubscriptionPost, subscriptionListHref, &sub)
 	if postErr != nil {
 		// errors.Is preserves the typed sentinel through the Post wrapper's
 		// fmt.Errorf chain so callers above us can pattern-match.

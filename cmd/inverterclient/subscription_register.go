@@ -24,17 +24,22 @@ import (
 // or its bound address is unavailable : the caller treats an empty URL as
 // "subscription flow disabled, fall back to polling."
 //
+// advertiseAddr, when non-empty, overrides the host:port named in the URL
+// (the --notify-advertise-host flag): the bind address and the address a
+// remote server can reach are not always the same value, for example a
+// listener bound to 0.0.0.0 or behind NAT.
+//
 // Production callers pass *inverter.NotifyReceiver directly; the function
 // adapts via notifyURLForAddrSource so unit tests can stub the Addr() seam
 // without spinning a live TLS listener. The two-level shape (concrete
 // wrapper + small interface helper) makes the nil-receiver branch
 // unambiguous: the typed-nil *NotifyReceiver case is caught before any
 // interface conversion happens.
-func notifyURLForReceiver(rcv *inverter.NotifyReceiver) string {
+func notifyURLForReceiver(rcv *inverter.NotifyReceiver, advertiseAddr string) string {
 	if rcv == nil {
 		return ""
 	}
-	return notifyURLForAddrSource(rcv)
+	return notifyURLForAddrSource(rcv, advertiseAddr)
 }
 
 // addrSource is the narrow consumer-side seam notifyURLForAddrSource needs.
@@ -46,7 +51,10 @@ type addrSource interface {
 // notifyURLForAddrSource is the unit-testable inner helper. Assumes a
 // non-nil source; the *inverter.NotifyReceiver wrapper above does the
 // typed-nil guard.
-func notifyURLForAddrSource(src addrSource) string {
+func notifyURLForAddrSource(src addrSource, advertiseAddr string) string {
+	if advertiseAddr != "" {
+		return fmt.Sprintf("https://%s/notify", advertiseAddr)
+	}
 	addr, err := src.Addr()
 	if err != nil || addr == "" {
 		return ""
@@ -67,19 +75,19 @@ type subscriptionPoster interface {
 // and the NotifyReceiver is up.
 //
 // Bypass policy (all log + continue, never fatal):
-//   - notifyURL == "" (no receiver up) → log "disabled" and return empty map.
+//   - notifyURL == "" (no receiver up) -> log "disabled" and return empty map.
 //   - edev.SubscriptionListLink == nil (server doesn't advertise the link)
-//     → log "not supported (no SubscriptionListLink)" and return empty map.
-//   - PostSubscription returns ErrMethodNotAllowed (405) on any resource →
+//     -> log "not supported (no SubscriptionListLink)" and return empty map.
+//   - PostSubscription returns ErrMethodNotAllowed (405) on any resource ->
 //     log "subscriptions not supported (405); polling-only fallback" and
 //     ABORT the rest of the per-resource loop. A 405 is a per-server
 //     capability statement, not a per-resource one; trying the next resource
 //     would yield the same 405 and just spam the log.
-//   - PostSubscription returns any other error → log warning, continue with
+//   - PostSubscription returns any other error -> log warning, continue with
 //     the next resource. Future resources may still succeed.
 //
 // Returns a *subscriptionRegistry: a mutex-guarded wrapper
-// around the subscribed-resource-href → server-assigned-subscription-href
+// around the subscribed-resource-href -> server-assigned-subscription-href
 // map. The caller wires registry.CancelHookFunc() as the dispatcher's
 // CancelHook so status=1 notifications free the inverter-side entry.
 // Always returns a non-nil registry so callers can wire it

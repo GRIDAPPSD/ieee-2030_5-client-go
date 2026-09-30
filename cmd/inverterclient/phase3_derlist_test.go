@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
@@ -31,7 +32,7 @@ type fakeDERListClient struct {
 	lastPath   string
 }
 
-func (f *fakeDERListClient) Get(_ context.Context, path string, out interface{}) (string, error) {
+func (f *fakeDERListClient) Get(_ context.Context, _ guard.Kind, path string, out interface{}) (string, error) {
 	f.calls.Add(1)
 	f.lastPath = path
 	if f.getErr != nil {

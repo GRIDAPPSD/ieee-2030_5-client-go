@@ -44,7 +44,9 @@ var expectedFatalfSitePrefixes = []string{
 	`log.Fatalf("create client: %v", err)`,
 	`log.Fatalf("discover: %v", err)`,
 	`log.Fatalf("wait for advertised links: %v", err)`,
-	`log.Fatalf("--csip set but DeviceCapability has no EndDeviceListLink")`,
+	// #71: the lookup branch now also runs in the aggregator role, not only
+	// under --csip, so the message no longer names --csip specifically.
+	`log.Fatalf("EndDevice lookup required but DeviceCapability has no EndDeviceListLink")`,
 	`log.Fatalf("lookup own EndDevice: %v", err)`,
 	`log.Fatalf("DeviceCapability has no EndDeviceListLink; registration impossible")`,
 	`log.Fatalf("register: %v", err)`,
@@ -52,6 +54,13 @@ var expectedFatalfSitePrefixes = []string{
 	// share the same literal call expression so the slice has it once and
 	// the count is enforced separately below.
 	`log.Fatalf("%s", fe.Error())`,
+	// #71: the aggregator role builds its own no-op Reporter inline
+	// (runPhase4Metering is skipped) rather than a startup-config problem,
+	// matching phase4_metering.go's own identical fatal call for the same
+	// operation: client.LFDI() is never empty once the client exists, so
+	// this is unreachable in practice; fail loudly rather than silently
+	// disable metering if that ever changes.
+	`log.Fatalf("build reporter: %v", err)`,
 }
 
 // expectedFatalfPercentSCount is the number of `log.Fatalf("%s", fe.Error())`

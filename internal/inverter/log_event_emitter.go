@@ -24,7 +24,7 @@
 //   - Wiring trip / curtailment detection sites to call PostLogEvent.
 //   - The rate-limiter implementation itself; this file only defines the
 //     interface.
-//   - The logEventCode → trip-type mapping.
+//   - The logEventCode -> trip-type mapping.
 
 package inverter
 
@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
@@ -69,7 +70,7 @@ type LogEventRateLimiter interface {
 //     server-synced clock, falling back to time.Now() before first sync).
 //     Callers that need a specific timestamp set it explicitly.
 //
-//  2. evt.LogEventPEN == 0 → filled in from c.PEN() (SimConfig.LogEventPEN
+//  2. evt.LogEventPEN == 0 -> filled in from c.PEN() (SimConfig.LogEventPEN
 //     captured at construction). When both are zero the LogEvent is
 //     published with PEN=0 (no manufacturer namespace) which is acceptable
 //     for test / interop but not for production; operators must register
@@ -122,7 +123,7 @@ func (c *SEP2Client) PostLogEvent(
 		evt.LogEventPEN = c.pen
 	}
 
-	location, _, postErr := c.Post(ctx, logEventListHref, &evt)
+	location, _, postErr := c.Post(ctx, guard.KindLogEventPost, logEventListHref, &evt)
 	if postErr != nil {
 		// errors.Is preserves the typed sentinel through the wrapper so
 		// callers can pattern-match ErrMethodNotAllowed / ErrBadRequest /
