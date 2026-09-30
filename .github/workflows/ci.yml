@@ -88,6 +88,44 @@ jobs:
         # before Setup Go so `go build`'s module resolution can see it.
         run: git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/GRIDAPPSD/".insteadOf "https://github.com/GRIDAPPSD/"
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Restore GridLAB-D sidecar wheel cache
+        # Keyed on the lock file's hash so a lock change starts from an
+        # empty cache. On a hit the install step below never contacts
+        # PyPI (--no-index --find-links); on a miss it downloads once.
+        uses: actions/cache@v4
+        with:
+          path: sim/gridlabd/.wheelhouse
+          key: gldsidecar-wheelhouse-${{ hashFiles('sim/gridlabd/requirements.lock') }}
+
+      - name: Install the pinned GridLAB-D sidecar (hash-locked)
+        # gridlabd==6.0.0a1 is a pre-release; an exact == pin installs it
+        # with no --pre (verified 2026-09-29). --require-hashes rejects a
+        # tampered or substituted wheel instead of installing it, so a run
+        # is red the moment the pin or the network copy stops matching.
+        run: |
+          set -eu
+          cd sim/gridlabd
+          python -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          if [ ! -f .wheelhouse/.populated ]; then
+            .venv/bin/pip download --require-hashes -r requirements.lock -d .wheelhouse
+            touch .wheelhouse/.populated
+          fi
+          .venv/bin/pip install --no-index --find-links .wheelhouse --require-hashes -r requirements.lock
+          .venv/bin/pip install --quiet -r requirements-dev.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Run the sidecar's own tests
+        # The real pinned gridlabd runs here, every CI run: no fake, no
+        # skip. A run whose install step above fails never reaches this
+        # step, so an install failure is red on its own step.
+        run: sim/gridlabd/.venv/bin/python -m pytest sim/gridlabd/tests -q
+
       - name: Setup Go
         uses: actions/setup-go@v7
         with:

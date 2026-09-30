@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gldsidecar"
+version = "0.1.0"
+description = "GridLAB-D fleet physics sidecar for the client-go aggregator"
+requires-python = ">=3.10"
+dependencies = [
+    "gridlabd==6.0.0a1",
+]
+
+[tool.setuptools.packages.find]
+include = ["gldsidecar*"]

@@ -1,0 +1,3 @@
+gridlabd==6.0.0a1 --hash=sha256:ee418877cf768f093dfbc4ce0a632b08f003296ea398d4087c36db2cbd0d4644
+nanobind-backend==1.0.0 --hash=sha256:de2c78ed4b88ef6c59a835eebe7f5e91ab6869f17f915a61c7d4eec24a1e2b85
+numpy==2.5.3 --hash=sha256:a5fa86b80fd24bcd1aff83ad23be44ea323de3f787be8f8b15d4a65621e25321
