@@ -5,7 +5,7 @@
 [![Go 1.26.3](https://img.shields.io/badge/Go-1.26.3-00ADD8?logo=go)](https://go.dev/)
 [![License: Battelle BSD](https://img.shields.io/badge/License-Battelle_BSD-blue.svg)](LICENSE)
 
-No release badge yet; this repo has not cut a tagged release.
+No GitHub release is published yet. The latest tag is `v0.1.0-client-on-core`.
 
 IEEE 2030.5 (SEP2) Go client and inverter simulator.
 
@@ -101,8 +101,7 @@ refuses anything else before it is sent. The aggregator finds its own
 EndDevice by certificate and never creates it, and its own EndDevice is
 not a DER: it never PUTs DER resources, posts a mirror, or posts a
 Response for itself; those steps are skipped, and the guard refuses them
-too. The managed-device set, fleet loops and provisioning are a separate
-piece of work.
+too.
 
 `--csip` is a der-only setting: it has no effect in the aggregator role
 (which always looks up its own EndDevice, never POSTs it), so the binary
@@ -127,7 +126,7 @@ Run `--list-scenarios` for the authoritative list. Current scenarios:
 ## Dependency
 
 This module depends on `github.com/GRIDAPPSD/ieee-2030_5-core-go`, pinned in
-`go.mod` at `v0.6.0`. It is an ordinary versioned Go module import; no
+`go.mod` at `v0.20.0`. It is an ordinary versioned Go module import; no
 `replace` directive is used.
 
 ## License
