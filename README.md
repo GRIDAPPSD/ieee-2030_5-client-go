@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/github-code-scanning/codeql)
-[![Go 1.26.3](https://img.shields.io/badge/Go-1.26.3-00ADD8?logo=go)](https://go.dev/)
+[![Go 1.26.8](https://img.shields.io/badge/Go-1.26.8-00ADD8?logo=go)](https://go.dev/)
 [![License: Battelle BSD](https://img.shields.io/badge/License-Battelle_BSD-blue.svg)](LICENSE)
 
 No GitHub release is published yet. The latest tag is `v0.1.0-client-on-core`.
