@@ -40,6 +40,10 @@ type controlSession struct {
 
 	// interval, when set, replaces the poll interval; a test seam.
 	interval time.Duration
+
+	// onExit, when set, runs as the session goroutine's last act before it
+	// is counted done; a test seam for observing that WaitControls waits.
+	onExit func()
 }
 
 func newControlSession(c *simconfig.Controls) *controlSession {
@@ -125,6 +129,9 @@ func (f *managedFleet) StartControls(ctx context.Context, env controlsEnv) {
 		f.wg.Add(1)
 		go func() {
 			defer f.wg.Done()
+			if md.ctl.onExit != nil {
+				defer md.ctl.onExit()
+			}
 			md.runControls(ctx, env)
 		}()
 	}
@@ -179,21 +186,25 @@ func (md *managedDevice) runControls(ctx context.Context, env controlsEnv) {
 				md.ctl.defaultCtl.Store(&c)
 			}
 		}
+		// The state machine ticks every cycle, so an event ends on time
+		// even while the control list cannot be read.
+		var added, cancelled []sep2.DERControl
 		list, newHref, err := client.GetDERControlList(tctx, href)
-		if err != nil {
+		switch {
+		case err != nil:
 			if ctx.Err() == nil {
 				log.Printf("managed device %s: DERControlList poll failed (continuing): %v", md.name, err)
 			}
-			return
+		default:
+			if newHref != "" {
+				href = newHref
+			}
+			cache.Refresh(list.DERControl)
+			curr := cache.Snapshot()
+			added, cancelled = diffSnapshots(prev, curr)
+			prev = curr
 		}
-		if newHref != "" {
-			href = newHref
-		}
-		cache.Refresh(list.DERControl)
-		curr := cache.Snapshot()
-		added, cancelled := diffSnapshots(prev, curr)
 		md.ctl.sm.Tick(client.Now(), added, cancelled, sched)
-		prev = curr
 	}
 
 	log.Printf("managed device %s: following controls from %s every %s (controls.response %s)", md.name, href, interval, md.ctl.mode)
@@ -212,23 +223,28 @@ func (md *managedDevice) runControls(ctx context.Context, env controlsEnv) {
 
 // discoverProgram walks the device's FSA list and DERPrograms and returns
 // the program to follow. A failed read is logged naming the device and
-// retried after mirrorBackoff(interval, failures), forever; it returns false
-// when ctx ends first, or when the server offers no program with a
-// DERControlList (nothing a retry would change).
+// retried after mirrorBackoff(interval, failures), forever. A walk that finds
+// no program with a DERControlList is logged and repeated every interval,
+// since a program may be added later. It returns false only when ctx ends.
 func (md *managedDevice) discoverProgram(ctx, tctx context.Context, env controlsEnv, interval time.Duration) (sep2.DERProgram, bool) {
-	for failures := 1; ; failures++ {
+	failures := 0
+	for {
 		prog, found, what, err := md.walkPrograms(tctx, env)
-		if err == nil {
-			if !found {
-				log.Printf("managed device %s: no DERProgram with a DERControlList; no controls to follow", md.name)
+		var wait time.Duration
+		switch {
+		case err == nil && found:
+			return prog, true
+		case err == nil:
+			wait = interval
+			log.Printf("managed device %s (%s): no DERProgram with a DERControlList; looking again in %s", md.name, md.lfdi, wait)
+		default:
+			if ctx.Err() != nil {
+				return sep2.DERProgram{}, false
 			}
-			return prog, found
+			failures++
+			wait = mirrorBackoff(interval, failures)
+			log.Printf("managed device %s (%s): %s failed, attempt %d, retrying in %s: %v", md.name, md.lfdi, what, failures, wait, err)
 		}
-		if ctx.Err() != nil {
-			return sep2.DERProgram{}, false
-		}
-		wait := mirrorBackoff(interval, failures)
-		log.Printf("managed device %s (%s): %s failed, attempt %d, retrying in %s: %v", md.name, md.lfdi, what, failures, wait, err)
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
@@ -248,10 +264,17 @@ func (md *managedDevice) walkPrograms(tctx context.Context, env controlsEnv) (pr
 	}
 	programs := map[string]sep2.DERProgram{}
 	if len(fsaList.FunctionSetAssignments) > 0 {
-		if programs, err = runPhase2cDERProgramWalk(tctx, env.client, fsaList, env.cfg, env.dcap); err != nil {
+		if programs, err = runPhase2cDERProgramWalkOpts(tctx, env.client, fsaList, env.cfg, env.dcap, true); err != nil {
 			return prog, false, "DERProgram walk", err
 		}
 	}
+	// A program with no DERControlList has nothing to follow, so it never
+	// outranks one that has.
+	for mrid, p := range programs {
+		if p.DERControlListLink == nil {
+			delete(programs, mrid)
+		}
+	}
 	prog, found = inverter.SelectHighestPriority(programs)
-	return prog, found && prog.DERControlListLink != nil, "", nil
+	return prog, found, "", nil
 }

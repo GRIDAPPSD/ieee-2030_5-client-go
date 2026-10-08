@@ -141,6 +141,19 @@ func walkDERProgramTree(
 	fsaList sep2.FunctionSetAssignmentsList,
 	out map[string]sep2.DERProgram,
 ) error {
+	return walkDERProgramTreeOpts(ctx, client, fsaList, out, false)
+}
+
+// walkDERProgramTreeOpts is walkDERProgramTree; with lenientDefault a failed
+// DefaultDERControl read is logged and skipped instead of failing the walk,
+// for callers that re-read the default on their own cadence.
+func walkDERProgramTreeOpts(
+	ctx context.Context,
+	client *inverter.SEP2Client,
+	fsaList sep2.FunctionSetAssignmentsList,
+	out map[string]sep2.DERProgram,
+	lenientDefault bool,
+) error {
 	for _, fsa := range fsaList.FunctionSetAssignments {
 		if fsa.DERProgramListLink == nil {
 			log.Printf("  FSA mRID=%s has no DERProgramListLink; skipping", fsa.MRID)
@@ -159,7 +172,10 @@ func walkDERProgramTree(
 		for _, prog := range progList.DERProgram {
 			if prog.DefaultDERControlLink != nil {
 				if _, _, err := client.GetDefaultDERControl(ctx, prog.DefaultDERControlLink.Href); err != nil {
-					return fmt.Errorf("DERProgram mRID=%s DefaultDERControl: %w", prog.MRID, err)
+					if !lenientDefault {
+						return fmt.Errorf("DERProgram mRID=%s DefaultDERControl: %w", prog.MRID, err)
+					}
+					log.Printf("  DERProgram mRID=%s DefaultDERControl read failed (walk continues): %v", prog.MRID, err)
 				}
 			}
 			if prog.DERControlListLink != nil {
