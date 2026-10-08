@@ -117,24 +117,83 @@ type File struct {
 	Role string `json:"role"`
 	// Server, Cert, Key and CA are empty when the key is absent: the caller
 	// keeps the flag default, which is this setting's default.
-	Server         string    `json:"server"`
-	Cert           string    `json:"cert"`
-	Key            string    `json:"key"`
-	CA             string    `json:"ca"`
-	LookupOwnEdev  *bool     `json:"lookup_own_edev"`
-	Pin            uint      `json:"pin"`
-	Device         Device    `json:"device"`
-	Backend        string    `json:"backend"`
-	Replay         Replay    `json:"replay"`
-	Report         Interval  `json:"report"`
-	Status         Interval  `json:"status"`
-	Controls       Controls  `json:"controls"`
-	Managed        []Managed `json:"managed"`
-	Frq            Frq       `json:"frq"`
-	Dispatch       Dispatch  `json:"dispatch"`
-	Notify         Notify    `json:"notify"`
-	HMI            HMI       `json:"hmi"`
-	LookupOwnEdevV bool      `json:"-"`
+	Server        string    `json:"server"`
+	Cert          string    `json:"cert"`
+	Key           string    `json:"key"`
+	CA            string    `json:"ca"`
+	LookupOwnEdev *bool     `json:"lookup_own_edev"`
+	Pin           uint      `json:"pin"`
+	Device        Device    `json:"device"`
+	Backend       string    `json:"backend"`
+	Replay        Replay    `json:"replay"`
+	Report        Interval  `json:"report"`
+	Status        Interval  `json:"status"`
+	Controls      Controls  `json:"controls"`
+	Managed       []Managed `json:"managed"`
+	Frq           Frq       `json:"frq"`
+	Dispatch      Dispatch  `json:"dispatch"`
+	Notify        Notify    `json:"notify"`
+	HMI           HMI       `json:"hmi"`
+}
+
+// LookupFor reports the lookup_own_edev setting for the role the process
+// finally runs in, which flags and env may change after the file was read.
+// An explicit key wins; otherwise the der role defaults to true and the
+// aggregator role has no such setting (set is false).
+func (f *File) LookupFor(role string) (value, set bool) {
+	if f.LookupOwnEdev != nil {
+		return *f.LookupOwnEdev, true
+	}
+	if role == DefaultRole {
+		return true, true
+	}
+	return false, false
+}
+
+// ValidateForRole checks what depends on the role the process finally runs
+// in. An aggregator needs managed devices whichever layer chose the role.
+func (f *File) ValidateForRole(role string) error {
+	if role == "aggregator" && len(f.Managed) == 0 {
+		return errors.New("role \"aggregator\" needs at least one managed device in the sim config")
+	}
+	return nil
+}
+
+// presence is the decoded JSON object of one section, used to tell an
+// absent key from an explicit zero. Keys match the way encoding/json
+// matches them, case-insensitively.
+type presence map[string]any
+
+func (p presence) has(key string) bool {
+	for k := range p {
+		if strings.EqualFold(k, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p presence) sub(key string) presence {
+	for k, v := range p {
+		if strings.EqualFold(k, key) {
+			m, _ := v.(map[string]any)
+			return presence(m)
+		}
+	}
+	return nil
+}
+
+func (p presence) elem(key string, i int) presence {
+	for k, v := range p {
+		if strings.EqualFold(k, key) {
+			l, _ := v.([]any)
+			if i < len(l) {
+				m, _ := l[i].(map[string]any)
+				return presence(m)
+			}
+		}
+	}
+	return nil
 }
 
 // Load reads, strictly decodes, defaults and validates the file at path.
@@ -189,24 +248,28 @@ func Parse(b []byte) (*File, error) {
 	if f.Role == "aggregator" && f.LookupOwnEdev != nil {
 		return nil, errors.New("lookup_own_edev is a der-only setting and has no effect in the aggregator role; remove it")
 	}
-	f.applyDefaults()
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil, fmt.Errorf("parse: %w", err)
+	}
+	f.applyDefaults(presence(raw))
 	if err := f.validate(); err != nil {
 		return nil, err
 	}
 	return &f, nil
 }
 
-func (d *Device) applyDefaults(name string) {
+func (d *Device) applyDefaults(name string, p presence) {
 	if d.Name == "" {
 		d.Name = name
 	}
 	if d.Type == "" {
 		d.Type = DefaultDeviceType
 	}
-	if d.RatedW == 0 {
+	if !p.has("rated_w") {
 		d.RatedW = DefaultRatedW
 	}
-	if d.CapacityWh == 0 {
+	if !p.has("capacity_wh") {
 		d.CapacityWh = DefaultCapacityWh
 	}
 	if d.InitialSOC == nil {
@@ -215,11 +278,11 @@ func (d *Device) applyDefaults(name string) {
 	}
 }
 
-func (r *Replay) applyDefaults() {
+func (r *Replay) applyDefaults(p presence) {
 	if r.Clock == "" {
 		r.Clock = DefaultReplayClock
 	}
-	if r.Scale == 0 {
+	if !p.has("scale") {
 		r.Scale = DefaultReplayScale
 	}
 }
@@ -230,16 +293,12 @@ func (c *Controls) applyDefaults() {
 	}
 }
 
-func (f *File) applyDefaults() {
+func (f *File) applyDefaults(p presence) {
 	if f.Role == "" {
 		f.Role = DefaultRole
 	}
-	if f.LookupOwnEdev == nil && f.Role == "der" {
-		t := true
-		f.LookupOwnEdev = &t
-	}
-	f.Device.applyDefaults("")
-	f.Replay.applyDefaults()
+	f.Device.applyDefaults("", p.sub("device"))
+	f.Replay.applyDefaults(p.sub("replay"))
 	f.Controls.applyDefaults()
 	if f.Backend == "" {
 		if f.Replay.File != "" {
@@ -248,10 +307,10 @@ func (f *File) applyDefaults() {
 			f.Backend = "synthetic"
 		}
 	}
-	if f.Report.IntervalS == 0 {
+	if !p.sub("report").has("interval_s") {
 		f.Report.IntervalS = DefaultReportInterval
 	}
-	if f.Status.IntervalS == 0 {
+	if !p.sub("status").has("interval_s") {
 		f.Status.IntervalS = DefaultStatusInterval
 	}
 	for i := range f.Managed {
@@ -259,38 +318,39 @@ func (f *File) applyDefaults() {
 		if m.Device == nil {
 			m.Device = &Device{}
 		}
-		m.Device.applyDefaults(m.Name)
+		mp := p.elem("managed", i)
+		m.Device.applyDefaults(m.Name, mp.sub("device"))
 		if m.Replay == nil {
 			m.Replay = &Replay{}
 		}
-		m.Replay.applyDefaults()
+		m.Replay.applyDefaults(mp.sub("replay"))
 		if m.Controls == nil {
 			m.Controls = &Controls{}
 		}
 		m.Controls.applyDefaults()
 	}
-	if f.Frq.EnergyWh == 0 {
+	if !p.sub("frq").has("energy_wh") {
 		f.Frq.EnergyWh = DefaultFrqEnergyWh
 	}
-	if f.Frq.PowerW == 0 {
+	if !p.sub("frq").has("power_w") {
 		f.Frq.PowerW = DefaultFrqPowerW
 	}
-	if f.Frq.StartInS == 0 {
+	if !p.sub("frq").has("start_in_s") {
 		f.Frq.StartInS = DefaultFrqStartInS
 	}
-	if f.Frq.DurationS == 0 {
+	if !p.sub("frq").has("duration_s") {
 		f.Frq.DurationS = DefaultFrqDurationS
 	}
-	if f.Frq.MinLeadS == 0 {
+	if !p.sub("frq").has("min_lead_s") {
 		f.Frq.MinLeadS = DefaultFrqMinLeadS
 	}
-	if f.Frq.PollS == 0 {
+	if !p.sub("frq").has("poll_s") {
 		f.Frq.PollS = DefaultFrqPollS
 	}
 	if f.Frq.RequestFile == "" {
 		f.Frq.RequestFile = DefaultFrqRequestFile
 	}
-	if f.Dispatch.TickS == 0 {
+	if !p.sub("dispatch").has("tick_s") {
 		f.Dispatch.TickS = DefaultDispatchTickS
 	}
 }
@@ -324,8 +384,8 @@ func (r Replay) validate(prefix string) error {
 	if err := oneOf(prefix+"clock", r.Clock, "wall", "start"); err != nil {
 		return err
 	}
-	if r.Scale < 0 {
-		return fmt.Errorf("%sscale %v must not be negative", prefix, r.Scale)
+	if r.Scale <= 0 {
+		return fmt.Errorf("%sscale %v must be positive", prefix, r.Scale)
 	}
 	return nil
 }
@@ -359,12 +419,24 @@ func (f *File) validate() error {
 	if err := f.Controls.validate("controls."); err != nil {
 		return err
 	}
+	if f.Role == "der" && f.Device.Type == "battery" && f.Replay.File == "" {
+		return errors.New("device.type \"battery\" needs replay.file: the synthetic backend simulates PV only")
+	}
 	for name, v := range map[string]int{
 		"report.interval_s": f.Report.IntervalS, "status.interval_s": f.Status.IntervalS,
-		"frq.start_in_s": f.Frq.StartInS, "frq.duration_s": f.Frq.DurationS,
-		"frq.min_lead_s": f.Frq.MinLeadS, "frq.poll_s": f.Frq.PollS,
+		"frq.duration_s": f.Frq.DurationS, "frq.poll_s": f.Frq.PollS,
 		"dispatch.tick_s": f.Dispatch.TickS,
 	} {
+		if v <= 0 {
+			return fmt.Errorf("%s %d must be positive", name, v)
+		}
+	}
+	for name, v := range map[string]float64{"frq.energy_wh": f.Frq.EnergyWh, "frq.power_w": f.Frq.PowerW} {
+		if v <= 0 {
+			return fmt.Errorf("%s %v must be positive", name, v)
+		}
+	}
+	for name, v := range map[string]int{"frq.start_in_s": f.Frq.StartInS, "frq.min_lead_s": f.Frq.MinLeadS} {
 		if v < 0 {
 			return fmt.Errorf("%s %d must not be negative", name, v)
 		}
