@@ -1026,6 +1026,9 @@ func main() {
 		// that device. Without a sim config there are no managed devices,
 		// which startManagedForRole logs.
 		managed = startManagedOrExit(ctx, client, dcap, edevListHref, simFile, cfg.ReportInterval, fatalf)
+		if simFile != nil {
+			managed.setStatusInterval(time.Duration(simFile.Status.IntervalS) * time.Second)
+		}
 		managed.StartControls(ctx, controlsEnv{client: client, dcap: dcap, cfg: cfg})
 		reservations = startReservations(client, edev, simFile, managed)
 	} else {

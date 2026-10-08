@@ -693,6 +693,17 @@ func (c *SEP2Client) PutDERStatus(ctx context.Context, derstatusHref string, sta
 	return err
 }
 
+// PutDERAvailability PUTs a DER's availability to the advertised
+// DERAvailabilityLink. See PutDERCapability for the link-derivation
+// rationale.
+func (c *SEP2Client) PutDERAvailability(ctx context.Context, deravailHref string, avail sep2.DERAvailability) error {
+	if deravailHref == "" {
+		return fmt.Errorf("deravailability href required")
+	}
+	_, err := c.Put(ctx, guard.KindDERResourceWrite, deravailHref, &avail)
+	return err
+}
+
 // GetDERProgramList GETs the DERProgramList at the given href and decodes
 // it. CSIP V1.2 CORE-012 step 2 : for each FSA the EndDevice has been
 // assigned, the device walks the FSA's DERProgramListLink to enumerate the
