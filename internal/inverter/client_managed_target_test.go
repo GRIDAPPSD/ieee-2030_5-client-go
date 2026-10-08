@@ -211,3 +211,34 @@ func TestManagedTarget_MirrorBodyLFDIMustMatchTheTarget(t *testing.T) {
 		t.Errorf("server saw %d requests after the matching mirror, want 1", got)
 	}
 }
+
+// The same binding holds for a Response: its body names the device that
+// answers, and the context target is the device the guard judged.
+func TestManagedTarget_ResponseBodyLFDIMustMatchTheTarget(t *testing.T) {
+	env := newCCMTestEnv(t)
+	serverURL, rec := recordingListener(t, env)
+	client := newGuardTestClient(t, serverURL, env, "aggregator")
+	client.SetManagedSet(guard.NewStaticManagedSet(managedLFDI, unmanagedLFDI))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	respFor := func(lfdi string) sep2.DERControlResponse {
+		return sep2.DERControlResponse{Response: sep2.Response{EndDeviceLFDI: lfdi, Subject: "CTL1"}}
+	}
+
+	err := client.PostResponse(inverter.WithTarget(ctx, managedLFDI), "/rsps/1/rsp", respFor(unmanagedLFDI))
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("mismatched Response: err = %v, want a mismatch refusal", err)
+	}
+	if got := rec.count(); got != 0 {
+		t.Fatalf("server saw %d requests for a mismatched Response, want 0", got)
+	}
+
+	// Control: the same device in another case is sent, naming itself.
+	if err := client.PostResponse(inverter.WithTarget(ctx, managedLFDI), "/rsps/1/rsp", respFor(strings.ToLower(managedLFDI))); err != nil {
+		t.Fatalf("Response differing only in case: %v", err)
+	}
+	got := rec.postBodies()
+	if len(got) != 1 || !strings.Contains(got[0], strings.ToLower(managedLFDI)) {
+		t.Errorf("posted bodies = %q, want one naming %s", got, strings.ToLower(managedLFDI))
+	}
+}
