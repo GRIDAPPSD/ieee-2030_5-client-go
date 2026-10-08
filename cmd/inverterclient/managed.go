@@ -23,6 +23,23 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
+// maxMirrorAttempts bounds the MirrorUsagePoint POSTs one managed device
+// makes, the one at start included. A mirror that still fails after that is
+// logged as given up on, and the device's readings stay off.
+const maxMirrorAttempts = 5
+
+// startManagedForRole starts the aggregator's managed devices from the sim
+// config. An aggregator run without a sim config is valid (it has no managed
+// set to resolve), so that state is logged rather than silent and returns a
+// nil fleet.
+func startManagedForRole(ctx context.Context, client *inverter.SEP2Client, dcap sep2.DeviceCapability, edevListHref string, simFile *simconfig.File, reportInterval time.Duration) (*managedFleet, error) {
+	if simFile == nil || len(simFile.Managed) == 0 {
+		log.Println("aggregator role: no managed devices configured (no sim config); no device sessions, mirrors or readings will run")
+		return nil, nil
+	}
+	return startManaged(ctx, client, dcap, edevListHref, simFile.Managed, reportInterval)
+}
+
 // missingManaged returns an error naming every configured device the
 // server's EndDeviceList does not list, or nil when all are listed.
 func missingManaged(list sep2.EndDeviceList, configured []simconfig.Managed) error {
@@ -51,6 +68,15 @@ type managedDevice struct {
 	dev        device.DERDevice
 	reporter   *inverter.Reporter
 	lastReport time.Time
+
+	// The mirror is retried on later ticks until it exists or
+	// maxMirrorAttempts is spent. mupListHref is empty when the server
+	// advertised no MirrorUsagePointList, which no retry can fix.
+	client       *inverter.SEP2Client
+	mupListHref  string
+	mirrorTries  int
+	hasMirror    bool
+	gaveUpLogged bool
 }
 
 // managedFleet is every managed device session of one aggregator process.
@@ -65,6 +91,11 @@ type managedFleet struct {
 // cannot be built, stops the start with an error naming it.
 func startManaged(ctx context.Context, client *inverter.SEP2Client, dcap sep2.DeviceCapability, edevListHref string, configured []simconfig.Managed, reportInterval time.Duration) (*managedFleet, error) {
 	log.Println("=== Managed devices ===")
+	for _, m := range configured {
+		if strings.EqualFold(m.LFDI, client.LFDI()) {
+			return nil, fmt.Errorf("managed device %s (%s) is the aggregator's own LFDI; the aggregator never mirrors itself", m.Name, m.LFDI)
+		}
+	}
 	list, _, err := client.GetEndDeviceList(ctx, edevListHref)
 	if err != nil {
 		return nil, fmt.Errorf("list EndDevices for the managed set: %w", err)
@@ -104,37 +135,69 @@ func startManagedDevice(ctx context.Context, client *inverter.SEP2Client, dcap s
 		return nil, fmt.Errorf("managed device %s (%s): %w", m.Name, m.LFDI, err)
 	}
 
-	// A mirror that cannot be made disables that device's readings, as it
-	// does for the der role's own mirror; the session keeps running.
-	var mmrHref string
+	md := &managedDevice{name: m.Name, lfdi: m.LFDI, ratedW: m.Device.RatedW, dev: replay, client: client}
 	if dcap.MirrorUsagePointListLink == nil {
 		log.Printf("managed device %s: DeviceCapability has no MirrorUsagePointListLink; readings disabled", m.Name)
 	} else {
-		mupLoc, err := client.CreateMirrorUsagePoint(inverter.WithTarget(ctx, m.LFDI), dcap.MirrorUsagePointListLink.Href, inverter.DeviceLFDI(m.LFDI), sep2.MirrorUsagePoint{
-			MRID:                inverter.MirrorUsagePointMRID(m.LFDI),
-			Description:         m.Name + " Metering",
-			ServiceCategoryKind: 0,
-			Status:              1,
-		})
-		switch {
-		case err != nil:
-			log.Printf("managed device %s: create MirrorUsagePoint: %v (readings disabled)", m.Name, err)
-		case mupLoc == "":
-			log.Printf("managed device %s: MirrorUsagePoint POST returned empty Location; readings disabled", m.Name)
-		default:
-			log.Printf("managed device %s: MirrorUsagePoint %s", m.Name, mupLoc)
-			mmrHref = mupLoc + "/mr"
-		}
+		md.mupListHref = dcap.MirrorUsagePointListLink.Href
 	}
+	if err := md.setReporter(""); err != nil {
+		return nil, err
+	}
+	// A failed first attempt is logged and retried on later ticks.
+	md.tryMirror(ctx)
+	return md, nil
+}
 
-	reporter, err := inverter.NewReporter(client, m.LFDI, "", mmrHref)
+// setReporter replaces the device's reporter with one posting to mmrHref.
+func (md *managedDevice) setReporter(mmrHref string) error {
+	reporter, err := inverter.NewReporter(md.client, md.lfdi, "", mmrHref)
 	if err != nil {
-		return nil, fmt.Errorf("managed device %s: %w", m.Name, err)
+		return fmt.Errorf("managed device %s: %w", md.name, err)
 	}
-	return &managedDevice{
-		name: m.Name, lfdi: m.LFDI, ratedW: m.Device.RatedW,
-		dev: replay, reporter: reporter.AsManager(),
-	}, nil
+	md.reporter = reporter.AsManager()
+	return nil
+}
+
+// tryMirror makes one MirrorUsagePoint attempt when the device has none and
+// attempts remain, and logs the outcome. It reports whether the device now
+// has a mirror.
+func (md *managedDevice) tryMirror(ctx context.Context) bool {
+	if md.hasMirror {
+		return true
+	}
+	if md.mupListHref == "" {
+		return false
+	}
+	if md.mirrorTries >= maxMirrorAttempts {
+		if !md.gaveUpLogged {
+			log.Printf("managed device %s: gave up on the MirrorUsagePoint after %d attempts; readings stay disabled", md.name, maxMirrorAttempts)
+			md.gaveUpLogged = true
+		}
+		return false
+	}
+	md.mirrorTries++
+	mupLoc, err := md.client.CreateMirrorUsagePoint(inverter.WithTarget(ctx, md.lfdi), md.mupListHref, inverter.DeviceLFDI(md.lfdi), sep2.MirrorUsagePoint{
+		MRID:                inverter.MirrorUsagePointMRID(md.lfdi),
+		Description:         md.name + " Metering",
+		ServiceCategoryKind: 0,
+		Status:              1,
+	})
+	switch {
+	case err != nil:
+		log.Printf("managed device %s: create MirrorUsagePoint attempt %d of %d: %v", md.name, md.mirrorTries, maxMirrorAttempts, err)
+		return false
+	case mupLoc == "":
+		log.Printf("managed device %s: MirrorUsagePoint POST attempt %d of %d returned empty Location", md.name, md.mirrorTries, maxMirrorAttempts)
+		return false
+	}
+	if err := md.setReporter(mupLoc + "/mr"); err != nil {
+		log.Printf("%v", err)
+		return false
+	}
+	md.hasMirror = true
+	log.Printf("managed device %s: MirrorUsagePoint %s", md.name, mupLoc)
+	return true
 }
 
 // Tick advances every session one step: read the recorded output, apply it
@@ -153,7 +216,13 @@ func (f *managedFleet) Tick(ctx context.Context) {
 			log.Printf("managed device %s: ApplySetpoint failed: %v", md.name, err)
 			continue
 		}
+		md.tryMirror(ctx)
 		if time.Since(md.lastReport) < f.reportInterval {
+			continue
+		}
+		if !md.hasMirror {
+			log.Printf("managed device %s: reading skipped: no MirrorUsagePoint for this device", md.name)
+			md.lastReport = time.Now()
 			continue
 		}
 		if err := md.reporter.ReportMetering(ctx, state); err != nil {

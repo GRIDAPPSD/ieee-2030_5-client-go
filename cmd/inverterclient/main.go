@@ -999,12 +999,11 @@ func main() {
 		}
 		// The aggregator's own work: one session per managed device. It
 		// posts no mirror for itself; each managed device's mirror names
-		// that device. Without a sim config there are no managed devices.
-		if simFile != nil {
-			managed, err = startManaged(ctx, client, dcap, edevListHref, simFile.Managed, cfg.ReportInterval)
-			if err != nil {
-				fatalf("managed devices: %v", err)
-			}
+		// that device. Without a sim config there are no managed devices,
+		// which startManagedForRole logs.
+		managed, err = startManagedForRole(ctx, client, dcap, edevListHref, simFile, cfg.ReportInterval)
+		if err != nil {
+			fatalf("managed devices: %v", err)
 		}
 	} else {
 		reporter = runPhase4Metering(ctx, client, dcap, derStatusHref)

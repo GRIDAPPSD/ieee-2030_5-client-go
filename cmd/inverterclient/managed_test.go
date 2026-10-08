@@ -11,6 +11,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/device"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/simconfig"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
@@ -63,6 +65,10 @@ type fakeServer struct {
 	mupLFDI   map[string]string // mirror Location -> DeviceLFDI it named
 	mupBodies []string
 	readings  map[string][]sep2.MirrorMeterReading // mirror Location -> readings
+	// mupFailures is how many mirror POSTs answer 503 before one succeeds;
+	// mupAttempts counts every mirror POST that reached the server.
+	mupFailures int
+	mupAttempts int
 }
 
 func newFakeServer(t *testing.T, env *derWalkTestEnv, listed ...string) (*inverter.SEP2Client, *fakeServer) {
@@ -84,6 +90,12 @@ func newFakeServer(t *testing.T, env *derWalkTestEnv, listed ...string) (*invert
 		}
 		fs.mu.Lock()
 		defer fs.mu.Unlock()
+		fs.mupAttempts++
+		if fs.mupFailures > 0 {
+			fs.mupFailures--
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		loc := fmt.Sprintf("/mup/%d", len(fs.mupLFDI)+1)
 		fs.mupLFDI[loc] = mup.DeviceLFDI
 		fs.mupBodies = append(fs.mupBodies, string(b))
@@ -252,5 +264,235 @@ func TestManagedFleet_ReportIntervalGatesReadings(t *testing.T) {
 	fleet.Tick(ctx)
 	if n := len(fs.readings["/mup/1"]); n != 1 {
 		t.Errorf("%d readings after two ticks inside the interval, want 1", n)
+	}
+}
+
+// captureManagedLog returns what log wrote until the test ends.
+func captureManagedLog(t *testing.T) *strings.Builder {
+	t.Helper()
+	var b strings.Builder
+	log.SetOutput(&b)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return &b
+}
+
+// A mirror that answers 503 at start is retried on later ticks; once it
+// answers 201 the device posts readings naming its LFDI.
+func TestManagedFleet_FailedMirrorIsRetriedAndThenReports(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, pvLFDI)
+	fs.mupFailures = 1
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fleet, err := startManaged(ctx, client, dcapWithMirrors, "/edev", []simconfig.Managed{managedCfg(t, "pv", pvLFDI, "pv", 3000)}, 0)
+	if err != nil {
+		t.Fatalf("startManaged: %v", err)
+	}
+	if n := len(fs.mupLFDI); n != 0 {
+		t.Fatalf("%d mirrors exist after the 503, want 0", n)
+	}
+	fleet.Tick(ctx)
+
+	if fs.mupAttempts != 2 || fs.mupLFDI["/mup/1"] != pvLFDI {
+		t.Errorf("mirror attempts = %d, mirrors = %v, want 2 attempts and /mup/1 naming %s", fs.mupAttempts, fs.mupLFDI, pvLFDI)
+	}
+	got := fs.readings["/mup/1"]
+	if len(got) != 1 || got[0].Reading == nil || got[0].Reading.Value == nil || *got[0].Reading.Value != 3000 {
+		t.Fatalf("readings after the retry = %v, want one of 3000 W", got)
+	}
+	fleet.Tick(ctx)
+	if fs.mupAttempts != 2 {
+		t.Errorf("mirror attempts = %d after success, want no further attempts", fs.mupAttempts)
+	}
+}
+
+// A mirror that never succeeds is retried a bounded number of times, each
+// attempt is logged, and every skipped reading is logged.
+func TestManagedFleet_MirrorRetryIsBoundedAndSkippedReadingsAreLogged(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, pvLFDI)
+	fs.mupFailures = 1000
+	logs := captureManagedLog(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	fleet, err := startManaged(ctx, client, dcapWithMirrors, "/edev", []simconfig.Managed{managedCfg(t, "pv", pvLFDI, "pv", 3000)}, 0)
+	if err != nil {
+		t.Fatalf("startManaged: %v", err)
+	}
+	const ticks = maxMirrorAttempts + 4
+	for i := 0; i < ticks; i++ {
+		fleet.Tick(ctx)
+	}
+	if fs.mupAttempts != maxMirrorAttempts {
+		t.Errorf("mirror attempts = %d over %d ticks, want %d", fs.mupAttempts, ticks, maxMirrorAttempts)
+	}
+	if n := len(fs.readings); n != 0 {
+		t.Errorf("readings posted without a mirror: %v", fs.readings)
+	}
+	out := logs.String()
+	if n := strings.Count(out, "create MirrorUsagePoint"); n != maxMirrorAttempts {
+		t.Errorf("%d logged mirror failures, want %d (one per attempt)", n, maxMirrorAttempts)
+	}
+	if n := strings.Count(out, "reading skipped: no MirrorUsagePoint"); n != ticks {
+		t.Errorf("%d skipped-reading log lines over %d ticks, want one per tick", n, ticks)
+	}
+}
+
+// The aggregator's own LFDI as a managed device is refused at start,
+// naming it, before any request leaves.
+func TestStartManaged_RefusesTheAggregatorsOwnLFDI(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, pvLFDI)
+	own := strings.ToLower(client.LFDI())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := startManaged(ctx, client, dcapWithMirrors, "/edev", []simconfig.Managed{
+		managedCfg(t, "pv", pvLFDI, "pv", 3000),
+		managedCfg(t, "self", own, "pv", 3000),
+	}, 0)
+	if err == nil || !strings.Contains(err.Error(), "self") || !strings.Contains(err.Error(), "own LFDI") {
+		t.Fatalf("startManaged = %v, want an error naming self and the aggregator's own LFDI", err)
+	}
+	if fs.mupAttempts != 0 {
+		t.Errorf("%d mirror attempts before the refusal, want 0", fs.mupAttempts)
+	}
+}
+
+// LFDIs are hex, so the server may list them in a different case than the
+// config writes them. The listed check matches either way, and the mirror
+// names the device as configured.
+func TestManagedLFDI_MixedCaseMatchesTheListAndTheMirrorBody(t *testing.T) {
+	const mixed = "AbCdEf0123456789aBcDeF0123456789AbCdEf01"
+	list := sep2.EndDeviceList{EndDevice: []sep2.EndDevice{{LFDI: strings.ToUpper(mixed)}}}
+	if err := missingManaged(list, []simconfig.Managed{{Name: "mx", LFDI: strings.ToLower(mixed)}}); err != nil {
+		t.Errorf("missingManaged on a case difference only: %v", err)
+	}
+	if err := missingManaged(sep2.EndDeviceList{EndDevice: []sep2.EndDevice{{LFDI: strings.ToLower(mixed)}}}, []simconfig.Managed{{Name: "mx", LFDI: mixed}}); err != nil {
+		t.Errorf("missingManaged, list lower and config mixed: %v", err)
+	}
+
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, strings.ToUpper(mixed))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fleet, err := startManaged(ctx, client, dcapWithMirrors, "/edev", []simconfig.Managed{managedCfg(t, "mx", mixed, "pv", 3000)}, 0)
+	if err != nil {
+		t.Fatalf("startManaged with a mixed-case LFDI: %v", err)
+	}
+	fleet.Tick(ctx)
+	if fs.mupLFDI["/mup/1"] != mixed {
+		t.Errorf("mirror body LFDI = %q, want the configured %q", fs.mupLFDI["/mup/1"], mixed)
+	}
+	if n := len(fs.readings["/mup/1"]); n != 1 {
+		t.Errorf("%d readings for the mixed-case device, want 1", n)
+	}
+}
+
+// failingDevice fails the named step and delegates the rest.
+type failingDevice struct {
+	device.DERDevice
+	failRead, failApply bool
+}
+
+func (f failingDevice) ReadState(ctx context.Context) (device.StateReading, error) {
+	if f.failRead {
+		return device.StateReading{}, fmt.Errorf("read down")
+	}
+	return f.DERDevice.ReadState(ctx)
+}
+
+func (f failingDevice) ApplySetpoint(ctx context.Context, c inverter.ControlOutputs) (inverter.InverterState, error) {
+	if f.failApply {
+		return inverter.InverterState{}, fmt.Errorf("apply down")
+	}
+	return f.DERDevice.ApplySetpoint(ctx, c)
+}
+
+// A device whose ReadState or ApplySetpoint fails is logged and skipped;
+// the devices after it still report.
+func TestManagedFleet_AFailingDeviceDoesNotStopTheOthers(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, pvLFDI, batLFDI, strangerLFDI)
+	logs := captureManagedLog(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fleet, err := startManaged(ctx, client, dcapWithMirrors, "/edev", []simconfig.Managed{
+		managedCfg(t, "pv", pvLFDI, "pv", 3000),
+		managedCfg(t, "bat", batLFDI, "battery", 2000),
+		managedCfg(t, "pv2", strangerLFDI, "pv", 1000),
+	}, 0)
+	if err != nil {
+		t.Fatalf("startManaged: %v", err)
+	}
+	fleet.devices[0].dev = failingDevice{DERDevice: fleet.devices[0].dev, failRead: true}
+	fleet.devices[1].dev = failingDevice{DERDevice: fleet.devices[1].dev, failApply: true}
+	fleet.Tick(ctx)
+
+	if n := len(fs.readings["/mup/1"]) + len(fs.readings["/mup/2"]); n != 0 {
+		t.Errorf("%d readings from the two failing devices, want 0", n)
+	}
+	got := fs.readings["/mup/3"]
+	if len(got) != 1 || got[0].Reading == nil || *got[0].Reading.Value != 1000 {
+		t.Errorf("the device after the failures reported %v, want one reading of 1000 W", got)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "pv: ReadState failed") || !strings.Contains(out, "bat: ApplySetpoint failed") {
+		t.Errorf("failures not logged per device: %q", out)
+	}
+}
+
+func TestStartManagedForRole_NoSimConfigIsALoggedState(t *testing.T) {
+	logs := captureManagedLog(t)
+	fleet, err := startManagedForRole(context.Background(), nil, sep2.DeviceCapability{}, "/edev", nil, 0)
+	if err != nil || fleet != nil {
+		t.Fatalf("startManagedForRole(nil) = %v, %v, want nil, nil", fleet, err)
+	}
+	if !strings.Contains(logs.String(), "no managed devices") {
+		t.Errorf("log %q does not say the aggregator runs no managed devices", logs.String())
+	}
+}
+
+func TestStartManagedForRole_StartsTheConfiguredDevices(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, pvLFDI)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fleet, err := startManagedForRole(ctx, client, dcapWithMirrors, "/edev",
+		&simconfig.File{Managed: []simconfig.Managed{managedCfg(t, "pv", pvLFDI, "pv", 3000)}}, 0)
+	if err != nil || fleet == nil || len(fleet.devices) != 1 {
+		t.Fatalf("startManagedForRole = %v, %v, want a fleet of 1", fleet, err)
+	}
+	if fs.mupLFDI["/mup/1"] != pvLFDI {
+		t.Errorf("mirrors = %v, want /mup/1 naming %s", fs.mupLFDI, pvLFDI)
+	}
+}
+
+// main.go must call startManagedForRole and tick the fleet: nothing else
+// starts the aggregator's managed devices, and a test of the helper alone
+// cannot see the call being removed.
+func TestMain_WiresTheManagedFleet(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	var code []string
+	for _, line := range strings.Split(string(src), "\n") {
+		if t := strings.TrimSpace(line); !strings.HasPrefix(t, "//") {
+			code = append(code, t)
+		}
+	}
+	joined := strings.Join(code, "\n")
+	for _, want := range []string{
+		"managed, err = startManagedForRole(ctx, client, dcap, edevListHref, simFile, cfg.ReportInterval)",
+		"managed.Tick(ctx)",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("main.go no longer contains %q", want)
+		}
 	}
 }

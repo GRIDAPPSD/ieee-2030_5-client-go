@@ -183,3 +183,31 @@ func TestManagedTarget_DERRoleRefusesAnotherDevice(t *testing.T) {
 		t.Errorf("server saw %d requests after the self read, want 1", got)
 	}
 }
+
+// The body LFDI and the guard target are one device: a mirror whose body
+// names another device than the context target is refused before any send,
+// and a case difference alone is the same device.
+func TestManagedTarget_MirrorBodyLFDIMustMatchTheTarget(t *testing.T) {
+	env := newCCMTestEnv(t)
+	serverURL, rec := recordingListener(t, env)
+	client := newGuardTestClient(t, serverURL, env, "aggregator")
+	client.SetManagedSet(guard.NewStaticManagedSet(managedLFDI, unmanagedLFDI))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := client.CreateMirrorUsagePoint(inverter.WithTarget(ctx, managedLFDI), "/mup", inverter.DeviceLFDI(unmanagedLFDI), sep2.MirrorUsagePoint{})
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("mismatched mirror: err = %v, want a mismatch refusal", err)
+	}
+	if got := rec.count(); got != 0 {
+		t.Fatalf("server saw %d requests for a mismatched mirror, want 0", got)
+	}
+
+	// Control: the same device in another case is sent.
+	if _, err := client.CreateMirrorUsagePoint(inverter.WithTarget(ctx, managedLFDI), "/mup", inverter.DeviceLFDI(strings.ToLower(managedLFDI)), sep2.MirrorUsagePoint{}); err != nil {
+		t.Fatalf("mirror differing only in case: %v", err)
+	}
+	if got := rec.count(); got != 1 {
+		t.Errorf("server saw %d requests after the matching mirror, want 1", got)
+	}
+}

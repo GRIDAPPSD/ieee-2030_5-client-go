@@ -45,6 +45,9 @@ func (r *Reporter) AsManager() *Reporter {
 // flowDirectionFor gives the flowDirection of an active power reading in
 // the DER sign (positive delivering): 19 (received from customer, export)
 // for output, 1 (delivered to customer, import) for a battery charging.
+// Source: IEEE 2030.5-2018, FlowDirectionType (1 forward, delivered to the
+// customer; 19 reverse, received from the customer) and Table E.2, which
+// gives DER active power (W) flowDirection 19.
 func flowDirectionFor(activeW float64) uint8 {
 	if activeW < 0 {
 		return sep2.FlowDirectionForward
