@@ -934,7 +934,11 @@ func TestManagedControls_WaitControlsWaitsForEverySession(t *testing.T) {
 	waitFor(t, "the PV to start the control", func() bool { return allStarted(fleet) })
 
 	cancel()
-	<-exited
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the session did not run onExit within 5s of the context being cancelled")
+	}
 	done := make(chan struct{})
 	go func() { fleet.WaitControls(); close(done) }()
 	select {
@@ -947,5 +951,22 @@ func TestManagedControls_WaitControlsWaitsForEverySession(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("WaitControls did not return after the session finished")
+	}
+}
+
+// A walk that finds no program waits one interval before looking again, and
+// does not spin against the server.
+func TestManagedControls_NoProgramRewalkWaitsAnInterval(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	srv.setProgMode(progEmpty)
+	_, _, cancel, _ := startControlFleetEvery(t, client, "follow", 100*time.Millisecond)
+	defer cancel()
+
+	waitFor(t, "six program list reads", func() bool { return len(srv.hitTimes("/dp")) >= 6 })
+	ts := srv.hitTimes("/dp")
+	// Two devices share /dp. Whichever hit first reads again at least two
+	// intervals later, so the last of six hits trails the first by that much.
+	if span := ts[len(ts)-1].Sub(ts[0]); span < 190*time.Millisecond {
+		t.Errorf("six re-walks took %v, want at least 190ms for two 100ms intervals", span)
 	}
 }
