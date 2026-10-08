@@ -174,3 +174,56 @@ func TestNewFlowReservationRequestMRID_IsFreshHex128(t *testing.T) {
 		}
 	}
 }
+
+// The withdrawal is a PUT of the request to its own href, as the aggregator's
+// own and whatever target the context carries; the body is the request with
+// its RequestStatus as given.
+func TestFlowReservation_WithdrawalIsPutToTheRequestHrefAsTheAggregatorsOwn(t *testing.T) {
+	env := newCCMTestEnv(t)
+	serverURL, seen := frqListener(t, env)
+	client := newGuardTestClient(t, serverURL, env, "aggregator")
+	client.SetManagedSet(guard.NewStaticManagedSet(managedLFDI))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req := sep2.FlowReservationRequest{
+		MRID:            "REQ1",
+		EnergyRequested: &sep2.SignedRealEnergy{Value: 6000},
+		RequestStatus:   sep2.RequestStatus{DateTime: 1_800_000_000, RequestStatus: sep2.RequestStatusCancelled},
+	}
+	if err := client.PutFlowReservationRequest(inverter.WithTarget(ctx, managedLFDI), "/edev/1/frq/1", req); err != nil {
+		t.Fatalf("PutFlowReservationRequest: %v", err)
+	}
+	bodies := seen.posts["/edev/1/frq/1"]
+	if len(bodies) != 1 {
+		t.Fatalf("%d bodies reached /edev/1/frq/1, want 1", len(bodies))
+	}
+	var got sep2.FlowReservationRequest
+	if err := xml.Unmarshal([]byte(bodies[0]), &got); err != nil {
+		t.Fatalf("body does not decode: %v", err)
+	}
+	if got.MRID != "REQ1" || got.RequestStatus.RequestStatus != sep2.RequestStatusCancelled || got.RequestStatus.DateTime != 1_800_000_000 {
+		t.Errorf("body = mRID %q status %+v, want REQ1 cancelled at 1800000000", got.MRID, got.RequestStatus)
+	}
+}
+
+// The der role has no reservation to withdraw: refused before anything is
+// sent, and an empty href is refused whatever the role.
+func TestFlowReservation_WithdrawalRefusedForDERRoleAndEmptyHref(t *testing.T) {
+	env := newCCMTestEnv(t)
+	serverURL, seen := frqListener(t, env)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	der := newGuardTestClient(t, serverURL, env, "der")
+	if err := der.PutFlowReservationRequest(ctx, "/edev/1/frq/1", sep2.FlowReservationRequest{MRID: "X"}); err == nil {
+		t.Error("der role withdrew a FlowReservationRequest")
+	}
+	agg := newGuardTestClient(t, serverURL, env, "aggregator")
+	if err := agg.PutFlowReservationRequest(ctx, "", sep2.FlowReservationRequest{MRID: "X"}); err == nil {
+		t.Error("an empty href was accepted")
+	}
+	if len(seen.posts) != 0 {
+		t.Errorf("%d writes reached the server, want 0", len(seen.posts))
+	}
+}

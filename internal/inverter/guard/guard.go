@@ -101,6 +101,11 @@ const (
 	// itself, yet must answer the response to its own reservation; and it is
 	// never for another device, since the reservation is the aggregator's.
 	KindFlowReservationResponsePost
+	// KindFlowReservationWithdraw is the PUT that withdraws the
+	// aggregator's own FlowReservationRequest by changing its
+	// RequestStatus. It is never for another device, for the same reason
+	// as KindFlowReservationPost.
+	KindFlowReservationWithdraw
 )
 
 func (k Kind) String() string {
@@ -133,6 +138,8 @@ func (k Kind) String() string {
 		return "FlowReservationPost"
 	case KindFlowReservationResponsePost:
 		return "FlowReservationResponsePost"
+	case KindFlowReservationWithdraw:
+		return "FlowReservationWithdraw"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}
@@ -157,6 +164,7 @@ var kindMethod = map[Kind]string{
 	KindEndDeviceCreate:             http.MethodPost,
 	KindFlowReservationPost:         http.MethodPost,
 	KindFlowReservationResponsePost: http.MethodPost,
+	KindFlowReservationWithdraw:     http.MethodPut,
 	KindEndDeviceDelete:             http.MethodDelete,
 	KindEndDeviceWrite:              http.MethodPut,
 	KindDefaultControlWrite:         http.MethodPut,
@@ -190,6 +198,7 @@ var aggregatorSelfKinds = map[Kind]bool{
 	KindSubscriptionPost:            true,
 	KindFlowReservationPost:         true,
 	KindFlowReservationResponsePost: true,
+	KindFlowReservationWithdraw:     true,
 }
 
 // selfAllowed reports whether role may take kind for its own EndDevice.

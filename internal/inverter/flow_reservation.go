@@ -59,3 +59,16 @@ func (c *SEP2Client) PostFlowReservationResponseResponse(ctx context.Context, re
 	}
 	return c.sendResponse(WithTarget(ctx, ""), replyToHref, resp)
 }
+
+// PutFlowReservationRequest PUTs req to the request's own href, which is how
+// the aggregator withdraws it: the server accepts a body equal to the stored
+// request except for RequestStatus. The caller sets the new RequestStatus.
+func (c *SEP2Client) PutFlowReservationRequest(ctx context.Context, href string, req sep2.FlowReservationRequest) error {
+	if href == "" {
+		return fmt.Errorf("FlowReservationRequest href required")
+	}
+	if _, err := c.Put(WithTarget(ctx, ""), guard.KindFlowReservationWithdraw, href, &req); err != nil {
+		return fmt.Errorf("PUT FlowReservationRequest: %w", err)
+	}
+	return nil
+}
