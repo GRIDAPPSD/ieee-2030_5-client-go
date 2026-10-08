@@ -95,6 +95,12 @@ const (
 	// flow reservation is its own, posted on its own EndDevice. A der
 	// process never posts one (not a manager, no fleet to reserve for).
 	KindFlowReservationPost
+	// KindFlowReservationResponsePost acknowledges a FlowReservationResponse
+	// on the aggregator's own EndDevice. It is a different kind from
+	// KindResponsePost because an aggregator never answers DER events for
+	// itself, yet must answer the response to its own reservation; and it is
+	// never for another device, since the reservation is the aggregator's.
+	KindFlowReservationResponsePost
 )
 
 func (k Kind) String() string {
@@ -125,6 +131,8 @@ func (k Kind) String() string {
 		return "DefaultControlWrite"
 	case KindFlowReservationPost:
 		return "FlowReservationPost"
+	case KindFlowReservationResponsePost:
+		return "FlowReservationResponsePost"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}
@@ -139,18 +147,19 @@ func (k Kind) String() string {
 // outside this table has no entry, so it never matches any method: an
 // unclassified or unrecognized Kind is refused under every verb.
 var kindMethod = map[Kind]string{
-	KindEndDeviceRead:       http.MethodGet,
-	KindRegistrationRead:    http.MethodGet,
-	KindDERResourceWrite:    http.MethodPut,
-	KindLogEventPost:        http.MethodPost,
-	KindSubscriptionPost:    http.MethodPost,
-	KindResponsePost:        http.MethodPost,
-	KindMirrorPost:          http.MethodPost,
-	KindEndDeviceCreate:     http.MethodPost,
-	KindFlowReservationPost: http.MethodPost,
-	KindEndDeviceDelete:     http.MethodDelete,
-	KindEndDeviceWrite:      http.MethodPut,
-	KindDefaultControlWrite: http.MethodPut,
+	KindEndDeviceRead:               http.MethodGet,
+	KindRegistrationRead:            http.MethodGet,
+	KindDERResourceWrite:            http.MethodPut,
+	KindLogEventPost:                http.MethodPost,
+	KindSubscriptionPost:            http.MethodPost,
+	KindResponsePost:                http.MethodPost,
+	KindMirrorPost:                  http.MethodPost,
+	KindEndDeviceCreate:             http.MethodPost,
+	KindFlowReservationPost:         http.MethodPost,
+	KindFlowReservationResponsePost: http.MethodPost,
+	KindEndDeviceDelete:             http.MethodDelete,
+	KindEndDeviceWrite:              http.MethodPut,
+	KindDefaultControlWrite:         http.MethodPut,
 }
 
 // derSelfKinds are the actions a der-role process may take for its own
@@ -175,11 +184,12 @@ var derSelfKinds = map[Kind]bool{
 // never PUTs DER resources or posts mirrors or Responses for itself, and
 // the utility creates its record, so it never POSTs its own EndDevice.
 var aggregatorSelfKinds = map[Kind]bool{
-	KindEndDeviceRead:       true,
-	KindRegistrationRead:    true,
-	KindLogEventPost:        true,
-	KindSubscriptionPost:    true,
-	KindFlowReservationPost: true,
+	KindEndDeviceRead:               true,
+	KindRegistrationRead:            true,
+	KindLogEventPost:                true,
+	KindSubscriptionPost:            true,
+	KindFlowReservationPost:         true,
+	KindFlowReservationResponsePost: true,
 }
 
 // selfAllowed reports whether role may take kind for its own EndDevice.

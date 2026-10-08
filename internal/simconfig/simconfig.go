@@ -20,24 +20,25 @@ import (
 // defaults are the flag defaults and are supplied by the caller, so the two
 // cannot drift.
 const (
-	DefaultRole           = "der"
-	DefaultDeviceType     = "pv"
-	DefaultRatedW         = 10000.0
-	DefaultCapacityWh     = 10000.0
-	DefaultInitialSOC     = 0.5
-	DefaultReplayClock    = "wall"
-	DefaultReplayScale    = 1.0
-	DefaultReportInterval = 60
-	DefaultStatusInterval = 60
-	DefaultResponse       = "follow"
-	DefaultFrqEnergyWh    = 6000.0
-	DefaultFrqPowerW      = 3000.0
-	DefaultFrqStartInS    = 2400
-	DefaultFrqDurationS   = 3600
-	DefaultFrqMinLeadS    = 60
-	DefaultFrqPollS       = 30
-	DefaultDispatchTickS  = 5
-	DefaultFrqRequestFile = "frq-request.json"
+	DefaultRole            = "der"
+	DefaultDeviceType      = "pv"
+	DefaultRatedW          = 10000.0
+	DefaultCapacityWh      = 10000.0
+	DefaultInitialSOC      = 0.5
+	DefaultReplayClock     = "wall"
+	DefaultReplayScale     = 1.0
+	DefaultReportInterval  = 60
+	DefaultStatusInterval  = 60
+	DefaultResponse        = "follow"
+	DefaultFrqEnergyWh     = 6000.0
+	DefaultFrqPowerW       = 3000.0
+	DefaultFrqStartInS     = 2400
+	DefaultFrqDurationS    = 3600
+	DefaultFrqMinLeadS     = 60
+	DefaultFrqPollS        = 30
+	DefaultFrqAnswerGraceS = 60
+	DefaultDispatchTickS   = 5
+	DefaultFrqRequestFile  = "frq-request.json"
 )
 
 var lfdiRE = regexp.MustCompile(`^[0-9A-Fa-f]{40}$`)
@@ -82,20 +83,24 @@ type Managed struct {
 	Controls *Controls `json:"controls"`
 }
 
-// Frq holds the flow-reservation defaults an aggregator reads. Parsed and
-// unused until the reservation issue.
+// Frq holds the flow-reservation defaults an aggregator reads when it
+// posts a request on SIGUSR1; the request file overlays them per request.
 type Frq struct {
-	EnergyWh    float64 `json:"energy_wh"`
-	PowerW      float64 `json:"power_w"`
-	StartInS    int     `json:"start_in_s"`
-	DurationS   int     `json:"duration_s"`
-	MinLeadS    int     `json:"min_lead_s"`
-	PollS       int     `json:"poll_s"`
-	RequestFile string  `json:"request_file"`
+	EnergyWh  float64 `json:"energy_wh"`
+	PowerW    float64 `json:"power_w"`
+	StartInS  int     `json:"start_in_s"`
+	DurationS int     `json:"duration_s"`
+	MinLeadS  int     `json:"min_lead_s"`
+	PollS     int     `json:"poll_s"`
+	// AnswerGraceS is how long after the requested start a first answer may
+	// still be created and count as on time; the server's own deadline
+	// answer is created at the start, and its retries can follow.
+	AnswerGraceS int    `json:"answer_grace_s"`
+	RequestFile  string `json:"request_file"`
 }
 
-// Dispatch holds aggregator dispatch settings. Parsed and unused until the
-// reservation issue.
+// Dispatch holds aggregator dispatch settings: TickS is the shortest step
+// the aggregator's energy accounting assumes between dispatch ticks.
 type Dispatch struct {
 	TickS int `json:"tick_s"`
 }
@@ -347,6 +352,9 @@ func (f *File) applyDefaults(p presence) {
 	if !p.sub("frq").has("poll_s") {
 		f.Frq.PollS = DefaultFrqPollS
 	}
+	if !p.sub("frq").has("answer_grace_s") {
+		f.Frq.AnswerGraceS = DefaultFrqAnswerGraceS
+	}
 	if f.Frq.RequestFile == "" {
 		f.Frq.RequestFile = DefaultFrqRequestFile
 	}
@@ -424,12 +432,15 @@ func (f *File) validate() error {
 	}
 	for name, v := range map[string]int{
 		"report.interval_s": f.Report.IntervalS, "status.interval_s": f.Status.IntervalS,
-		"frq.duration_s": f.Frq.DurationS, "frq.poll_s": f.Frq.PollS,
+		"frq.duration_s": f.Frq.DurationS, "frq.poll_s": f.Frq.PollS, "frq.answer_grace_s": f.Frq.AnswerGraceS,
 		"dispatch.tick_s": f.Dispatch.TickS,
 	} {
 		if v <= 0 {
 			return fmt.Errorf("%s %d must be positive", name, v)
 		}
+	}
+	if f.Frq.AnswerGraceS >= f.Frq.DurationS {
+		return fmt.Errorf("frq.answer_grace_s %d must be below frq.duration_s %d", f.Frq.AnswerGraceS, f.Frq.DurationS)
 	}
 	for name, v := range map[string]float64{"frq.energy_wh": f.Frq.EnergyWh, "frq.power_w": f.Frq.PowerW} {
 		if v <= 0 {

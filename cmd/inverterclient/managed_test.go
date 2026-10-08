@@ -734,3 +734,39 @@ func TestMain_WiresTheManagedFleet(t *testing.T) {
 		t.Errorf("main.go must hold exactly one unconditional managed.Tick(ctx) directly under the aggregator role branch; got %v", tickAt)
 	}
 }
+
+// readFailBattery is a battery whose ReadState can be made to fail.
+type readFailBattery struct {
+	*fakeBattery
+	fail bool
+}
+
+func (b *readFailBattery) ReadState(ctx context.Context) (device.StateReading, error) {
+	if b.fail {
+		return device.StateReading{}, fmt.Errorf("read down")
+	}
+	return b.fakeBattery.ReadState(ctx)
+}
+
+// A battery whose ReadState failed is marked down and given no share of the
+// next grant: the other battery is commanded the whole target.
+func TestFleetTick_ReadFailureMarksTheDeviceDownAndOutOfTheNextSplit(t *testing.T) {
+	clk := &clock{t0}
+	good := &fakeBattery{rated: 6000, soc: 0.5}
+	bad := &readFailBattery{fakeBattery: &fakeBattery{rated: 6000, soc: 0.5}, fail: true}
+	badDev := &managedDevice{name: "bad", lfdi: "bad", kind: "battery", ratedW: 6000, dev: bad}
+	fleet, d := testFleet(clk, batteryDev("good", good), badDev)
+
+	fleet.Tick(context.Background())
+	if !badDev.down {
+		t.Fatal("a failed ReadState did not mark the device down")
+	}
+
+	d.setGrant(grantAt(t0, time.Hour, 6000, 3000))
+	good.commands = nil
+	clk.t = t0.Add(10 * time.Second)
+	fleet.Tick(context.Background())
+	if len(good.commands) != 1 || good.commands[0] != -3000 {
+		t.Errorf("good battery commands %v, want one of -3000 W (the whole target, none to the down device)", good.commands)
+	}
+}

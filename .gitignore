@@ -70,3 +70,4 @@ sim/gridlabd/__pycache__/
 sim/gridlabd/**/__pycache__/
 sim/gridlabd/.pytest_cache/
 *.pyc
+/inverterclient

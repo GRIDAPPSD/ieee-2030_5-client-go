@@ -24,7 +24,7 @@ func TestParseAppliesEveryDefault(t *testing.T) {
 		t.Errorf("replay=%+v report=%d status=%d response=%q", f.Replay, f.Report.IntervalS, f.Status.IntervalS, f.Controls.Response)
 	}
 	q := f.Frq
-	if q.EnergyWh != 6000 || q.PowerW != 3000 || q.StartInS != 2400 || q.DurationS != 3600 || q.MinLeadS != 60 || q.PollS != 30 || q.RequestFile != "frq-request.json" || f.Dispatch.TickS != 5 {
+	if q.EnergyWh != 6000 || q.PowerW != 3000 || q.StartInS != 2400 || q.DurationS != 3600 || q.MinLeadS != 60 || q.PollS != 30 || q.AnswerGraceS != 60 || q.RequestFile != "frq-request.json" || f.Dispatch.TickS != 5 {
 		t.Errorf("frq=%+v dispatch=%+v", q, f.Dispatch)
 	}
 }
@@ -73,6 +73,8 @@ func TestParseRejects(t *testing.T) {
 		{"duplicate lfdi", `{"role":"aggregator","managed":[{"name":"a","lfdi":"` + lfdi + `"},{"name":"b","lfdi":"` + strings.ToUpper(lfdi) + `"}]}`, "twice"},
 		{"managed device type", mgd(`,"device":{"type":"wind"}`), "managed[0].device.type"},
 		{"hmi port range", `{"hmi":{"port":70000}}`, "hmi.port"},
+		{"grace not below duration", `{"frq":{"duration_s":60,"answer_grace_s":60}}`, "answer_grace_s"},
+		{"negative grace", `{"frq":{"answer_grace_s":-1}}`, "answer_grace_s"},
 		{"negative interval", `{"report":{"interval_s":-5}}`, "report.interval_s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -142,6 +144,7 @@ func TestParseExplicitZeroIsRefusedNamingTheKey(t *testing.T) {
 		"frq.power_w":                          `{"frq":{"power_w":0}}`,
 		"frq.duration_s":                       `{"frq":{"duration_s":0}}`,
 		"frq.poll_s":                           `{"frq":{"poll_s":0}}`,
+		"frq.answer_grace_s":                   `{"frq":{"answer_grace_s":0}}`,
 		"dispatch.tick_s":                      `{"dispatch":{"tick_s":0}}`,
 		"managed[0].device.rated_w":            `{"role":"aggregator","managed":[{"name":"b","lfdi":"` + strings.Repeat("a", 40) + `","device":{"rated_w":0}}]}`,
 		"managed[0].replay.scale":              `{"role":"aggregator","managed":[{"name":"b","lfdi":"` + strings.Repeat("a", 40) + `","replay":{"scale":0}}]}`,
