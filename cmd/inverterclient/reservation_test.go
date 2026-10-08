@@ -59,7 +59,7 @@ func (c *clock) now() time.Time { return c.t }
 func testReserver(t *testing.T, f *fakeFrq, clk *clock, cfgMutate func(*simconfig.Frq)) *reserver {
 	t.Helper()
 	cfg := simconfig.Frq{
-		EnergyWh: 6000, PowerW: 3000, StartInS: 2400, DurationS: 3600, MinLeadS: 60, PollS: 30,
+		EnergyWh: 6000, PowerW: 3000, StartInS: 2400, DurationS: 3600, MinLeadS: 60, PollS: 30, AnswerGraceS: 60,
 		RequestFile: filepath.Join(t.TempDir(), "frq-request.json"),
 	}
 	if cfgMutate != nil {
@@ -212,7 +212,7 @@ func TestPoll_FollowsTheAnswer(t *testing.T) {
 	}
 }
 
-func TestPoll_DenialIsTerminalAndDispatchesNothing(t *testing.T) {
+func TestPoll_DenialDispatchesNothingAndIsStillRead(t *testing.T) {
 	f := &fakeFrq{}
 	clk := &clock{t0}
 	r := testReserver(t, f, clk, nil)
@@ -227,27 +227,21 @@ func TestPoll_DenialIsTerminalAndDispatchesNothing(t *testing.T) {
 	gets := f.gets
 	clk.t = t0.Add(time.Hour)
 	r.Poll(context.Background())
-	if f.gets != gets {
-		t.Error("a denied request is still being polled")
+	if f.gets != gets+1 {
+		t.Error("a denied request is not being read, so a revision of the denial would be missed")
 	}
 }
 
-func TestPoll_NoAnswerByTheStartIsNotGrantedAndALateAnswerIsIgnored(t *testing.T) {
+func TestPoll_NoAnswerByTheStartPlusGraceIsNotGranted(t *testing.T) {
 	f := &fakeFrq{}
 	clk := &clock{t0}
 	r := testReserver(t, f, clk, nil)
 	r.Trigger(context.Background())
 
-	clk.t = r.cur.start
+	clk.t = r.cur.start.Add(60 * time.Second)
 	r.Poll(context.Background())
 	if r.cur.kind != answerExpired || r.disp.terms != nil {
 		t.Fatalf("kind %v terms %v, want expired and no grant", r.cur.kind, r.disp.terms)
-	}
-	f.list = listOf(grantFor(r, r.cur.mrid, 6000, 3000))
-	clk.t = r.cur.start.Add(time.Minute)
-	r.Poll(context.Background())
-	if r.cur.kind != answerExpired || r.disp.terms != nil {
-		t.Errorf("a late answer revived an expired request: kind %v terms %v", r.cur.kind, r.disp.terms)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
@@ -110,11 +111,24 @@ func (d *dispatcher) record(achievedChargingW float64) {
 
 // currentRequest is the reservation the aggregator is following.
 type currentRequest struct {
+	requestFacts
 	mrid  string
-	start time.Time
 	kind  answerKind
 	terms grantTerms
+	done  bool            // the window and grace have passed: no more reads
 	acked map[string]bool // response mRIDs already acknowledged as received
+	owed  map[string]bool // response mRIDs that asked for an acknowledgement and have none yet
+	noted map[string]bool // log lines already written once, by key
+}
+
+// note reports whether key is new, and remembers it: a line keyed by a
+// response is written once per response, not once per poll.
+func (c *currentRequest) note(key string) bool {
+	if c.noted[key] {
+		return false
+	}
+	c.noted[key] = true
+	return true
 }
 
 // reserver posts and follows the aggregator's flow reservation.
@@ -161,7 +175,7 @@ func (r *reserver) Trigger(ctx context.Context) {
 	}
 	s := overlay.apply(frqSettings{
 		EnergyWh: r.cfg.EnergyWh, PowerW: r.cfg.PowerW,
-		StartInS: r.cfg.StartInS, DurationS: r.cfg.DurationS, MinLeadS: r.cfg.MinLeadS,
+		StartInS: r.cfg.StartInS, DurationS: r.cfg.DurationS, MinLeadS: r.cfg.MinLeadS, GraceS: r.cfg.AnswerGraceS,
 	})
 	now := r.now()
 	mrid, err := r.newMRID(r.selfLFDI, now)
@@ -184,26 +198,38 @@ func (r *reserver) Trigger(ctx context.Context) {
 	if r.cur != nil {
 		log.Printf("flow reservation: now following request %s instead of %s", mrid, r.cur.mrid)
 	}
-	r.cur = &currentRequest{mrid: mrid, start: requestedStart(req), kind: answerPending, acked: map[string]bool{}}
+	r.cur = &currentRequest{
+		requestFacts: factsOf(req), mrid: mrid, kind: answerPending,
+		acked: map[string]bool{}, owed: map[string]bool{}, noted: map[string]bool{},
+	}
 	r.disp.reset()
 	r.nextPoll = now
 	log.Printf("flow reservation: posted request %s at %s: %.0f Wh at up to %.0f W, start %s, %ds",
 		mrid, loc, s.EnergyWh, s.PowerW, r.cur.start.UTC().Format(time.RFC3339), s.DurationS)
 }
 
+// grace is the time after the requested start within which the first answer
+// counts as on time, and after the requested end the request is followed
+// to.
+func (r *reserver) grace() time.Duration {
+	return time.Duration(r.cfg.AnswerGraceS) * time.Second
+}
+
 // Poll reads the response list when the poll interval has passed and
-// updates the answer. It does nothing with no request or one already
-// denied or expired. A failed read changes nothing: an unreadable list is
-// not read as no answer.
+// updates the answer. No state stops the reads before the end of the
+// request's window plus the grace: a denial, an expiry or a cancellation can
+// each be followed by a newer answer. A failed or truncated read changes
+// nothing: an unreadable list is not read as no answer.
 func (r *reserver) Poll(ctx context.Context) {
-	if r == nil || r.cur == nil {
+	if r == nil || r.cur == nil || r.cur.done {
 		return
 	}
 	c := r.cur
-	if c.kind == answerDenied || c.kind == answerExpired {
+	now := r.now()
+	if !now.Before(c.end.Add(r.grace())) {
+		r.finish(c)
 		return
 	}
-	now := r.now()
 	if now.Before(r.nextPoll) {
 		return
 	}
@@ -216,24 +242,49 @@ func (r *reserver) Poll(ctx context.Context) {
 		log.Printf("flow reservation: reading answers failed, keeping state %q: %v", c.kind, err)
 		return
 	}
-	kind, terms := judge(list, c.mrid, c.start, now)
+	if got := uint32(len(list.FlowReservationResponse)); list.All > got {
+		log.Printf("flow reservation: answer list is truncated (%d of %d entries), keeping state %q", got, list.All, c.kind)
+		return
+	}
+	kind, terms := judge(list, c.mrid, c.requestFacts, r.grace(), now)
 	if kind != c.kind || terms != c.terms {
 		log.Printf("flow reservation: request %s is %s%s", c.mrid, kind, describeTerms(kind, terms))
 	}
+	if terms.Clipped != "" && c.note("clip:"+terms.ResponseMRID) {
+		log.Printf("flow reservation: response %s read against request %s: %s", terms.ResponseMRID, c.mrid, terms.Clipped)
+	}
 	c.kind, c.terms = kind, terms
-	if kind == answerGranted {
+	if kind.dispatches() {
 		t := terms
 		r.disp.setGrant(&t)
 	} else {
 		r.disp.setGrant(nil)
 	}
-	if resp, ok := effectiveResponse(list, c.mrid); ok {
-		r.acknowledge(ctx, c, resp, now)
+	for _, resp := range list.FlowReservationResponse {
+		if resp.Subject == c.mrid {
+			r.acknowledge(ctx, c, resp, now)
+		}
 	}
 }
 
+// finish ends the request: the grant is dropped, reads stop, and any
+// acknowledgement still owed is logged once.
+func (r *reserver) finish(c *currentRequest) {
+	c.done = true
+	r.disp.setGrant(nil)
+	owed := make([]string, 0, len(c.owed))
+	for mrid := range c.owed {
+		owed = append(owed, mrid)
+	}
+	sort.Strings(owed)
+	for _, mrid := range owed {
+		log.Printf("flow reservation: request %s finished; response never acknowledged: %s", c.mrid, mrid)
+	}
+	log.Printf("flow reservation: request %s finished: %s", c.mrid, c.kind)
+}
+
 func describeTerms(kind answerKind, t grantTerms) string {
-	if kind != answerGranted {
+	if !kind.dispatches() {
 		return ""
 	}
 	return fmt.Sprintf(": %.0f Wh at up to %.0f W from %s to %s (response %s)",
@@ -245,15 +296,24 @@ func describeTerms(kind answerKind, t grantTerms) string {
 const responseRequiredReceived = 0x01
 
 // acknowledge tells the server a response was received when the response
-// asks for it, once per response. The acknowledgement's subject is the
-// response's own mRID. A failed post is retried on the next poll.
+// asks for it, once per response, whether it is a grant, a denial, an
+// unusable answer or one already cancelled or superseded. The
+// acknowledgement's subject is the response's own mRID. A failed post is
+// retried on every poll until the request finishes.
 func (r *reserver) acknowledge(ctx context.Context, c *currentRequest, resp sep2.FlowReservationResponse, now time.Time) {
 	if resp.ResponseRequired == nil || uint8(*resp.ResponseRequired)&responseRequiredReceived == 0 {
 		return
 	}
-	if resp.ReplyTo == "" || resp.MRID == "" || c.acked[resp.MRID] {
+	if resp.ReplyTo == "" || resp.MRID == "" {
+		if c.note("noreply:" + resp.MRID) {
+			log.Printf("flow reservation: response %s has no replyTo or no mRID but asks to be acknowledged; nothing posted", resp.MRID)
+		}
 		return
 	}
+	if c.acked[resp.MRID] {
+		return
+	}
+	c.owed[resp.MRID] = true
 	status := sep2.ResponseStatusEventReceived
 	ackCtx, cancel := context.WithTimeout(ctx, ioTimeout)
 	defer cancel()
@@ -270,5 +330,6 @@ func (r *reserver) acknowledge(ctx context.Context, c *currentRequest, resp sep2
 		return
 	}
 	c.acked[resp.MRID] = true
+	delete(c.owed, resp.MRID)
 	log.Printf("flow reservation: acknowledged response %s as received", resp.MRID)
 }

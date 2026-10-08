@@ -79,16 +79,16 @@ func TestConsumeOverlay(t *testing.T) {
 }
 
 func TestOverlayApply_KeepsDefaultsForAbsentFields(t *testing.T) {
-	base := frqSettings{EnergyWh: 6000, PowerW: 3000, StartInS: 2400, DurationS: 3600, MinLeadS: 60}
+	base := frqSettings{EnergyWh: 6000, PowerW: 3000, StartInS: 2400, DurationS: 3600, MinLeadS: 60, GraceS: 60}
 	got := frqOverlay{PowerW: fptr(1000), DurationS: iptr(900)}.apply(base)
-	want := frqSettings{EnergyWh: 6000, PowerW: 1000, StartInS: 2400, DurationS: 900, MinLeadS: 60}
+	want := frqSettings{EnergyWh: 6000, PowerW: 1000, StartInS: 2400, DurationS: 900, MinLeadS: 60, GraceS: 60}
 	if got != want {
 		t.Errorf("apply = %+v, want %+v", got, want)
 	}
 }
 
 func TestBuildFlowRequest_CarriesEnergyPowerIntervalAndMRID(t *testing.T) {
-	s := frqSettings{EnergyWh: 6000, PowerW: 3000, StartInS: 2400, DurationS: 3600, MinLeadS: 60}
+	s := frqSettings{EnergyWh: 6000, PowerW: 3000, StartInS: 2400, DurationS: 3600, MinLeadS: 60, GraceS: 60}
 	req, err := buildFlowRequest(s, t0, "ABCDEF")
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestBuildFlowRequest_CarriesEnergyPowerIntervalAndMRID(t *testing.T) {
 // server sees one direction, not a charge of power against a discharge of
 // energy.
 func TestBuildFlowRequest_DischargeKeepsOneDirection(t *testing.T) {
-	s := frqSettings{EnergyWh: -4000, PowerW: 2000, StartInS: 2400, DurationS: 3600, MinLeadS: 60}
+	s := frqSettings{EnergyWh: -4000, PowerW: 2000, StartInS: 2400, DurationS: 3600, MinLeadS: 60, GraceS: 60}
 	req, err := buildFlowRequest(s, t0, "M")
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestBuildFlowRequest_DischargeKeepsOneDirection(t *testing.T) {
 }
 
 func TestBuildFlowRequest_Refusals(t *testing.T) {
-	ok := frqSettings{EnergyWh: 6000, PowerW: 3000, StartInS: 2400, DurationS: 3600, MinLeadS: 60}
+	ok := frqSettings{EnergyWh: 6000, PowerW: 3000, StartInS: 2400, DurationS: 3600, MinLeadS: 60, GraceS: 60}
 	cases := map[string]func(*frqSettings){
 		"starts exactly at the minimum lead": func(s *frqSettings) { s.StartInS = 60 },
 		"starts sooner than the lead":        func(s *frqSettings) { s.StartInS = 10 },
@@ -136,6 +136,9 @@ func TestBuildFlowRequest_Refusals(t *testing.T) {
 		"zero energy":                        func(s *frqSettings) { s.EnergyWh = 0 },
 		"zero power":                         func(s *frqSettings) { s.PowerW = 0 },
 		"zero duration":                      func(s *frqSettings) { s.DurationS = 0 },
+		"zero grace":                         func(s *frqSettings) { s.GraceS = 0 },
+		"grace not below the duration":       func(s *frqSettings) { s.DurationS = 60 },
+		"start_in_s overflows a Duration":    func(s *frqSettings) { s.StartInS = math.MaxInt64 },
 		"power not exact at int16 scale":     func(s *frqSettings) { s.PowerW = 40001 },
 	}
 	for name, mutate := range cases {
@@ -154,7 +157,7 @@ func TestBuildFlowRequest_Refusals(t *testing.T) {
 }
 
 func TestBuildFlowRequest_LargePowerUsesMultiplier(t *testing.T) {
-	s := frqSettings{EnergyWh: 100000, PowerW: 40000, StartInS: 2400, DurationS: 3600, MinLeadS: 60}
+	s := frqSettings{EnergyWh: 100000, PowerW: 40000, StartInS: 2400, DurationS: 3600, MinLeadS: 60, GraceS: 60}
 	req, err := buildFlowRequest(s, t0, "M")
 	if err != nil {
 		t.Fatal(err)
@@ -216,6 +219,15 @@ func TestEffectiveResponse(t *testing.T) {
 			t.Error("response for another request taken")
 		}
 	})
+	t.Run("of two equal creation times the later in the list wins", func(t *testing.T) {
+		got, ok := effectiveResponse(listOf(
+			resp("FIRST", "REQ", 100, sep2.EventStatusScheduled, iv, 1, 1),
+			resp("SECOND", "REQ", 100, sep2.EventStatusScheduled, iv, 1, 1),
+		), "REQ")
+		if !ok || got.MRID != "SECOND" {
+			t.Fatalf("got %q ok=%v, want SECOND", got.MRID, ok)
+		}
+	})
 	t.Run("a response without an event status is live", func(t *testing.T) {
 		r := resp("X", "REQ", 100, 0, iv, 1, 1)
 		r.EventStatus = nil
@@ -227,34 +239,74 @@ func TestEffectiveResponse(t *testing.T) {
 
 func TestJudge(t *testing.T) {
 	start := t0.Add(2400 * time.Second)
+	rq := requestFacts{start: start, end: start.Add(time.Hour), energyWh: 6000, powerW: 3000}
+	grace := 60 * time.Second
 	iv := &sep2.DateTimeInterval{Start: start.Unix(), Duration: 3600}
-	granted := resp("G", "REQ", 100, sep2.EventStatusScheduled, iv, 6000, 3000)
+	granted := resp("G", "REQ", start.Unix()-100, sep2.EventStatusScheduled, iv, 6000, 3000)
 
-	t.Run("no answer before the start is pending", func(t *testing.T) {
-		if k, _ := judge(listOf(), "REQ", start, start.Add(-time.Second)); k != answerPending {
-			t.Errorf("got %v, want pending", k)
+	t.Run("no answer before the start plus the grace is pending", func(t *testing.T) {
+		for _, now := range []time.Time{start.Add(-time.Second), start, start.Add(grace - time.Second)} {
+			if k, _ := judge(listOf(), "REQ", rq, grace, now); k != answerPending {
+				t.Errorf("at %v from the start: got %v, want pending", now.Sub(start), k)
+			}
 		}
 	})
-	t.Run("no answer at the start is not granted", func(t *testing.T) {
-		if k, _ := judge(listOf(), "REQ", start, start); k != answerExpired {
+	t.Run("no answer at the start plus the grace is not granted", func(t *testing.T) {
+		if k, _ := judge(listOf(), "REQ", rq, grace, start.Add(grace)); k != answerExpired {
 			t.Errorf("got %v, want expired", k)
 		}
-		if k, _ := judge(listOf(), "REQ", start, start.Add(time.Hour)); k != answerExpired {
+		if k, _ := judge(listOf(), "REQ", rq, grace, start.Add(time.Hour)); k != answerExpired {
 			t.Errorf("long after start: got %v, want expired", k)
 		}
 	})
+	t.Run("the first answer is on time up to the grace and late after it", func(t *testing.T) {
+		now := start.Add(10 * time.Minute)
+		for created, want := range map[int64]answerKind{
+			start.Unix() + 60: answerGranted,
+			start.Unix() + 61: answerLate,
+		} {
+			g := granted
+			g.CreationTime = created
+			if k, _ := judge(listOf(g), "REQ", rq, grace, now); k != want {
+				t.Errorf("created %d s after the start: got %v, want %v", created-start.Unix(), k, want)
+			}
+		}
+	})
+	t.Run("a late first answer still carries its terms", func(t *testing.T) {
+		g := granted
+		g.CreationTime = start.Unix() + 500
+		k, terms := judge(listOf(g), "REQ", rq, grace, start.Add(10*time.Minute))
+		if k != answerLate || terms.EnergyWh != 6000 || terms.PowerW != 3000 || terms.ResponseMRID != "G" {
+			t.Errorf("got %v %+v, want late with the 6000 Wh 3000 W terms", k, terms)
+		}
+	})
+	t.Run("a revision of an on-time chain is followed even when created after the grace", func(t *testing.T) {
+		rev := resp("G2", "REQ", start.Unix()+900, sep2.EventStatusScheduled, iv, 2000, 1000)
+		k, terms := judge(listOf(granted, rev), "REQ", rq, grace, start.Add(time.Hour/2))
+		if k != answerGranted || terms.ResponseMRID != "G2" || terms.EnergyWh != 2000 {
+			t.Errorf("got %v %+v, want granted under the revision", k, terms)
+		}
+	})
+	t.Run("an on-time chain with every answer cancelled is revoked", func(t *testing.T) {
+		g := granted
+		g.EventStatus = &sep2.EventStatus{CurrentStatus: sep2.EventStatusCancelled}
+		k, terms := judge(listOf(g), "REQ", rq, grace, start.Add(time.Minute))
+		if k != answerRevoked || terms != (grantTerms{}) {
+			t.Errorf("got %v %+v, want revoked with no terms", k, terms)
+		}
+	})
 	t.Run("zero duration is a denial", func(t *testing.T) {
-		d := resp("D", "REQ", 100, sep2.EventStatusScheduled, &sep2.DateTimeInterval{Start: start.Unix(), Duration: 0}, 0, 0)
-		if k, _ := judge(listOf(d), "REQ", start, t0); k != answerDenied {
+		d := resp("D", "REQ", start.Unix()-100, sep2.EventStatusScheduled, &sep2.DateTimeInterval{Start: start.Unix(), Duration: 0}, 0, 0)
+		if k, _ := judge(listOf(d), "REQ", rq, grace, t0); k != answerDenied {
 			t.Errorf("got %v, want denied", k)
 		}
 	})
 	t.Run("a grant carries its interval, energy and power", func(t *testing.T) {
-		k, g := judge(listOf(granted), "REQ", start, t0)
+		k, g := judge(listOf(granted), "REQ", rq, grace, t0)
 		if k != answerGranted {
 			t.Fatalf("got %v, want granted", k)
 		}
-		if g.EnergyWh != 6000 || g.PowerW != 3000 || !g.Start.Equal(start) || !g.End.Equal(start.Add(time.Hour)) || g.ResponseMRID != "G" {
+		if g.EnergyWh != 6000 || g.PowerW != 3000 || !g.Start.Equal(start) || !g.End.Equal(start.Add(time.Hour)) || g.ResponseMRID != "G" || g.Clipped != "" {
 			t.Errorf("terms = %+v", g)
 		}
 	})
@@ -262,33 +314,65 @@ func TestJudge(t *testing.T) {
 		r := granted
 		r.EnergyAvailable = &sep2.SignedRealEnergy{Multiplier: 3, Value: 6}
 		r.PowerAvailable = &sep2.ActivePower{Multiplier: 1, Value: -300}
-		_, g := judge(listOf(r), "REQ", start, t0)
+		_, g := judge(listOf(r), "REQ", rq, grace, t0)
 		if g.EnergyWh != 6000 || g.PowerW != 3000 {
 			t.Errorf("energy %v power %v, want 6000 and 3000 (a negative power is a magnitude)", g.EnergyWh, g.PowerW)
 		}
 	})
-	t.Run("a discharge grant keeps a negative energy", func(t *testing.T) {
+	t.Run("the direction is the request's, not the grant's", func(t *testing.T) {
+		dis := requestFacts{start: start, end: start.Add(time.Hour), energyWh: -3000, powerW: 3000}
+		for _, wh := range []int64{3000, -3000} {
+			r := granted
+			r.EnergyAvailable = &sep2.SignedRealEnergy{Value: wh}
+			r.PowerAvailable = &sep2.ActivePower{Value: int16(wh)}
+			_, g := judge(listOf(r), "REQ", dis, grace, t0)
+			if g.EnergyWh != -3000 {
+				t.Errorf("granted %+d Wh to a discharge request: dispatched %v Wh, want -3000", wh, g.EnergyWh)
+			}
+			if (wh > 0) != (g.Clipped != "") {
+				t.Errorf("granted %+d Wh: clipped note %q, want one exactly when the sign differs", wh, g.Clipped)
+			}
+		}
+	})
+	t.Run("magnitudes are clipped to the request", func(t *testing.T) {
 		r := granted
-		r.EnergyAvailable = &sep2.SignedRealEnergy{Value: -2500}
-		_, g := judge(listOf(r), "REQ", start, t0)
-		if g.EnergyWh != -2500 {
-			t.Errorf("energy = %v, want -2500", g.EnergyWh)
+		r.EnergyAvailable = &sep2.SignedRealEnergy{Value: 9000}
+		r.PowerAvailable = &sep2.ActivePower{Value: 5000}
+		_, g := judge(listOf(r), "REQ", rq, grace, t0)
+		if g.EnergyWh != 6000 || g.PowerW != 3000 || g.Clipped == "" {
+			t.Errorf("terms = %+v, want 6000 Wh 3000 W and a clipped note", g)
 		}
 	})
 	t.Run("an answer missing its terms is unusable", func(t *testing.T) {
 		for name, mutate := range map[string]func(*sep2.FlowReservationResponse){
-			"no interval": func(r *sep2.FlowReservationResponse) { r.Interval = nil },
-			"no energy":   func(r *sep2.FlowReservationResponse) { r.EnergyAvailable = nil },
-			"no power":    func(r *sep2.FlowReservationResponse) { r.PowerAvailable = nil },
-			"zero energy": func(r *sep2.FlowReservationResponse) { r.EnergyAvailable = &sep2.SignedRealEnergy{} },
+			"no interval":         func(r *sep2.FlowReservationResponse) { r.Interval = nil },
+			"no energy":           func(r *sep2.FlowReservationResponse) { r.EnergyAvailable = nil },
+			"no power":            func(r *sep2.FlowReservationResponse) { r.PowerAvailable = nil },
+			"zero energy":         func(r *sep2.FlowReservationResponse) { r.EnergyAvailable = &sep2.SignedRealEnergy{} },
+			"explicit zero power": func(r *sep2.FlowReservationResponse) { r.PowerAvailable = &sep2.ActivePower{} },
 		} {
 			r := granted
 			mutate(&r)
-			if k, _ := judge(listOf(r), "REQ", start, t0); k != answerInvalid {
+			if k, _ := judge(listOf(r), "REQ", rq, grace, t0); k != answerInvalid {
 				t.Errorf("%s: got %v, want unusable", name, k)
 			}
 		}
 	})
+}
+
+// firstAnswer is the smallest creationTime of any status, the earlier of two
+// equal times.
+func TestFirstAnswer(t *testing.T) {
+	iv := &sep2.DateTimeInterval{Start: t0.Unix(), Duration: 3600}
+	got, ok := firstAnswer(listOf(
+		resp("B", "REQ", 200, sep2.EventStatusCancelled, iv, 1, 1),
+		resp("A", "REQ", 100, sep2.EventStatusScheduled, iv, 1, 1),
+		resp("A2", "REQ", 100, sep2.EventStatusScheduled, iv, 1, 1),
+		resp("X", "OTHER", 1, sep2.EventStatusScheduled, iv, 1, 1),
+	), "REQ")
+	if !ok || got.MRID != "A" {
+		t.Errorf("got %q ok=%v, want A", got.MRID, ok)
+	}
 }
 
 func TestFleetTargetW(t *testing.T) {

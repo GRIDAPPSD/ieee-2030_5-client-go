@@ -19,6 +19,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
@@ -41,6 +42,7 @@ type frqSettings struct {
 	StartInS  int
 	DurationS int
 	MinLeadS  int
+	GraceS    int
 }
 
 // frqOverlay is the request file the reserve script writes: only the
@@ -128,6 +130,10 @@ func activePower(w float64) (sep2.ActivePower, error) {
 	return sep2.ActivePower{Multiplier: mult, Value: int16(n)}, nil
 }
 
+// maxStartInS bounds start_in_s so that StartInS seconds fits a
+// time.Duration with room to spare (about 68 years).
+const maxStartInS = 1<<31 - 1
+
 // buildFlowRequest validates s and builds the FlowReservationRequest it
 // describes, starting StartInS after now and carrying mrid. A request that
 // would start no later than MinLeadS from now is refused: the server holds
@@ -141,6 +147,10 @@ func buildFlowRequest(s frqSettings, now time.Time, mrid string) (sep2.FlowReser
 		return sep2.FlowReservationRequest{}, errors.New("power_w must be positive")
 	case s.DurationS <= 0 || int64(s.DurationS) > math.MaxUint32:
 		return sep2.FlowReservationRequest{}, fmt.Errorf("duration_s %d must be between 1 and %d", s.DurationS, uint32(math.MaxUint32))
+	case s.GraceS <= 0 || s.GraceS >= s.DurationS:
+		return sep2.FlowReservationRequest{}, fmt.Errorf("answer_grace_s %d must be positive and below duration_s %d", s.GraceS, s.DurationS)
+	case s.StartInS > maxStartInS:
+		return sep2.FlowReservationRequest{}, fmt.Errorf("start_in_s %d is above the limit of %d", s.StartInS, maxStartInS)
 	case s.StartInS <= s.MinLeadS:
 		return sep2.FlowReservationRequest{}, fmt.Errorf("start_in_s %d is not later than min_lead_s %d: the request would start too soon", s.StartInS, s.MinLeadS)
 	}
@@ -173,17 +183,29 @@ func buildFlowRequest(s frqSettings, now time.Time, mrid string) (sep2.FlowReser
 type answerKind int
 
 const (
-	// answerPending: no answer yet and the requested start has not come.
+	// answerPending: no answer yet and the requested start plus the grace
+	// has not come.
 	answerPending answerKind = iota
-	// answerGranted: an answer with an interval, energy and power.
+	// answerGranted: the first answer was created in time and the live
+	// answer is a usable grant.
 	answerGranted
-	// answerDenied: an answer whose interval has zero duration.
+	// answerDenied: the live answer's interval has zero duration.
 	answerDenied
-	// answerExpired: the requested start came with no answer. Terminal.
+	// answerExpired: no answer by the requested start plus the grace. Read
+	// again until the request is done, since an answer created in time may
+	// still show up.
 	answerExpired
-	// answerInvalid: an answer that cannot be executed (no interval, energy
-	// or power, or zero energy). Nothing is dispatched under it.
+	// answerInvalid: the live answer cannot be executed (no interval,
+	// energy or power, zero energy or power, or an interval outside the
+	// requested window). Nothing is dispatched under it.
 	answerInvalid
+	// answerLate: the first answer was created after the requested start
+	// plus the grace and the live answer is a usable grant. It is acted on
+	// from now to the end of its window (IEEE 2030.5-2018 10.2.3.3 m).
+	answerLate
+	// answerRevoked: the first answer was created in time but every answer
+	// since is cancelled or superseded. Nothing is dispatched.
+	answerRevoked
 )
 
 func (k answerKind) String() string {
@@ -195,11 +217,20 @@ func (k answerKind) String() string {
 	case answerDenied:
 		return "denied"
 	case answerExpired:
-		return "not granted (expired at the requested start)"
+		return "not granted (no answer within the grace after the requested start)"
 	case answerInvalid:
 		return "unusable answer"
+	case answerLate:
+		return "granted late (first answer created after the grace)"
+	case answerRevoked:
+		return "revoked (every answer is cancelled or superseded)"
 	}
 	return fmt.Sprintf("answerKind(%d)", int(k))
+}
+
+// dispatches reports whether a request in this state is dispatched.
+func (k answerKind) dispatches() bool {
+	return k == answerGranted || k == answerLate
 }
 
 // grantTerms is a grant in the request's convention: EnergyWh and PowerW
@@ -210,14 +241,41 @@ type grantTerms struct {
 	Start, End   time.Time
 	EnergyWh     float64
 	PowerW       float64
+	// Clipped lists how the response differed from the request, empty when
+	// it did not. It is logged once per response.
+	Clipped string
 }
 
-// requestedStart is the start the request asked for.
-func requestedStart(req sep2.FlowReservationRequest) time.Time {
-	if req.IntervalRequested == nil {
-		return time.Time{}
+// requestFacts is what the answer is read against: the requested window,
+// the energy in the charging-positive convention and the power magnitude.
+type requestFacts struct {
+	start, end time.Time
+	energyWh   float64
+	powerW     float64
+}
+
+// factsOf reads the facts back from the request as it was built.
+func factsOf(req sep2.FlowReservationRequest) requestFacts {
+	var f requestFacts
+	if iv := req.IntervalRequested; iv != nil {
+		f.start = time.Unix(iv.Start, 0)
+		f.end = f.start.Add(time.Duration(iv.Duration) * time.Second)
 	}
-	return time.Unix(req.IntervalRequested.Start, 0)
+	if req.EnergyRequested != nil {
+		f.energyWh = scaled(req.EnergyRequested.Value, req.EnergyRequested.Multiplier)
+	}
+	if req.PowerRequested != nil {
+		f.powerW = math.Abs(scaled(int64(req.PowerRequested.Value), req.PowerRequested.Multiplier))
+	}
+	return f
+}
+
+// direction is +1 for a charge request and -1 for a discharge request.
+func (f requestFacts) direction() float64 {
+	if f.energyWh < 0 {
+		return -1
+	}
+	return 1
 }
 
 // effectiveResponse is the newest response for subject that is not
@@ -246,17 +304,39 @@ func scaled(value int64, multiplier int8) float64 {
 	return float64(value) * math.Pow10(int(multiplier))
 }
 
-// judge classifies the request whose mRID is subject and whose requested
-// start is reqStart, against the response list read at now. It must be
-// given a list from a read that succeeded: an unreadable list is not an
-// empty one and is not judged.
-func judge(list sep2.FlowReservationResponseList, subject string, reqStart, now time.Time) (answerKind, grantTerms) {
+// firstAnswer is the response for subject with the smallest creationTime,
+// whatever its status; of two equal creation times the earlier in the list.
+func firstAnswer(list sep2.FlowReservationResponseList, subject string) (resp sep2.FlowReservationResponse, ok bool) {
+	for _, r := range list.FlowReservationResponse {
+		if r.Subject == subject && (!ok || r.CreationTime < resp.CreationTime) {
+			resp, ok = r, true
+		}
+	}
+	return resp, ok
+}
+
+// judge classifies the request whose mRID is subject and whose facts are rq,
+// against the response list read at now, with the grace after the requested
+// start within which the first answer counts as on time. It must be given a
+// complete list from a read that succeeded: an unreadable or truncated list
+// is not an empty one and is not judged.
+//
+// The time test applies once, to the first answer: a revision is a change to
+// an answer that came in time, so every later member of an on-time chain is
+// followed. Direction always comes from the request; the grant supplies
+// magnitudes, clipped to what was asked.
+func judge(list sep2.FlowReservationResponseList, subject string, rq requestFacts, grace time.Duration, now time.Time) (answerKind, grantTerms) {
+	first, found := firstAnswer(list, subject)
+	if !found {
+		if now.Before(rq.start.Add(grace)) {
+			return answerPending, grantTerms{}
+		}
+		return answerExpired, grantTerms{}
+	}
+	late := time.Unix(first.CreationTime, 0).After(rq.start.Add(grace))
 	resp, ok := effectiveResponse(list, subject)
 	if !ok {
-		if !now.Before(reqStart) {
-			return answerExpired, grantTerms{}
-		}
-		return answerPending, grantTerms{}
+		return answerRevoked, grantTerms{}
 	}
 	if resp.Interval != nil && resp.Interval.Duration == 0 {
 		return answerDenied, grantTerms{ResponseMRID: resp.MRID}
@@ -264,17 +344,67 @@ func judge(list sep2.FlowReservationResponseList, subject string, reqStart, now 
 	if resp.Interval == nil || resp.EnergyAvailable == nil || resp.PowerAvailable == nil {
 		return answerInvalid, grantTerms{ResponseMRID: resp.MRID}
 	}
-	t := grantTerms{
-		ResponseMRID: resp.MRID,
-		Start:        time.Unix(resp.Interval.Start, 0),
-		End:          time.Unix(resp.Interval.Start, 0).Add(time.Duration(resp.Interval.Duration) * time.Second),
-		EnergyWh:     scaled(resp.EnergyAvailable.Value, resp.EnergyAvailable.Multiplier),
-		PowerW:       math.Abs(scaled(int64(resp.PowerAvailable.Value), resp.PowerAvailable.Multiplier)),
-	}
-	if t.EnergyWh == 0 || t.PowerW == 0 {
+	t, ok := readGrant(resp, rq)
+	if !ok {
 		return answerInvalid, grantTerms{ResponseMRID: resp.MRID}
 	}
+	if late {
+		return answerLate, t
+	}
 	return answerGranted, t
+}
+
+// readGrant turns a response that carries an interval, energy and power
+// into terms read against the request: direction from the request,
+// magnitudes and interval clipped to what was asked. ok is false when
+// nothing usable is left: no overlap with the requested window, or zero
+// energy or power.
+func readGrant(resp sep2.FlowReservationResponse, rq requestFacts) (grantTerms, bool) {
+	dir := rq.direction()
+	gs := time.Unix(resp.Interval.Start, 0)
+	ge := gs.Add(time.Duration(resp.Interval.Duration) * time.Second)
+	start, end := gs, ge
+	if start.Before(rq.start) {
+		start = rq.start
+	}
+	if end.After(rq.end) {
+		end = rq.end
+	}
+	grantedWh := scaled(resp.EnergyAvailable.Value, resp.EnergyAvailable.Multiplier)
+	grantedW := scaled(int64(resp.PowerAvailable.Value), resp.PowerAvailable.Multiplier)
+	wh, w := math.Abs(grantedWh), math.Abs(grantedW)
+	if wh == 0 || w == 0 || !end.After(start) {
+		return grantTerms{}, false
+	}
+	var notes []string
+	if grantedWh*dir < 0 {
+		notes = append(notes, fmt.Sprintf("energy sign differs from the request: asked %+.0f Wh, granted %+.0f Wh, dispatched in the request's direction", rq.energyWh, grantedWh))
+	}
+	if grantedW*dir < 0 {
+		notes = append(notes, fmt.Sprintf("power sign differs from the request: asked %.0f W in the direction of the energy, granted %+.0f W", rq.powerW, grantedW))
+	}
+	if limit := math.Abs(rq.energyWh); wh > limit {
+		notes = append(notes, fmt.Sprintf("energy %.0f Wh above the requested %.0f Wh, clipped", wh, limit))
+		wh = limit
+	}
+	if w > rq.powerW {
+		notes = append(notes, fmt.Sprintf("power %.0f W above the requested %.0f W, clipped", w, rq.powerW))
+		w = rq.powerW
+	}
+	if !start.Equal(gs) || !end.Equal(ge) {
+		notes = append(notes, fmt.Sprintf("interval %s to %s outside the requested window, clipped", gs.UTC().Format(time.RFC3339), ge.UTC().Format(time.RFC3339)))
+	}
+	if wh == 0 || w == 0 {
+		return grantTerms{}, false
+	}
+	return grantTerms{
+		ResponseMRID: resp.MRID,
+		Start:        start,
+		End:          end,
+		EnergyWh:     dir * wh,
+		PowerW:       w,
+		Clipped:      strings.Join(notes, "; "),
+	}, true
 }
 
 // fleetTargetW is the fleet's target power for the next step, charging
