@@ -250,6 +250,9 @@ func TestNewReplayRejectsMalformedFileNamingTheLine(t *testing.T) {
 	}{
 		{"non-numeric value", mutate(20, "2020-01-01 00:11:00 UTC,abc"), []string{"line 20", "abc"}},
 		{"NaN value", mutate(20, "2020-01-01 00:11:00 UTC,NaN"), []string{"line 20"}},
+		{"Inf value", mutate(20, "2020-01-01 00:11:00 UTC,Inf"), []string{"line 20", "Inf"}},
+		{"negative Inf value", mutate(20, "2020-01-01 00:11:00 UTC,-Inf"), []string{"line 20"}},
+		{"PST timestamp", mutate(20, "2020-01-01 00:11:00 PST,5"), []string{"line 20", "PST", "UTC"}},
 		{"bad timestamp", mutate(30, "not-a-time,5"), []string{"line 30"}},
 		{"no comma", mutate(40, "2020-01-01 00:31:00 UTC"), []string{"line 40"}},
 		{"duplicate minute", mutate(50, "2020-01-01 00:00:00 UTC,5"), []string{"line 50", "00:00"}},
@@ -288,5 +291,80 @@ func TestNewSelectsReplayAndRejectsBadSettings(t *testing.T) {
 	cfg.Replay.File = ""
 	if _, err := New(cfg, inverter.Scenario{}); err == nil {
 		t.Error("New(replay) with no file succeeded")
+	}
+}
+
+func TestNewReplayRefusesBadSettings(t *testing.T) {
+	t.Parallel()
+	f := writeRecording(t, recordingRows(func(int) float64 { return 1 }))
+	pv := ReplayConfig{File: f, Type: "pv", Clock: "wall", Scale: 1, RatedW: 1000}
+	bat := batteryCfg(f, 0.5)
+	for _, tc := range []struct {
+		name string
+		cfg  ReplayConfig
+		edit func(*ReplayConfig)
+		want string
+	}{
+		{"negative scale", pv, func(c *ReplayConfig) { c.Scale = -1 }, "scale"},
+		{"NaN scale", pv, func(c *ReplayConfig) { c.Scale = math.NaN() }, "scale"},
+		{"Inf scale", pv, func(c *ReplayConfig) { c.Scale = math.Inf(1) }, "scale"},
+		{"zero rating", pv, func(c *ReplayConfig) { c.RatedW = 0 }, "rated power"},
+		{"negative rating", pv, func(c *ReplayConfig) { c.RatedW = -5 }, "rated power"},
+		{"bad type", pv, func(c *ReplayConfig) { c.Type = "wind" }, "wind"},
+		{"bad clock", pv, func(c *ReplayConfig) { c.Clock = "sundial" }, "sundial"},
+		{"battery zero capacity", bat, func(c *ReplayConfig) { c.CapacityWh = 0 }, "capacity"},
+		{"battery SOC above 1", bat, func(c *ReplayConfig) { c.InitialSOC = 1.1 }, "state of charge"},
+		{"battery SOC below 0", bat, func(c *ReplayConfig) { c.InitialSOC = -0.1 }, "state of charge"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := tc.cfg
+			tc.edit(&cfg)
+			_, err := NewReplay(cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want one containing %q", err, tc.want)
+			}
+		})
+	}
+	if _, err := NewReplay(pv); err != nil {
+		t.Fatalf("the unedited PV config was refused: %v", err)
+	}
+	if _, err := NewReplay(bat); err != nil {
+		t.Fatalf("the unedited battery config was refused: %v", err)
+	}
+}
+
+// Charging must raise the state of charge and stop at full. The battery
+// starts below full, so the stop comes from integration reaching 1, not
+// from an initial_soc of 1.
+func TestReplayBatteryChargesUpToFullAndThenStops(t *testing.T) {
+	t.Parallel()
+	f := writeRecording(t, recordingRows(func(int) float64 { return 0 }))
+	ctx := context.Background()
+	c := &clock{at(12, 0)}
+	// 10 kWh at 80 percent: 2 kWh of room. Charging 4 kW fills it in 30 min.
+	r := newReplayAt(t, batteryCfg(f, 0.8), c)
+	_, _ = r.ReadState(ctx)
+	if st, _ := r.ApplySetpoint(ctx, pvControls(-4000)); st.ActivePowerW != -4000 {
+		t.Fatalf("first charging output = %v, want -4000", st.ActivePowerW)
+	}
+	c.t = at(12, 15)
+	st, _ := r.ApplySetpoint(ctx, pvControls(-4000))
+	if want := 0.9; math.Abs(r.SOC()-want) > 1e-9 {
+		t.Fatalf("SOC after 15 min at -4 kW = %v, want %v (charging must raise it)", r.SOC(), want)
+	}
+	if st.ActivePowerW != -4000 {
+		t.Fatalf("output with room left = %v, want -4000", st.ActivePowerW)
+	}
+	c.t = at(13, 0)
+	st, _ = r.ApplySetpoint(ctx, pvControls(-4000))
+	if r.SOC() != 1 {
+		t.Fatalf("SOC after charging past full = %v, want clamped to 1", r.SOC())
+	}
+	if st.ActivePowerW != 0 {
+		t.Fatalf("output once full = %v, want 0 W", st.ActivePowerW)
+	}
+	if st, _ = r.ApplySetpoint(ctx, pvControls(3000)); st.ActivePowerW != 3000 {
+		t.Fatalf("discharge from full = %v, want 3000", st.ActivePowerW)
 	}
 }

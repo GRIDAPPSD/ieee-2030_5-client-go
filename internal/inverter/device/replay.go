@@ -123,6 +123,13 @@ func (r *Replay) load() error {
 		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
 			return fmt.Errorf("replay file %s line %d: bad value %q", r.cfg.File, n, line[i+1:])
 		}
+		// Wall mode reads UTC minutes, so a row stamped in another zone
+		// would replay shifted. time.Parse also gives an unknown
+		// abbreviation a zero offset, so a zone cannot be converted
+		// reliably: refuse it.
+		if zone, _ := ts.Zone(); zone != "UTC" {
+			return fmt.Errorf("replay file %s line %d: timestamp %q is in zone %q, want UTC", r.cfg.File, n, line[:i], zone)
+		}
 		m := ts.Hour()*60 + ts.Minute()
 		if seen[m] {
 			return fmt.Errorf("replay file %s line %d: minute %02d:%02d appears twice", r.cfg.File, n, m/60, m%60)
