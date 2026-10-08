@@ -1010,6 +1010,7 @@ func main() {
 		// that device. Without a sim config there are no managed devices,
 		// which startManagedForRole logs.
 		managed = startManagedOrExit(ctx, client, dcap, edevListHref, simFile, cfg.ReportInterval, fatalf)
+		managed.StartControls(ctx, controlsEnv{client: client, dcap: dcap, cfg: cfg})
 		reservations = startReservations(client, edev, simFile, managed)
 	} else {
 		reporter = runPhase4Metering(ctx, client, dcap, derStatusHref)
@@ -1068,6 +1069,7 @@ func main() {
 		select {
 		case <-ctx.Done():
 			log.Println("Shutting down...")
+			managed.WaitControls()
 			return // deferred shutdown() runs steps 2 to 4 (Decision 4)
 		case <-reserveSig:
 			if reservations == nil {
