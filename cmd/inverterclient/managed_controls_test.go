@@ -9,16 +9,21 @@ package main
 import (
 	"context"
 	"encoding/xml"
+	"fmt"
 	"io"
+	"log"
 	"math/rand/v2"
 	"net/http"
+	"os"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/device"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/simconfig"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
@@ -31,6 +36,31 @@ type controlsServer struct {
 	mu        sync.Mutex
 	responses []sep2.DERControlResponse
 	hits      map[string]int
+
+	// failFSA lists the devices whose FSA list answers 503; failDefault
+	// makes the DefaultDERControl answer 503; defaultW is the target the
+	// default control asks for.
+	failFSA     map[string]bool
+	failDefault bool
+	defaultW    int
+}
+
+func (s *controlsServer) setFailFSA(lfdi string, fail bool) {
+	s.mu.Lock()
+	s.failFSA[lfdi] = fail
+	s.mu.Unlock()
+}
+
+func (s *controlsServer) setDefault(fail bool, w int) {
+	s.mu.Lock()
+	s.failDefault, s.defaultW = fail, w
+	s.mu.Unlock()
+}
+
+func (s *controlsServer) hitsOf(path string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hits[path]
 }
 
 func (s *controlsServer) hit(path string) {
@@ -70,8 +100,15 @@ func (s *controlsServer) statusesFor(lfdi, subject string) []int {
 // Response on receipt, start and completion.
 func newControlsFixture(t *testing.T, startOffset time.Duration, durationS uint32, lfdis ...string) (*inverter.SEP2Client, *controlsServer) {
 	t.Helper()
+	return newControlsFixtureWith(t, false, startOffset, durationS, lfdis...)
+}
+
+// newControlsFixtureWith is newControlsFixture, and with withDefault the
+// program also links a DefaultDERControl served at /dc.
+func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Duration, durationS uint32, lfdis ...string) (*inverter.SEP2Client, *controlsServer) {
+	t.Helper()
 	env := newDERWalkTestEnv(t)
-	srv := &controlsServer{hits: map[string]int{}}
+	srv := &controlsServer{hits: map[string]int{}, failFSA: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/edev", func(w http.ResponseWriter, _ *http.Request) {
 		var list sep2.EndDeviceList
@@ -83,6 +120,13 @@ func newControlsFixture(t *testing.T, startOffset time.Duration, durationS uint3
 	for _, l := range lfdis {
 		mux.HandleFunc("/fsa/"+l, func(w http.ResponseWriter, _ *http.Request) {
 			srv.hit("/fsa/" + l)
+			srv.mu.Lock()
+			fail := srv.failFSA[l]
+			srv.mu.Unlock()
+			if fail {
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
 			writeSepXML(t, w, sep2.FunctionSetAssignmentsList{
 				ListResource: sep2.ListResource{All: 1, Results: 1},
 				FunctionSetAssignments: []sep2.FunctionSetAssignments{
@@ -93,10 +137,27 @@ func newControlsFixture(t *testing.T, startOffset time.Duration, durationS uint3
 	}
 	mux.HandleFunc("/dp", func(w http.ResponseWriter, _ *http.Request) {
 		srv.hit("/dp")
+		prog := sep2.DERProgram{MRID: "PROG1", Primacy: 1, DERControlListLink: &sep2.ListLink{Href: "/derc"}}
+		if withDefault {
+			prog.DefaultDERControlLink = &sep2.Link{Href: "/dc"}
+		}
 		writeSepXML(t, w, sep2.DERProgramList{
 			ListResource: sep2.ListResource{All: 1, Results: 1},
-			DERProgram:   []sep2.DERProgram{{MRID: "PROG1", Primacy: 1, DERControlListLink: &sep2.ListLink{Href: "/derc"}}},
+			DERProgram:   []sep2.DERProgram{prog},
 		})
+	})
+	mux.HandleFunc("/dc", func(w http.ResponseWriter, _ *http.Request) {
+		srv.hit("/dc")
+		srv.mu.Lock()
+		fail, wv := srv.failDefault, srv.defaultW
+		srv.mu.Unlock()
+		if fail {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		var ddc sep2.DefaultDERControl
+		ddc.DERControlBase = &sep2.DERControlBase{OpModTargetW: &sep2.ActivePower{Value: int16(wv)}}
+		writeSepXML(t, w, ddc)
 	})
 	mux.HandleFunc("/derc", func(w http.ResponseWriter, _ *http.Request) {
 		srv.hit("/derc")
@@ -157,9 +218,40 @@ func (p *probeDevice) achievedW() float64 {
 	return p.last.ActivePowerW
 }
 
+// recordingSet is the guard's managed set, counting how often each device
+// was judged as a request target. A request with no target is the client's
+// own and is never counted.
+type recordingSet struct {
+	inner guard.ManagedSet
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func (r *recordingSet) IsManaged(lfdi string) bool {
+	r.mu.Lock()
+	r.calls[strings.ToUpper(lfdi)]++
+	r.mu.Unlock()
+	return r.inner.IsManaged(lfdi)
+}
+
+func (r *recordingSet) judged(lfdi string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls[strings.ToUpper(lfdi)]
+}
+
 // startControlFleet starts a PV and a battery under mode, with the control
 // poll shortened, and returns the fleet, the probes, and the cancel.
 func startControlFleet(t *testing.T, client *inverter.SEP2Client, mode string) (*managedFleet, map[string]*probeDevice, context.CancelFunc) {
+	t.Helper()
+	fleet, probes, cancel, _ := startControlFleetEvery(t, client, mode, 20*time.Millisecond)
+	return fleet, probes, cancel
+}
+
+// startControlFleetEvery is startControlFleet with the control poll set to
+// interval, and the managed set replaced by one that counts the targets it
+// is asked about.
+func startControlFleetEvery(t *testing.T, client *inverter.SEP2Client, mode string, interval time.Duration) (*managedFleet, map[string]*probeDevice, context.CancelFunc, *recordingSet) {
 	t.Helper()
 	pv := managedCfg(t, "pv", pvLFDI, "pv", 4000)
 	bat := managedCfg(t, "bat", batLFDI, "battery", 0)
@@ -170,18 +262,44 @@ func startControlFleet(t *testing.T, client *inverter.SEP2Client, mode string) (
 	if err != nil {
 		t.Fatalf("startManaged: %v", err)
 	}
+	rec := &recordingSet{inner: guard.NewStaticManagedSet(pvLFDI, batLFDI), calls: map[string]int{}}
+	client.SetManagedSet(rec)
 	probes := map[string]*probeDevice{}
 	for _, md := range fleet.devices {
 		p := &probeDevice{DERDevice: md.dev}
 		md.dev = p
-		md.ctl.interval = 20 * time.Millisecond
+		md.ctl.interval = interval
 		probes[md.lfdi] = p
 	}
 	fleet.StartControls(ctx, controlsEnv{client: client, cfg: inverter.SimConfig{}})
 	// Cleanups run last-in first-out: cancel, then wait for the sessions.
-	t.Cleanup(fleet.WaitControls)
+	t.Cleanup(func() { waitControlsBounded(t, fleet, "the test ended and its context was cancelled") })
 	t.Cleanup(cancel)
-	return fleet, probes, cancel
+	return fleet, probes, cancel, rec
+}
+
+// waitControlsBounded waits for the fleet's session goroutines, and fails
+// the test naming what should have ended them when they outlive 5s, so a
+// session that does not exit fails by assertion and not at the package
+// timeout.
+func waitControlsBounded(t *testing.T, fleet *managedFleet, why string) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { fleet.WaitControls(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Errorf("control sessions still running 5s after %s", why)
+	}
+}
+
+func deviceByLFDI(f *managedFleet, lfdi string) *managedDevice {
+	for _, md := range f.devices {
+		if md.lfdi == lfdi {
+			return md
+		}
+	}
+	return nil
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
@@ -262,7 +380,8 @@ func TestManagedControls_NoneReadsNothingAndPostsNothing(t *testing.T) {
 	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
 	fleet, probes, _ := startControlFleet(t, client, "none")
 
-	fleet.WaitControls() // no session goroutine exists, so this returns at once
+	// No session goroutine exists, so this returns at once.
+	waitControlsBounded(t, fleet, "none started a session (it must start none)")
 	time.Sleep(200 * time.Millisecond)
 	fleet.Tick(context.Background())
 
@@ -286,13 +405,7 @@ func TestManagedControls_SessionsEndWithTheProcessContext(t *testing.T) {
 	waitFor(t, "both devices to start the control", func() bool { return allStarted(fleet) })
 
 	cancel()
-	done := make(chan struct{})
-	go func() { fleet.WaitControls(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("control sessions still running 5s after the context was cancelled")
-	}
+	waitControlsBounded(t, fleet, "the context was cancelled")
 }
 
 // batteryFleet builds two batteries by hand, each starting idle, so the
@@ -367,5 +480,229 @@ func TestManagedControls_AckDeviceStaysInTheSplit(t *testing.T) {
 
 	if members := fleet.batteries(); len(members) != 2 {
 		t.Errorf("grant members = %+v, want both: an ack device's output is not driven by the control", members)
+	}
+}
+
+// syncLog is a log destination that session goroutines may write while the
+// test reads it.
+type syncLog struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *syncLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *syncLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// captureSessionLog returns what log wrote until the test ends.
+func captureSessionLog(t *testing.T) *syncLog {
+	t.Helper()
+	l := &syncLog{}
+	log.SetOutput(l)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return l
+}
+
+// A failed FSA list is retried with backoff until it succeeds, naming the
+// device, while the other device's session is unaffected throughout.
+func TestManagedControls_FailedDiscoveryIsRetriedWhileAnotherDeviceKeepsRunning(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	srv.setFailFSA(pvLFDI, true)
+	logs := captureSessionLog(t)
+	fleet, _, cancel, rec := startControlFleetEvery(t, client, "follow", 20*time.Millisecond)
+	pv, bat := deviceByLFDI(fleet, pvLFDI), deviceByLFDI(fleet, batLFDI)
+
+	waitFor(t, "the battery to start the control", func() bool { return bat.ctl.sm.Current().State == inverter.StateEventStarted })
+	waitFor(t, "three failed FSA lists for the PV", func() bool { return srv.hitsOf("/fsa/"+pvLFDI) >= 3 })
+
+	// The PV is still failing: no control, no Response. The battery ran once.
+	if got := pv.ctl.sm.Current().State; got != inverter.StateDefault {
+		t.Errorf("PV state while its FSA list fails = %v, want DEFAULT", got)
+	}
+	if got := srv.statusesFor(pvLFDI, "CTL1"); len(got) != 0 {
+		t.Errorf("PV posted statuses %v while its FSA list fails, want none", got)
+	}
+	waitFor(t, "the battery's Responses", func() bool { return len(srv.statusesFor(batLFDI, "CTL1")) >= 2 })
+	if got := srv.statusesFor(batLFDI, "CTL1"); len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Errorf("battery posted statuses %v, want [1 2]", got)
+	}
+	if n := srv.hitsOf("/fsa/" + batLFDI); n != 1 {
+		t.Errorf("battery read its FSA list %d times, want 1: the PV's failures must not touch it", n)
+	}
+	if !strings.Contains(logs.String(), "managed device pv ("+pvLFDI+"): FSA list failed") {
+		t.Errorf("no log line names the PV and its failed FSA list; got:\n%s", logs.String())
+	}
+
+	// The server recovers: the PV starts the same control.
+	srv.setFailFSA(pvLFDI, false)
+	waitFor(t, "the PV to start the control after recovery", func() bool { return pv.ctl.sm.Current().State == inverter.StateEventStarted })
+	waitFor(t, "the PV's Responses", func() bool { return len(srv.statusesFor(pvLFDI, "CTL1")) >= 2 })
+	if got := srv.statusesFor(pvLFDI, "CTL1"); len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Errorf("PV posted statuses %v, want [1 2]", got)
+	}
+	if n := srv.hitsOf("/fsa/" + batLFDI); n != 1 {
+		t.Errorf("battery read its FSA list %d times after the PV recovered, want 1", n)
+	}
+
+	// Every read and Response of a device was judged as that device: once
+	// the sessions are done, each device was the target of at least its FSA
+	// reads plus its Responses.
+	cancel()
+	waitControlsBounded(t, fleet, "the context was cancelled")
+	for _, lfdi := range []string{pvLFDI, batLFDI} {
+		want := srv.hitsOf("/fsa/"+lfdi) + len(srv.statusesFor(lfdi, "CTL1"))
+		if got := rec.judged(lfdi); got < want {
+			t.Errorf("device %s was the request target %d times, want at least %d (its FSA reads and Responses)", lfdi, got, want)
+		}
+	}
+}
+
+// A session in discovery backoff ends with the process context, even when
+// the backoff is long.
+func TestManagedControls_SessionInDiscoveryBackoffEndsWithTheProcessContext(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	srv.setFailFSA(pvLFDI, true)
+	srv.setFailFSA(batLFDI, true)
+	// A ten minute backoff after the first failure: only the context can
+	// end the wait inside the test's time.
+	fleet, _, cancel, _ := startControlFleetEvery(t, client, "follow", 10*time.Minute)
+
+	waitFor(t, "both devices to fail their first FSA list", func() bool {
+		return srv.hitsOf("/fsa/"+pvLFDI) >= 1 && srv.hitsOf("/fsa/"+batLFDI) >= 1
+	})
+	cancel()
+	waitControlsBounded(t, fleet, "the context was cancelled during discovery backoff")
+}
+
+// A default control that fails first and appears later is followed, and a
+// later change of it is followed too.
+func TestManagedControls_DefaultControlThatAppearsLaterIsFollowed(t *testing.T) {
+	// The control starts in an hour, so only the default drives the output.
+	client, srv := newControlsFixtureWith(t, true, -time.Hour, 3600, pvLFDI, batLFDI)
+	srv.setDefault(true, 0)
+	fleet, probes, _, _ := startControlFleetEvery(t, client, "follow", 20*time.Millisecond)
+
+	waitFor(t, "two failed DefaultDERControl reads", func() bool { return srv.hitsOf("/dc") >= 4 })
+	fleet.Tick(context.Background())
+	if got := probes[pvLFDI].achievedW(); got != 4000 {
+		t.Errorf("PV achieved %v W with no default readable, want its recording 4000 W", got)
+	}
+
+	srv.setDefault(false, 700)
+	waitFor(t, "the PV to read the default", func() bool { return defaultTargetW(deviceByLFDI(fleet, pvLFDI)) == 700 })
+	fleet.Tick(context.Background())
+	if got := probes[pvLFDI].achievedW(); got != 700 {
+		t.Errorf("PV achieved %v W under a 700 W default, want 700 W", got)
+	}
+	if got := deviceByLFDI(fleet, pvLFDI).ctl.sm.Current().State; got == inverter.StateEventStarted {
+		t.Errorf("PV state = %v, want the control not started so only the default drives it", got)
+	}
+
+	srv.setDefault(false, 900)
+	waitFor(t, "the PV to follow the changed default", func() bool { return defaultTargetW(deviceByLFDI(fleet, pvLFDI)) == 900 })
+	fleet.Tick(context.Background())
+	if got := probes[pvLFDI].achievedW(); got != 900 {
+		t.Errorf("PV achieved %v W under a 900 W default, want 900 W", got)
+	}
+}
+
+// defaultTargetW is the target of the default control the device holds, or
+// -1 when it holds none.
+func defaultTargetW(md *managedDevice) int {
+	d := md.ctl.defaultCtl.Load()
+	if d == nil || d.DERControlBase == nil || d.DERControlBase.OpModTargetW == nil {
+		return -1
+	}
+	return int(d.DERControlBase.OpModTargetW.Value)
+}
+
+// receiveControlOn puts device md in EVENT_RECEIVED on a control that
+// starts in an hour.
+func receiveControlOn(md *managedDevice, clock func() time.Time) *inverter.Scheduler {
+	var dc sep2.DERControl
+	dc.MRID = "CTL1"
+	dc.Interval = &sep2.DateTimeInterval{Start: time.Now().Add(time.Hour).Unix(), Duration: 3600}
+	dc.DERControlBase = &sep2.DERControlBase{OpModTargetW: &sep2.ActivePower{Value: controlTargetW}}
+	sched := inverter.NewScheduler(clock, rand.New(rand.NewPCG(1, 2)))
+	md.ctl.sm.Tick(clock(), []sep2.DERControl{dc}, nil, sched)
+	return sched
+}
+
+// A control that is received but has not started does not drive the
+// device, so the device keeps its share of the grant; once a started
+// control completes the device rejoins the split.
+func TestManagedControls_DeviceLeavesTheSplitOnlyWhileAControlIsStarted(t *testing.T) {
+	fleet, _ := batteryFleet(t, "follow")
+	md := fleet.devices[0]
+
+	at := time.Now()
+	sched := receiveControlOn(md, func() time.Time { return at })
+	if got := md.ctl.sm.Current().State; got != inverter.StateEventReceived {
+		t.Fatalf("state = %v, want EVENT_RECEIVED", got)
+	}
+	if members := fleet.batteries(); len(members) != 2 {
+		t.Errorf("grant members with a received control = %+v, want both: it is not driving the device yet", members)
+	}
+
+	// The control starts: the device leaves the split.
+	at = at.Add(90 * time.Minute)
+	md.ctl.sm.Tick(at, nil, nil, sched)
+	if got := md.ctl.sm.Current().State; got != inverter.StateEventStarted {
+		t.Fatalf("state = %v, want EVENT_STARTED", got)
+	}
+	if members := fleet.batteries(); len(members) != 1 || members[0].key != batLFDI {
+		t.Errorf("grant members while the control runs = %+v, want only %s", members, batLFDI)
+	}
+
+	// It completes: the device rejoins.
+	at = at.Add(2 * time.Hour)
+	md.ctl.sm.Tick(at, nil, nil, sched)
+	if got := md.ctl.sm.Current().State; got != inverter.StateDefault {
+		t.Fatalf("state = %v, want DEFAULT after completion", got)
+	}
+	if members := fleet.batteries(); len(members) != 2 {
+		t.Errorf("grant members after completion = %+v, want both", members)
+	}
+}
+
+// A failed Response names the device that failed to send it, on both the
+// failure line and the dead-letter line.
+func TestResponsePOSTHook_FailureLogsNameTheManagedDevice(t *testing.T) {
+	mask := sep2.HexBinary8(0x07)
+	dc := buildControl("EVT-LOG-001", "/rsps", &mask, time.Minute, 60)
+	cfg := inverter.ResponseRetryConfig{MaxAttempts: 2, InitialDelay: time.Millisecond, MaxDelay: time.Millisecond, BackoffMultiplier: 2}
+
+	for name, errs := range map[string][]error{
+		"response POST failed": {fmt.Errorf("simulated 400")},
+		"DEAD-LETTER": {
+			fmt.Errorf("simulated 503: %w", inverter.ErrResponseTransient),
+			fmt.Errorf("simulated 503: %w", inverter.ErrResponseTransient),
+		},
+	} {
+		sm, sched := newTestStateMachine(func() time.Time { return fixedTestNow })
+		sm.AddTransitionHook(responsePOSTHook(&fakePoster{errsLeft: errs}, batLFDI, fixedNowFn, cfg))
+		logs := captureManagedLog(t)
+		sm.Tick(fixedTestNow, []sep2.DERControl{dc}, nil, sched)
+		var line string
+		for _, l := range strings.Split(logs.String(), "\n") {
+			if strings.Contains(l, name) {
+				line = l
+			}
+		}
+		if line == "" {
+			t.Errorf("no %q line logged; got:\n%s", name, logs.String())
+			continue
+		}
+		if want := fmt.Sprintf("lfdi=%q", batLFDI); !strings.Contains(line, want) {
+			t.Errorf("%q line = %q, want it to contain %s", name, line, want)
+		}
 	}
 }

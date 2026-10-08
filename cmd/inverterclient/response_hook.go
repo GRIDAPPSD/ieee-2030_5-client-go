@@ -149,8 +149,8 @@ func responsePOSTHook(client responsePoster, lfdi string, now nowFunc, retryCfg 
 		// ErrResponseTransient; the hook logs that and moves on : the
 		// state machine MUST keep advancing per CSIP V1.2 CORE-022.
 		if err := inverter.PostResponseWithRetry(ctx, client, evt.ReplyTo, resp, cfg); err != nil {
-			log.Printf("response POST failed event=%q status=%d replyTo=%q: %v",
-				evt.MRID, status, evt.ReplyTo, err)
+			log.Printf("response POST failed event=%q status=%d replyTo=%q lfdi=%q: %v",
+				evt.MRID, status, evt.ReplyTo, lfdi, err)
 			return
 		}
 		log.Printf("response POST ok event=%q status=%d replyTo=%q", evt.MRID, status, evt.ReplyTo)

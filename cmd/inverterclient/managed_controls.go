@@ -137,39 +137,18 @@ func (f *managedFleet) WaitControls() {
 	}
 }
 
-// runControls is one device's session. A failure to discover the device's
-// programs is logged and ends only this session: the device keeps running
-// its recording, uncontrolled.
+// runControls is one device's session. Discovering the device's programs is
+// retried with backoff until it succeeds, so a server that is down or slow
+// at start never leaves a follow device uncontrolled for the life of the
+// process; only another device's session is unaffected by it either way.
 func (md *managedDevice) runControls(ctx context.Context, env controlsEnv) {
 	client := env.client
 	tctx := inverter.WithTarget(ctx, md.lfdi)
+	interval := md.ctl.pollInterval(env.dcap)
 
-	fsaList, err := runPhase2cFSAList(tctx, client, md.edev, env.cfg, env.dcap)
-	if err != nil {
-		md.controlsStopped(ctx, "FSA list", err)
+	prog, ok := md.discoverProgram(ctx, tctx, env, interval)
+	if !ok {
 		return
-	}
-	programs := map[string]sep2.DERProgram{}
-	if len(fsaList.FunctionSetAssignments) > 0 {
-		if programs, err = runPhase2cDERProgramWalk(tctx, client, fsaList, env.cfg, env.dcap); err != nil {
-			md.controlsStopped(ctx, "DERProgram walk", err)
-			return
-		}
-	}
-	prog, ok := inverter.SelectHighestPriority(programs)
-	if !ok || prog.DERControlListLink == nil {
-		log.Printf("managed device %s: no DERProgram with a DERControlList; no controls to follow", md.name)
-		return
-	}
-
-	if prog.DefaultDERControlLink != nil {
-		ddc, _, err := client.GetDefaultDERControl(tctx, prog.DefaultDERControlLink.Href)
-		if err != nil {
-			log.Printf("managed device %s: GET DefaultDERControl: %v (continuing with no default base)", md.name, err)
-		} else {
-			c := ddc.Copy()
-			md.ctl.defaultCtl.Store(&c)
-		}
 	}
 
 	poster := targetedPoster{client: client, lfdi: md.lfdi, session: ctx}
@@ -178,8 +157,28 @@ func (md *managedDevice) runControls(ctx context.Context, env controlsEnv) {
 	sched := inverter.NewScheduler(client.Now, mathrand.New(mathrand.NewPCG(uint64(time.Now().UnixNano()), 0xCAFEBABE)))
 	cache := inverter.NewDERControlCache()
 	href := prog.DERControlListLink.Href
+	defaultHref := ""
+	if prog.DefaultDERControlLink != nil {
+		defaultHref = prog.DefaultDERControlLink.Href
+	}
 	prev := cache.Snapshot()
 	step := func() {
+		if defaultHref != "" {
+			ddc, newHref, err := client.GetDefaultDERControl(tctx, defaultHref)
+			switch {
+			case err != nil:
+				// The last default read, if any, keeps driving the device.
+				if ctx.Err() == nil {
+					log.Printf("managed device %s: GET DefaultDERControl failed (keeping the last default, if any): %v", md.name, err)
+				}
+			default:
+				if newHref != "" {
+					defaultHref = newHref
+				}
+				c := ddc.Copy()
+				md.ctl.defaultCtl.Store(&c)
+			}
+		}
 		list, newHref, err := client.GetDERControlList(tctx, href)
 		if err != nil {
 			if ctx.Err() == nil {
@@ -197,7 +196,6 @@ func (md *managedDevice) runControls(ctx context.Context, env controlsEnv) {
 		prev = curr
 	}
 
-	interval := md.ctl.pollInterval(env.dcap)
 	log.Printf("managed device %s: following controls from %s every %s (controls.response %s)", md.name, href, interval, md.ctl.mode)
 	step()
 	t := time.NewTicker(interval)
@@ -212,11 +210,48 @@ func (md *managedDevice) runControls(ctx context.Context, env controlsEnv) {
 	}
 }
 
-// controlsStopped logs why a session ended, unless the process is shutting
-// down.
-func (md *managedDevice) controlsStopped(ctx context.Context, what string, err error) {
-	if ctx.Err() != nil {
-		return
+// discoverProgram walks the device's FSA list and DERPrograms and returns
+// the program to follow. A failed read is logged naming the device and
+// retried after mirrorBackoff(interval, failures), forever; it returns false
+// when ctx ends first, or when the server offers no program with a
+// DERControlList (nothing a retry would change).
+func (md *managedDevice) discoverProgram(ctx, tctx context.Context, env controlsEnv, interval time.Duration) (sep2.DERProgram, bool) {
+	for failures := 1; ; failures++ {
+		prog, found, what, err := md.walkPrograms(tctx, env)
+		if err == nil {
+			if !found {
+				log.Printf("managed device %s: no DERProgram with a DERControlList; no controls to follow", md.name)
+			}
+			return prog, found
+		}
+		if ctx.Err() != nil {
+			return sep2.DERProgram{}, false
+		}
+		wait := mirrorBackoff(interval, failures)
+		log.Printf("managed device %s (%s): %s failed, attempt %d, retrying in %s: %v", md.name, md.lfdi, what, failures, wait, err)
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return sep2.DERProgram{}, false
+		case <-timer.C:
+		}
 	}
-	log.Printf("managed device %s: controls disabled: %s: %v", md.name, what, err)
+}
+
+// walkPrograms makes one FSA list and DERProgram walk as the device. what
+// names the failed phase.
+func (md *managedDevice) walkPrograms(tctx context.Context, env controlsEnv) (prog sep2.DERProgram, found bool, what string, err error) {
+	fsaList, err := runPhase2cFSAList(tctx, env.client, md.edev, env.cfg, env.dcap)
+	if err != nil {
+		return prog, false, "FSA list", err
+	}
+	programs := map[string]sep2.DERProgram{}
+	if len(fsaList.FunctionSetAssignments) > 0 {
+		if programs, err = runPhase2cDERProgramWalk(tctx, env.client, fsaList, env.cfg, env.dcap); err != nil {
+			return prog, false, "DERProgram walk", err
+		}
+	}
+	prog, found = inverter.SelectHighestPriority(programs)
+	return prog, found && prog.DERControlListLink != nil, "", nil
 }
