@@ -190,11 +190,9 @@ func main() {
 
 	flag.Parse()
 
-	if simPath := simConfigPath(*cf.SimConfigPath, osLookupEnv); simPath != "" {
-		if _, err := applySimConfig(flag.CommandLine, &cfg, simPath, osLookupEnv); err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(1)
-		}
+	if err := maybeApplySimConfig(flag.CommandLine, &cfg, *cf.SimConfigPath, osLookupEnv); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
 	}
 
 	if _, err := guard.ParseRole(cfg.ClientRole); err != nil {

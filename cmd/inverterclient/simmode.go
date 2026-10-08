@@ -6,10 +6,12 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
@@ -28,10 +30,36 @@ type simSetting struct {
 	key   string
 	flag  string
 	env   string
-	value func(f *simconfig.File) (string, bool)
+	value func(f *simconfig.File, role string) (string, bool)
+	// envCheck applies to an env value the checks the file's own value
+	// passes in simconfig; nil means the flag's parser is the only check.
+	envCheck func(string) error
 	// envValue converts the env var's text to the flag's; nil passes it
 	// through. report.interval_s is in seconds, the flag takes a duration.
 	envValue func(string) (string, error)
+}
+
+func oneOfEnv(allowed ...string) func(string) error {
+	return func(v string) error {
+		for _, a := range allowed {
+			if v == a {
+				return nil
+			}
+		}
+		return fmt.Errorf("%q must be one of %s", v, strings.Join(allowed, ", "))
+	}
+}
+
+// portEnv holds an env port to the range hmi.port is held to in the file.
+func portEnv(v string) error {
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fmt.Errorf("want a port number: %w", err)
+	}
+	if n < 0 || n > 65535 {
+		return fmt.Errorf("%d must be within 0 to 65535", n)
+	}
+	return nil
 }
 
 func always(s string) (string, bool) { return s, true }
@@ -39,21 +67,22 @@ func always(s string) (string, bool) { return s, true }
 func setIf(s string) (string, bool) { return s, s != "" }
 
 var simSettings = []simSetting{
-	{key: "role", flag: "client-role", env: "SEP2_CLIENT_ROLE", value: func(f *simconfig.File) (string, bool) { return always(f.Role) }},
-	{key: "server", flag: "server", env: "SEP2_SERVER", value: func(f *simconfig.File) (string, bool) { return setIf(f.Server) }},
-	{key: "cert", flag: "cert", env: "SEP2_CERT", value: func(f *simconfig.File) (string, bool) { return setIf(f.Cert) }},
-	{key: "key", flag: "key", env: "SEP2_KEY", value: func(f *simconfig.File) (string, bool) { return setIf(f.Key) }},
-	{key: "ca", flag: "ca", env: "SEP2_CA", value: func(f *simconfig.File) (string, bool) { return setIf(f.CA) }},
-	{key: "lookup_own_edev", flag: "csip", env: "SEP2_LOOKUP_OWN_EDEV", value: func(f *simconfig.File) (string, bool) {
-		if f.LookupOwnEdev == nil {
-			return "", false
-		}
-		return strconv.FormatBool(*f.LookupOwnEdev), true
+	{key: "role", flag: "client-role", env: "SEP2_CLIENT_ROLE", envCheck: oneOfEnv("der", "aggregator"), value: func(f *simconfig.File, _ string) (string, bool) { return always(f.Role) }},
+	{key: "server", flag: "server", env: "SEP2_SERVER", value: func(f *simconfig.File, _ string) (string, bool) { return setIf(f.Server) }},
+	{key: "cert", flag: "cert", env: "SEP2_CERT", value: func(f *simconfig.File, _ string) (string, bool) { return setIf(f.Cert) }},
+	{key: "key", flag: "key", env: "SEP2_KEY", value: func(f *simconfig.File, _ string) (string, bool) { return setIf(f.Key) }},
+	{key: "ca", flag: "ca", env: "SEP2_CA", value: func(f *simconfig.File, _ string) (string, bool) { return setIf(f.CA) }},
+	// The default depends on the role the process finally runs in, which a
+	// flag or env var may have changed from the file's; applySimConfig
+	// sets the role first and passes it here.
+	{key: "lookup_own_edev", flag: "csip", env: "SEP2_LOOKUP_OWN_EDEV", value: func(f *simconfig.File, role string) (string, bool) {
+		v, set := f.LookupFor(role)
+		return strconv.FormatBool(v), set
 	}},
-	{key: "pin", flag: "pin", env: "SEP2_PIN", value: func(f *simconfig.File) (string, bool) { return always(strconv.FormatUint(uint64(f.Pin), 10)) }},
-	{key: "backend", flag: "backend", env: "SEP2_BACKEND", value: func(f *simconfig.File) (string, bool) { return always(f.Backend) }},
+	{key: "pin", flag: "pin", env: "SEP2_PIN", value: func(f *simconfig.File, _ string) (string, bool) { return always(strconv.FormatUint(uint64(f.Pin), 10)) }},
+	{key: "backend", flag: "backend", env: "SEP2_BACKEND", envCheck: oneOfEnv("replay", "synthetic"), value: func(f *simconfig.File, _ string) (string, bool) { return always(f.Backend) }},
 	{key: "report.interval_s", flag: "report-interval", env: "SEP2_REPORT_INTERVAL_S",
-		value: func(f *simconfig.File) (string, bool) {
+		value: func(f *simconfig.File, _ string) (string, bool) {
 			return always((time.Duration(f.Report.IntervalS) * time.Second).String())
 		},
 		envValue: func(v string) (string, error) {
@@ -61,15 +90,18 @@ var simSettings = []simSetting{
 			if err != nil {
 				return "", fmt.Errorf("want whole seconds: %w", err)
 			}
+			if n == 0 {
+				return "", errors.New("must be positive, as report.interval_s is")
+			}
 			return (time.Duration(n) * time.Second).String(), nil
 		}},
-	{key: "notify.listen", flag: "notify-listen", env: "SEP2_NOTIFY_LISTEN", value: func(f *simconfig.File) (string, bool) {
+	{key: "notify.listen", flag: "notify-listen", env: "SEP2_NOTIFY_LISTEN", value: func(f *simconfig.File, _ string) (string, bool) {
 		if f.Notify.Listen == nil {
 			return "", false
 		}
 		return *f.Notify.Listen, true
 	}},
-	{key: "hmi.port", flag: "hmi-port", env: "SEP2_HMI_PORT", value: func(f *simconfig.File) (string, bool) { return always(strconv.Itoa(f.HMI.Port)) }},
+	{key: "hmi.port", flag: "hmi-port", env: "SEP2_HMI_PORT", envCheck: portEnv, value: func(f *simconfig.File, _ string) (string, bool) { return always(strconv.Itoa(f.HMI.Port)) }},
 }
 
 // simConfigPath returns the sim config path: the flag wins over the env
@@ -101,13 +133,18 @@ func applySimConfig(fs *flag.FlagSet, cfg *inverter.SimConfig, path string, look
 		if ev, ok := lookupEnv(s.env); ok && ev != "" {
 			from = "env " + s.env
 			v = ev
+			if s.envCheck != nil {
+				if cerr := s.envCheck(ev); cerr != nil {
+					return nil, fmt.Errorf("%s: %w", from, cerr)
+				}
+			}
 			if s.envValue != nil {
 				var cerr error
 				if v, cerr = s.envValue(ev); cerr != nil {
 					return nil, fmt.Errorf("%s: %w", from, cerr)
 				}
 			}
-		} else if fv, ok := s.value(sc); ok {
+		} else if fv, ok := s.value(sc, cfg.ClientRole); ok {
 			v, from = fv, "sim config key "+s.key
 		} else {
 			continue
@@ -115,6 +152,12 @@ func applySimConfig(fs *flag.FlagSet, cfg *inverter.SimConfig, path string, look
 		if err := fs.Set(s.flag, v); err != nil {
 			return nil, fmt.Errorf("%s: %w", from, err)
 		}
+	}
+	if err := sc.ValidateForRole(cfg.ClientRole); err != nil {
+		return nil, err
+	}
+	if cfg.Backend == "replay" && sc.Replay.File == "" {
+		return nil, errors.New("backend \"replay\" needs replay.file in the sim config")
 	}
 	cfg.Replay = inverter.ReplaySettings{
 		File: sc.Replay.File, Type: sc.Device.Type, Clock: sc.Replay.Clock, Scale: sc.Replay.Scale,
@@ -131,6 +174,18 @@ func applyNameplate(ratedW float64) {
 	inverter.Rating.RatedW = ratedW
 	inverter.Rating.RatedVA = ratedW * 111 / 100
 	inverter.Rating.RatedVAr = ratedW * 44 / 100
+}
+
+// maybeApplySimConfig is the one gate main passes through: with no sim
+// config path every flag behaves as it always has and no sim-mode env var
+// is read; with one, the config is applied or the start is refused.
+func maybeApplySimConfig(fs *flag.FlagSet, cfg *inverter.SimConfig, flagPath string, lookupEnv func(string) (string, bool)) error {
+	path := simConfigPath(flagPath, lookupEnv)
+	if path == "" {
+		return nil
+	}
+	_, err := applySimConfig(fs, cfg, path, lookupEnv)
+	return err
 }
 
 // osLookupEnv is the production env source.

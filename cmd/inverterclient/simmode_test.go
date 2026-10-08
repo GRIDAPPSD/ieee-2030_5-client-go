@@ -28,8 +28,12 @@ func envOf(m map[string]string) func(string) (string, bool) {
 
 // resolveSim parses args through the production flag registration, then
 // applies the sim config at path, and returns the resulting config.
+// applySimConfig writes the process-wide inverter.Rating, so every caller
+// runs serially (no t.Parallel) and the rating is restored afterwards.
 func resolveSim(t *testing.T, path string, env map[string]string, args ...string) (*inverter.SimConfig, *cliFlags, error) {
 	t.Helper()
+	saved := inverter.Rating
+	t.Cleanup(func() { inverter.Rating = saved })
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
 	cfg := &inverter.SimConfig{}
 	cf := registerFlags(fs, cfg)
@@ -41,7 +45,6 @@ func resolveSim(t *testing.T, path string, env map[string]string, args ...string
 }
 
 func TestSimConfigPrecedenceFlagEnvFileDefault(t *testing.T) {
-	t.Parallel()
 	file := writeSimConfig(t, `{"server":"https://file:1","report":{"interval_s":30},"hmi":{"port":9001}}`)
 	empty := writeSimConfig(t, `{}`)
 	env := map[string]string{"SEP2_SERVER": "https://env:2", "SEP2_REPORT_INTERVAL_S": "20", "SEP2_HMI_PORT": "9002"}
@@ -68,7 +71,6 @@ func TestSimConfigPrecedenceFlagEnvFileDefault(t *testing.T) {
 		{"default: server keeps the flag default, report interval takes the schema default of 60 s", empty, nil, nil, got{defaultServerURL, 60 * time.Second, 0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			c, cf, err := resolveSim(t, tc.path, tc.env, tc.args...)
 			if err != nil {
 				t.Fatal(err)
@@ -81,7 +83,6 @@ func TestSimConfigPrecedenceFlagEnvFileDefault(t *testing.T) {
 }
 
 func TestSimConfigMapsRoleBackendAndLookup(t *testing.T) {
-	t.Parallel()
 	c, _, err := resolveSim(t, writeSimConfig(t, `{"replay":{"file":"rec.csv"},"pin":4242}`), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +101,6 @@ func TestSimConfigMapsRoleBackendAndLookup(t *testing.T) {
 }
 
 func TestSimConfigEmptyEnvCountsAsUnset(t *testing.T) {
-	t.Parallel()
 	c, _, err := resolveSim(t, writeSimConfig(t, `{"server":"https://file:1"}`), map[string]string{"SEP2_SERVER": ""})
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +111,6 @@ func TestSimConfigEmptyEnvCountsAsUnset(t *testing.T) {
 }
 
 func TestSimConfigBadEnvValueNamesTheVariable(t *testing.T) {
-	t.Parallel()
 	_, _, err := resolveSim(t, writeSimConfig(t, `{}`), map[string]string{"SEP2_HMI_PORT": "abc"})
 	if err == nil || !strings.Contains(err.Error(), "SEP2_HMI_PORT") {
 		t.Fatalf("err = %v, want one naming SEP2_HMI_PORT", err)
@@ -119,7 +118,6 @@ func TestSimConfigBadEnvValueNamesTheVariable(t *testing.T) {
 }
 
 func TestSimConfigUnknownKeyStopsTheStartNamingIt(t *testing.T) {
-	t.Parallel()
 	for name, body := range map[string]string{
 		"top level": `{"serverr":"x"}`,
 		"nested":    `{"device":{"rated_kw":5}}`,
