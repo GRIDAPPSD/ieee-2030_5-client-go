@@ -289,6 +289,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// SIGUSR1 asks an aggregator to post a flow reservation. Only the
+	// aggregator registers for it; a nil channel never fires in other roles.
+	var reserveSig <-chan os.Signal
+	if skipDERPipelineForRole(cfg) {
+		reserveSig = reserveSignals()
+	}
+
 	// notifyReceiver is declared here, ahead of its real construction
 	// further down, so the shutdown closure below can close over the same
 	// variable and see whatever it is finally assigned; shutdown must
@@ -989,6 +996,7 @@ func main() {
 	// so it is never attempted.
 	var reporter *inverter.Reporter
 	var managed *managedFleet
+	var reservations *reserver
 	if skipDERPipelineForRole(cfg) {
 		log.Println("=== Phase 4: Metering Setup ===")
 		log.Println("aggregator role: own EndDevice is not a DER; skipping Phase 4 metering setup")
@@ -1002,6 +1010,7 @@ func main() {
 		// that device. Without a sim config there are no managed devices,
 		// which startManagedForRole logs.
 		managed = startManagedOrExit(ctx, client, dcap, edevListHref, simFile, cfg.ReportInterval, fatalf)
+		reservations = startReservations(client, edev, simFile, managed)
 	} else {
 		reporter = runPhase4Metering(ctx, client, dcap, derStatusHref)
 	}
@@ -1060,6 +1069,12 @@ func main() {
 		case <-ctx.Done():
 			log.Println("Shutting down...")
 			return // deferred shutdown() runs steps 2 to 4 (Decision 4)
+		case <-reserveSig:
+			if reservations == nil {
+				log.Println("flow reservation: SIGUSR1 ignored: flow reservations are off (see the start-up log)")
+				continue
+			}
+			reservations.Trigger(ctx)
 		case <-ticker.C:
 			if skipDERPipelineForRole(cfg) {
 				// The aggregator's own EndDevice is not a DER: no
@@ -1068,6 +1083,8 @@ func main() {
 				// fires so this select stays responsive to ctx.Done(), and
 				// drives the managed devices' sessions.
 				managed.Tick(ctx)
+				// After the tick: a new answer takes effect on the next one.
+				reservations.Poll(ctx)
 				continue
 			}
 			// ReadState: advance the device's internal clock, walk scenario
