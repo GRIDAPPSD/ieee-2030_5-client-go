@@ -82,8 +82,8 @@ type Managed struct {
 	Controls *Controls `json:"controls"`
 }
 
-// Frq holds the flow-reservation defaults an aggregator reads. Parsed and
-// unused until the reservation issue.
+// Frq holds the flow-reservation defaults an aggregator reads when it
+// posts a request on SIGUSR1; the request file overlays them per request.
 type Frq struct {
 	EnergyWh    float64 `json:"energy_wh"`
 	PowerW      float64 `json:"power_w"`
@@ -94,8 +94,8 @@ type Frq struct {
 	RequestFile string  `json:"request_file"`
 }
 
-// Dispatch holds aggregator dispatch settings. Parsed and unused until the
-// reservation issue.
+// Dispatch holds aggregator dispatch settings: TickS is the shortest step
+// the aggregator's energy accounting assumes between dispatch ticks.
 type Dispatch struct {
 	TickS int `json:"tick_s"`
 }

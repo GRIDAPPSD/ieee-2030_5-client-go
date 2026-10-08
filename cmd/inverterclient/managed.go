@@ -92,6 +92,7 @@ func missingManaged(list sep2.EndDeviceList, configured []simconfig.Managed) err
 type managedDevice struct {
 	name       string
 	lfdi       string
+	kind       string // "pv" or "battery": only a battery is dispatched under a grant
 	ratedW     float64
 	dev        device.DERDevice
 	reporter   *inverter.Reporter
@@ -107,12 +108,47 @@ type managedDevice struct {
 	nextMirrorTry time.Time
 	hasMirror     bool
 	now           func() time.Time
+
+	// down is set when the last tick could not read or apply the device,
+	// so a grant leaves it out of its split until a tick succeeds.
+	down bool
 }
 
 // managedFleet is every managed device session of one aggregator process.
 type managedFleet struct {
 	devices        []*managedDevice
 	reportInterval time.Duration
+
+	// dispatch, when set, plans the battery setpoints inside a grant. now is
+	// the server-synchronized clock the grant's interval is read against.
+	dispatch *dispatcher
+	now      func() time.Time
+}
+
+// setDispatcher installs the dispatcher that plans battery setpoints under
+// a grant. A nil fleet (an aggregator with no managed devices) ignores it.
+func (f *managedFleet) setDispatcher(d *dispatcher) {
+	if f != nil {
+		f.dispatch = d
+	}
+}
+
+// batteries lists the battery devices as the grant split sees them. A
+// device that reports its state of charge has it checked; one that does not
+// is treated as able to move in either direction.
+func (f *managedFleet) batteries() []fleetMember {
+	var out []fleetMember
+	for _, md := range f.devices {
+		if md.kind != "battery" {
+			continue
+		}
+		m := fleetMember{key: md.lfdi, ratedW: md.ratedW, up: !md.down}
+		if s, ok := md.dev.(interface{ SOC() float64 }); ok {
+			m.soc, m.knownSOC = s.SOC(), true
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // startManaged resolves the managed set against the server's EndDeviceList,
@@ -140,7 +176,7 @@ func startManaged(ctx context.Context, client *inverter.SEP2Client, dcap sep2.De
 	}
 	client.SetManagedSet(guard.NewStaticManagedSet(lfdis...))
 
-	fleet := &managedFleet{reportInterval: reportInterval}
+	fleet := &managedFleet{reportInterval: reportInterval, now: client.Now}
 	for _, m := range configured {
 		md, err := startManagedDevice(ctx, client, dcap, m, reportInterval)
 		if err != nil {
@@ -165,7 +201,7 @@ func startManagedDevice(ctx context.Context, client *inverter.SEP2Client, dcap s
 		return nil, fmt.Errorf("managed device %s (%s): %w", m.Name, m.LFDI, err)
 	}
 
-	md := &managedDevice{name: m.Name, lfdi: m.LFDI, ratedW: m.Device.RatedW, dev: replay, client: client, mirrorBase: reportInterval, now: time.Now}
+	md := &managedDevice{name: m.Name, lfdi: m.LFDI, kind: m.Device.Type, ratedW: m.Device.RatedW, dev: replay, client: client, mirrorBase: reportInterval, now: time.Now}
 	if dcap.MirrorUsagePointListLink == nil {
 		log.Printf("managed device %s: DeviceCapability has no MirrorUsagePointListLink; readings disabled", m.Name)
 	} else {
@@ -237,24 +273,43 @@ func (md *managedDevice) postMirror(ctx context.Context) bool {
 }
 
 // Tick advances every session one step: read the recorded output, apply it
-// with no controls, and post a reading when the report interval has passed.
-// A failing device is logged and does not stop the others. A nil fleet (an
-// aggregator with no managed devices) ticks nothing.
+// (with the setpoint the dispatcher planned for a battery inside a grant,
+// otherwise with no controls), and post a reading when the report interval
+// has passed. A failing device is logged and does not stop the others. A
+// nil fleet (an aggregator with no managed devices) ticks nothing.
 func (f *managedFleet) Tick(ctx context.Context) {
 	if f == nil {
 		return
 	}
+	var plan map[string]float64
+	if f.dispatch != nil {
+		now := time.Now
+		if f.now != nil {
+			now = f.now
+		}
+		plan = f.dispatch.plan(now(), f.batteries())
+	}
+	var achievedChargingW float64
 	for _, md := range f.devices {
 		reading, err := md.dev.ReadState(ctx)
 		if err != nil {
+			md.down = true
 			log.Printf("managed device %s: ReadState failed: %v", md.name, err)
 			continue
 		}
 		controls := inverter.ApplyControlsWithCurves(nil, reading.Grid, reading.MaxPowerW, inverter.RatedW(md.ratedW), nil)
+		if w, ok := plan[md.lfdi]; ok {
+			controls.ActivePowerW = w
+		}
 		state, err := md.dev.ApplySetpoint(ctx, controls)
 		if err != nil {
+			md.down = true
 			log.Printf("managed device %s: ApplySetpoint failed: %v", md.name, err)
 			continue
+		}
+		md.down = false
+		if md.kind == "battery" {
+			achievedChargingW += chargingToDER(state.ActivePowerW)
 		}
 		md.tryMirror(ctx)
 		if md.now().Sub(md.lastReport) < f.reportInterval {
@@ -269,5 +324,8 @@ func (f *managedFleet) Tick(ctx context.Context) {
 			log.Printf("managed device %s: ReportMetering failed: %v", md.name, err)
 		}
 		md.lastReport = md.now()
+	}
+	if f.dispatch != nil {
+		f.dispatch.record(achievedChargingW)
 	}
 }
