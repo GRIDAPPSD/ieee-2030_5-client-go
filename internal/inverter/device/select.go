@@ -19,6 +19,7 @@ const defaultMaxStateAge = 5 * time.Second
 // Supported values for cfg.Backend:
 //   - "" or "synthetic": the scenario harness (default, no I/O).
 //   - "gridlabd": GridLAB-D co-simulation via HELICS (stub until HELICS lands).
+//   - "replay": recorded GridLAB-D output (sim mode).
 //   - "realdevice": SunSpec/Modbus hardware with safety guards applied.
 //
 // An unknown backend is a loud startup error (fail-closed discipline).
@@ -28,6 +29,8 @@ func New(cfg inverter.SimConfig, sc inverter.Scenario) (DERDevice, error) {
 		return NewSynthetic(sc, cfg.TickInterval, cfg.TimeScale), nil
 	case "gridlabd":
 		return NewGridLABD(gridLABDConfigFrom(cfg))
+	case "replay":
+		return NewReplay(replayConfigFrom(cfg))
 	case "realdevice":
 		base, err := NewRealDevice(realDeviceConfigFrom(cfg))
 		if err != nil {
@@ -39,7 +42,7 @@ func New(cfg inverter.SimConfig, sc inverter.Scenario) (DERDevice, error) {
 		}
 		return WithSafetyGuards(base, nameplateFromRating(), GuardConfig{MaxStateAge: maxAge}), nil
 	default:
-		return nil, fmt.Errorf("unknown backend %q (want synthetic|gridlabd|realdevice)", cfg.Backend)
+		return nil, fmt.Errorf("unknown backend %q (want synthetic|gridlabd|replay|realdevice)", cfg.Backend)
 	}
 }
 
@@ -69,5 +72,14 @@ func realDeviceConfigFrom(_ inverter.SimConfig) RealDeviceConfig {
 		Host:   "localhost",
 		Port:   502,
 		UnitID: 1,
+	}
+}
+
+// replayConfigFrom extracts the replay backend config from SimConfig.
+func replayConfigFrom(cfg inverter.SimConfig) ReplayConfig {
+	r := cfg.Replay
+	return ReplayConfig{
+		File: r.File, Type: r.Type, Clock: r.Clock, Scale: r.Scale,
+		RatedW: r.RatedW, CapacityWh: r.CapacityWh, InitialSOC: r.InitialSOC,
 	}
 }

@@ -152,6 +152,22 @@ type SimConfig struct {
 	// field is client_role, and "--role" is the dispatch-policy flag and
 	// keeps its meaning.
 	ClientRole string
+
+	// Replay configures the "replay" backend; it is read only when Backend
+	// is "replay" and is zero otherwise.
+	Replay ReplaySettings
+}
+
+// ReplaySettings carries the sim-mode settings the replay backend needs.
+// Type is "pv" or "battery"; Clock is "wall" or "start".
+type ReplaySettings struct {
+	File       string
+	Type       string
+	Clock      string
+	Scale      float64
+	RatedW     float64
+	CapacityWh float64
+	InitialSOC float64
 }
 
 // CurvePoint is a single point on a piecewise linear control curve.
