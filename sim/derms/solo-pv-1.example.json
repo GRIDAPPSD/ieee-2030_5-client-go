@@ -1,0 +1,5 @@
+{
+  "role": "der",
+  "device": { "type": "pv", "rated_w": 3000 },
+  "replay": { "file": "recordings/solo-pv-1.csv", "clock": "wall" }
+}

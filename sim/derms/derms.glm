@@ -1,0 +1,78 @@
+// Three devices behind one meter for the sim-mode replay backend: a battery
+// and a PV inverter that an aggregator manages, and a standalone PV
+// inverter. Each device's output is driven by a player file that
+// regenerate.sh writes, and one recorder per device captures what the replay
+// backend later reports. Object names are the device names with '-' and '.'
+// replaced by '_'.
+clock {
+  starttime '2020-01-01 00:00:00';
+  stoptime '2020-01-02 00:00:00';
+}
+module powerflow;
+module generators;
+module tape;
+
+object meter {
+  name derms_meter;
+  phases ABCN;
+  nominal_voltage 120;
+}
+
+// CONSTANT_PQ makes the inverter keep a player-set P_Out; the class
+// default, CONSTANT_PF, recomputes P_Out from power_factor and records +0.
+object inverter {
+  name agg_bat1_inv;
+  parent derms_meter;
+  phases ABCN;
+  generator_status ONLINE;
+  four_quadrant_control_mode CONSTANT_PQ;
+  inverter_type FOUR_QUADRANT;
+  rated_power 5000;
+  P_Out 0;
+  Q_Out 0;
+}
+object battery {
+  name agg_bat1;
+  parent agg_bat1_inv;
+  use_internal_battery_model TRUE;
+  battery_type LI_ION;
+  battery_capacity 10000;
+  state_of_charge 0.5;
+  round_trip_efficiency 0.95;
+  rated_power 5000;
+  V_Max 480;
+  base_efficiency 0.95;
+}
+object player { parent agg_bat1_inv; property P_Out; file agg-bat-1.player; }
+// battery_load, not the inverter's P_Out, is the battery baseline: P_Out
+// keeps recording the commanded value after the battery is full or empty
+// while battery_load goes to 0. Positive battery_load is charging.
+object recorder { parent agg_bat1; property battery_load; file agg-bat-1.csv; interval 60; limit 1440; }
+
+object inverter {
+  name agg_pv1_inv;
+  parent derms_meter;
+  phases ABCN;
+  generator_status ONLINE;
+  four_quadrant_control_mode CONSTANT_PQ;
+  inverter_type FOUR_QUADRANT;
+  rated_power 4000;
+  P_Out 0;
+  Q_Out 0;
+}
+object player { parent agg_pv1_inv; property P_Out; file agg-pv-1.player; }
+object recorder { parent agg_pv1_inv; property P_Out; file agg-pv-1.csv; interval 60; limit 1440; }
+
+object inverter {
+  name solo_pv1_inv;
+  parent derms_meter;
+  phases ABCN;
+  generator_status ONLINE;
+  four_quadrant_control_mode CONSTANT_PQ;
+  inverter_type FOUR_QUADRANT;
+  rated_power 3000;
+  P_Out 0;
+  Q_Out 0;
+}
+object player { parent solo_pv1_inv; property P_Out; file solo-pv-1.player; }
+object recorder { parent solo_pv1_inv; property P_Out; file solo-pv-1.csv; interval 60; limit 1440; }

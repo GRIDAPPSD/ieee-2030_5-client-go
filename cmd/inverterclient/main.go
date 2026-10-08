@@ -190,6 +190,11 @@ func main() {
 
 	flag.Parse()
 
+	if err := maybeApplySimConfig(flag.CommandLine, &cfg, *cf.SimConfigPath, osLookupEnv); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+
 	if _, err := guard.ParseRole(cfg.ClientRole); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)

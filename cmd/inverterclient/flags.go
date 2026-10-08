@@ -31,6 +31,7 @@ type cliFlags struct {
 	FleetFiles          *repeatedStringFlag
 	RunDir              *string
 	SidecarPythonPath   *string
+	SimConfigPath       *string
 }
 
 // repeatedStringFlag implements flag.Value so --fleet-file may be given
@@ -145,6 +146,10 @@ func registerFlags(fs *flag.FlagSet, cfg *inverter.SimConfig) *cliFlags {
 	// own environment: no PYTHONPATH is added.
 	sidecarPythonPath := fs.String("sidecar-pythonpath", defaultSidecarPythonPath, "directory containing the gldsidecar package (aggregator role with --fleet-file only; empty if gldsidecar is installed in the interpreter's own environment)")
 
+	// Sim mode (simmode.go): one JSON file holds every sim setting.
+	// Empty (default) leaves every flag's behavior exactly as before.
+	simConfig := fs.String("sim-config", "", "path to the sim-mode JSON config (env: SEP2_SIM_CONFIG); an explicit flag or env var overrides the file")
+
 	return &cliFlags{
 		HMIPort:             hmiPort,
 		ListScenarios:       listScenarios,
@@ -154,5 +159,6 @@ func registerFlags(fs *flag.FlagSet, cfg *inverter.SimConfig) *cliFlags {
 		FleetFiles:          &fleetFiles,
 		RunDir:              runDir,
 		SidecarPythonPath:   sidecarPythonPath,
+		SimConfigPath:       simConfig,
 	}
 }
