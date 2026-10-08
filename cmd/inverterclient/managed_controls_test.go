@@ -43,6 +43,39 @@ type controlsServer struct {
 	failFSA     map[string]bool
 	failDefault bool
 	defaultW    int
+
+	// failControls makes the DERControlList answer 503; progMode picks what
+	// the DERProgramList holds (progNormal, progEmpty, progNoList or
+	// progNoListAndNormal); times keeps when each path was hit.
+	failControls bool
+	progMode     int
+	times        map[string][]time.Time
+}
+
+const (
+	progNormal          = iota // PROG1, with a DERControlList
+	progEmpty                  // no program at all
+	progNoList                 // only PROG0, which has no DERControlList link
+	progNoListAndNormal        // PROG0 (higher priority, no list) and PROG1
+)
+
+func (s *controlsServer) setFailControls(fail bool) {
+	s.mu.Lock()
+	s.failControls = fail
+	s.mu.Unlock()
+}
+
+func (s *controlsServer) setProgMode(m int) {
+	s.mu.Lock()
+	s.progMode = m
+	s.mu.Unlock()
+}
+
+// hitTimes is when path was hit, oldest first.
+func (s *controlsServer) hitTimes(path string) []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Time(nil), s.times[path]...)
 }
 
 func (s *controlsServer) setFailFSA(lfdi string, fail bool) {
@@ -66,6 +99,7 @@ func (s *controlsServer) hitsOf(path string) int {
 func (s *controlsServer) hit(path string) {
 	s.mu.Lock()
 	s.hits[path]++
+	s.times[path] = append(s.times[path], time.Now())
 	s.mu.Unlock()
 }
 
@@ -108,7 +142,7 @@ func newControlsFixture(t *testing.T, startOffset time.Duration, durationS uint3
 func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Duration, durationS uint32, lfdis ...string) (*inverter.SEP2Client, *controlsServer) {
 	t.Helper()
 	env := newDERWalkTestEnv(t)
-	srv := &controlsServer{hits: map[string]int{}, failFSA: map[string]bool{}}
+	srv := &controlsServer{hits: map[string]int{}, failFSA: map[string]bool{}, times: map[string][]time.Time{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/edev", func(w http.ResponseWriter, _ *http.Request) {
 		var list sep2.EndDeviceList
@@ -141,9 +175,21 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 		if withDefault {
 			prog.DefaultDERControlLink = &sep2.Link{Href: "/dc"}
 		}
+		srv.mu.Lock()
+		mode := srv.progMode
+		srv.mu.Unlock()
+		var progs []sep2.DERProgram
+		switch mode {
+		case progNormal:
+			progs = []sep2.DERProgram{prog}
+		case progNoList:
+			progs = []sep2.DERProgram{{MRID: "PROG0", Primacy: 0}}
+		case progNoListAndNormal:
+			progs = []sep2.DERProgram{{MRID: "PROG0", Primacy: 0}, prog}
+		}
 		writeSepXML(t, w, sep2.DERProgramList{
-			ListResource: sep2.ListResource{All: 1, Results: 1},
-			DERProgram:   []sep2.DERProgram{prog},
+			ListResource: sep2.ListResource{All: uint32(len(progs)), Results: uint32(len(progs))},
+			DERProgram:   progs,
 		})
 	})
 	mux.HandleFunc("/dc", func(w http.ResponseWriter, _ *http.Request) {
@@ -161,6 +207,13 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 	})
 	mux.HandleFunc("/derc", func(w http.ResponseWriter, _ *http.Request) {
 		srv.hit("/derc")
+		srv.mu.Lock()
+		failList := srv.failControls
+		srv.mu.Unlock()
+		if failList {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		mask := sep2.HexBinary8(0x07)
 		var dc sep2.DERControl
 		dc.MRID = "CTL1"
@@ -704,5 +757,195 @@ func TestResponsePOSTHook_FailureLogsNameTheManagedDevice(t *testing.T) {
 		if want := fmt.Sprintf("lfdi=%q", batLFDI); !strings.Contains(line, want) {
 			t.Errorf("%q line = %q, want it to contain %s", name, line, want)
 		}
+	}
+}
+
+// An active event ends on time even while the DERControlList cannot be read.
+func TestManagedControls_ActiveEventEndsOnTimeWhileThePollFails(t *testing.T) {
+	// Started 1s ago, runs 3s.
+	client, srv := newControlsFixture(t, time.Second, 3, pvLFDI, batLFDI)
+	fleet, _, _ := startControlFleet(t, client, "follow")
+	waitFor(t, "both devices to start the control", func() bool { return allStarted(fleet) })
+
+	srv.setFailControls(true)
+	failedFrom := srv.hitsOf("/derc")
+	waitFor(t, "the PV to leave EVENT_STARTED with its polls failing", func() bool {
+		return deviceByLFDI(fleet, pvLFDI).ctl.sm.Current().State != inverter.StateEventStarted
+	})
+	if n := srv.hitsOf("/derc") - failedFrom; n < 1 {
+		t.Errorf("only %d failing polls were made, so the event did not end while polls failed", n)
+	}
+	if deviceByLFDI(fleet, pvLFDI).ctl.active() {
+		t.Errorf("PV still reports an active event after its end time")
+	}
+	if got := defaultTargetW(deviceByLFDI(fleet, pvLFDI)); got != -1 {
+		t.Errorf("fixture holds a default of %d W, want none", got)
+	}
+}
+
+// A program added after the session started is followed, the wait is logged
+// naming the device and its LFDI, and the session still ends with the context.
+func TestManagedControls_ProgramAddedAfterStartIsFollowed(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	srv.setProgMode(progEmpty)
+	logs := captureSessionLog(t)
+	fleet, _, cancel, _ := startControlFleetEvery(t, client, "follow", 20*time.Millisecond)
+
+	waitFor(t, "three program list reads", func() bool { return srv.hitsOf("/dp") >= 3 })
+	if got := deviceByLFDI(fleet, pvLFDI).ctl.sm.Current().State; got != inverter.StateDefault {
+		t.Fatalf("PV state with no program = %v, want DEFAULT", got)
+	}
+	want := "managed device pv (" + pvLFDI + "): no DERProgram with a DERControlList"
+	if !strings.Contains(logs.String(), want) {
+		t.Errorf("no log line %q; got:\n%s", want, logs.String())
+	}
+
+	srv.setProgMode(progNormal)
+	waitFor(t, "both devices to follow the added program", func() bool { return allStarted(fleet) })
+	for _, lfdi := range []string{pvLFDI, batLFDI} {
+		waitFor(t, "Responses from "+lfdi, func() bool { return len(srv.statusesFor(lfdi, "CTL1")) >= 2 })
+	}
+	cancel()
+	waitControlsBounded(t, fleet, "the context was cancelled")
+}
+
+// A program with no DERControlList link is skipped, without a nil
+// dereference, in favour of one that has it; and when it is the only one the
+// session waits instead of ending.
+func TestManagedControls_ProgramWithoutAControlListIsSkipped(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	srv.setProgMode(progNoList)
+	fleet, _, cancel, _ := startControlFleetEvery(t, client, "follow", 20*time.Millisecond)
+
+	waitFor(t, "three program list reads", func() bool { return srv.hitsOf("/dp") >= 3 })
+	if n := srv.hitsOf("/derc"); n != 0 {
+		t.Errorf("/derc was read %d times with no program offering a control list", n)
+	}
+
+	srv.setProgMode(progNoListAndNormal)
+	waitFor(t, "both devices to follow PROG1", func() bool { return allStarted(fleet) })
+	cancel()
+	waitControlsBounded(t, fleet, "the context was cancelled")
+}
+
+// A default control that cannot be read does not stop the events being
+// followed, is retried on each poll, and the last one read keeps driving the
+// device when a later read fails.
+func TestManagedControls_UnreadableDefaultDoesNotStopEventsAndKeepsTheLast(t *testing.T) {
+	client, srv := newControlsFixtureWith(t, true, 5*time.Second, 3600, pvLFDI, batLFDI)
+	srv.setDefault(true, 0)
+	fleet, _, _, _ := startControlFleetEvery(t, client, "follow", 20*time.Millisecond)
+	pv := deviceByLFDI(fleet, pvLFDI)
+
+	waitFor(t, "both devices to follow the event with the default unreadable", func() bool { return allStarted(fleet) })
+	waitFor(t, "the default to be retried", func() bool { return srv.hitsOf("/dc") >= 6 })
+	if got := defaultTargetW(pv); got != -1 {
+		t.Errorf("PV holds a %d W default that was never readable", got)
+	}
+
+	srv.setDefault(false, 700)
+	waitFor(t, "the PV to read the default", func() bool { return defaultTargetW(pv) == 700 })
+
+	// The default fails again: the 700 W one stays.
+	srv.setDefault(true, 0)
+	before := srv.hitsOf("/dc")
+	waitFor(t, "failing default reads", func() bool { return srv.hitsOf("/dc") >= before+4 })
+	if got := defaultTargetW(pv); got != 700 {
+		t.Errorf("PV default after failed reads = %d W, want the last one read, 700 W", got)
+	}
+}
+
+// Every read and Response of the sessions is made as the device: each one is
+// judged against the managed set, so the judgements cover every request the
+// server saw (FSA lists, programs, defaults, control lists and Responses).
+func TestManagedControls_EveryReadIsMadeAsTheDevice(t *testing.T) {
+	client, srv := newControlsFixtureWith(t, true, 5*time.Second, 3600, pvLFDI, batLFDI)
+	fleet, _, cancel, rec := startControlFleetEvery(t, client, "follow", 10*time.Millisecond)
+
+	waitFor(t, "control list and default reads", func() bool { return srv.hitsOf("/derc") >= 30 && srv.hitsOf("/dc") >= 30 })
+	for _, lfdi := range []string{pvLFDI, batLFDI} {
+		waitFor(t, "Responses from "+lfdi, func() bool { return len(srv.statusesFor(lfdi, "CTL1")) >= 2 })
+	}
+	cancel()
+	waitControlsBounded(t, fleet, "the context was cancelled")
+
+	want := srv.hitsOf("/fsa/"+pvLFDI) + srv.hitsOf("/fsa/"+batLFDI) + srv.hitsOf("/dp") +
+		srv.hitsOf("/dc") + srv.hitsOf("/derc") +
+		len(srv.statusesFor(pvLFDI, "CTL1")) + len(srv.statusesFor(batLFDI, "CTL1"))
+	if got := rec.judged(pvLFDI) + rec.judged(batLFDI); got < want {
+		t.Errorf("the devices were the request target %d times, want at least %d (every read and Response the server saw)", got, want)
+	}
+}
+
+// Retries of a failing discovery back off: each wait doubles.
+func TestManagedControls_DiscoveryBackoffGrows(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	srv.setFailFSA(pvLFDI, true)
+	_, _, cancel, _ := startControlFleetEvery(t, client, "follow", 40*time.Millisecond)
+	defer cancel()
+
+	waitFor(t, "four failed FSA lists for the PV", func() bool { return len(srv.hitTimes("/fsa/"+pvLFDI)) >= 4 })
+	ts := srv.hitTimes("/fsa/" + pvLFDI)
+	// Waits of 40, 80 and 160 ms; a timer never fires early, so lower bounds
+	// with room for server-side jitter.
+	for i, min := range []time.Duration{35 * time.Millisecond, 70 * time.Millisecond, 140 * time.Millisecond} {
+		if gap := ts[i+1].Sub(ts[i]); gap < min {
+			t.Errorf("retry %d came %v after the previous attempt, want at least %v (the wait must double)", i+1, gap, min)
+		}
+	}
+}
+
+func TestControlSession_PollIntervalPrecedence(t *testing.T) {
+	dcap := sep2.DeviceCapability{PollRate: 3600}
+	cases := []struct {
+		name string
+		cs   *controlSession
+		dcap sep2.DeviceCapability
+		want time.Duration
+	}{
+		{"test seam wins", &controlSession{interval: 5 * time.Millisecond, pollS: 7}, dcap, 5 * time.Millisecond},
+		{"poll_s beats the server pollRate", &controlSession{pollS: 7}, dcap, 7 * time.Second},
+		{"server pollRate", &controlSession{}, dcap, time.Hour},
+		{"nothing set", &controlSession{}, sep2.DeviceCapability{}, defaultControlPoll},
+	}
+	for _, c := range cases {
+		if got := c.cs.pollInterval(c.dcap); got != c.want {
+			t.Errorf("%s: pollInterval = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// WaitControls returns only after every session goroutine has finished, not
+// when the context is cancelled.
+func TestManagedControls_WaitControlsWaitsForEverySession(t *testing.T) {
+	client, _ := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	pv := managedCfg(t, "pv", pvLFDI, "pv", 4000)
+	pv.Controls = &simconfig.Controls{Response: "follow"}
+	ctx, cancel := context.WithCancel(context.Background())
+	fleet, err := startManaged(ctx, client, sep2.DeviceCapability{}, "/edev", []simconfig.Managed{pv}, time.Hour)
+	if err != nil {
+		t.Fatalf("startManaged: %v", err)
+	}
+	release := make(chan struct{})
+	exited := make(chan struct{}, 1)
+	fleet.devices[0].ctl.interval = 20 * time.Millisecond
+	fleet.devices[0].ctl.onExit = func() { exited <- struct{}{}; <-release }
+	fleet.StartControls(ctx, controlsEnv{client: client, cfg: inverter.SimConfig{}})
+	waitFor(t, "the PV to start the control", func() bool { return allStarted(fleet) })
+
+	cancel()
+	<-exited
+	done := make(chan struct{})
+	go func() { fleet.WaitControls(); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("WaitControls returned while a session goroutine was still running")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("WaitControls did not return after the session finished")
 	}
 }
