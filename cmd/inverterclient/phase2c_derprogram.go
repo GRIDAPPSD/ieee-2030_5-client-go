@@ -140,10 +140,23 @@ func runPhase2cDERProgramWalk(
 	cfg inverter.SimConfig,
 	dcap sep2.DeviceCapability,
 ) (map[string]sep2.DERProgram, error) {
+	return runPhase2cDERProgramWalkOpts(ctx, client, fsaList, cfg, dcap, false)
+}
+
+// runPhase2cDERProgramWalkOpts is runPhase2cDERProgramWalk; lenientDefault is
+// passed to walkDERProgramTreeOpts.
+func runPhase2cDERProgramWalkOpts(
+	ctx context.Context,
+	client *inverter.SEP2Client,
+	fsaList sep2.FunctionSetAssignmentsList,
+	cfg inverter.SimConfig,
+	dcap sep2.DeviceCapability,
+	lenientDefault bool,
+) (map[string]sep2.DERProgram, error) {
 	log.Println("=== Phase 2c: DERProgram Tree Walk ===")
 	for {
 		derProgramsByMRID := make(map[string]sep2.DERProgram)
-		if err := walkDERProgramTree(ctx, client, fsaList, derProgramsByMRID); err != nil {
+		if err := walkDERProgramTreeOpts(ctx, client, fsaList, derProgramsByMRID, lenientDefault); err != nil {
 			return map[string]sep2.DERProgram{}, &derProgramWalkFatal{
 				reason: fmt.Sprintf("walk DERProgram tree: %v", err),
 				inner:  err,

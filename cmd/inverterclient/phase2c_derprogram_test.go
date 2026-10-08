@@ -460,3 +460,24 @@ func mridSet(m map[string]sep2.DERProgram) []string {
 	}
 	return out
 }
+
+// The der role's Phase 2c walk is strict: an unreadable DefaultDERControl
+// fails it with the walk-fatal error.
+func TestRunPhase2cDERProgramWalk_UnreadableDefaultReturnsFatal(t *testing.T) {
+	_ = captureLog(t)
+	fsaList, mux := failingDefaultFixture(t)
+	env := newDERWalkTestEnv(t)
+	serverURL, _ := startDERWalkListener(t, env, mux)
+	client := newDERWalkClient(t, env, serverURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	got, err := runPhase2cDERProgramWalk(ctx, client, fsaList, inverter.SimConfig{CSIP: true}, phase2cDERProgramDefaultDcap())
+	var fatal *derProgramWalkFatal
+	if !errors.As(err, &fatal) {
+		t.Fatalf("err = %v (cache %+v); want *derProgramWalkFatal", err, got)
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("error %q does not surface status 503", err.Error())
+	}
+}

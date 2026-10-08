@@ -242,8 +242,8 @@ func postResponseWithRetryClock(
 	// `errors.Is(err, ErrResponseTransient)` so upstream callers can
 	// pattern-match the terminal state.
 	eventMRID, statusVal := identifyResponse(resp)
-	log.Printf("response POST DEAD-LETTER: event=%q status=%d after %d attempts: %v",
-		eventMRID, statusVal, cfg.MaxAttempts, lastErr)
+	log.Printf("response POST DEAD-LETTER: event=%q status=%d lfdi=%q after %d attempts: %v",
+		eventMRID, statusVal, resp.EndDeviceLFDI, cfg.MaxAttempts, lastErr)
 	return fmt.Errorf("post response failed after %d attempts: %w", cfg.MaxAttempts, lastErr)
 }
 

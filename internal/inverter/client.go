@@ -949,6 +949,13 @@ func (c *SEP2Client) PostResponse(ctx context.Context, replyToHref string, resp 
 	if err := c.guard.Allow(http.MethodPost, guard.Action{Kind: guard.KindResponsePost, TargetLFDI: targetFrom(ctx)}); err != nil {
 		return fmt.Errorf("POST Response %s: %w", replyToHref, err)
 	}
+	// The guard judged the target ctx carries, and the body names
+	// resp.EndDeviceLFDI; they must be one device, or the guard would clear a
+	// Response for a device other than the one it describes. A request with
+	// no target is the client's own and is not affected.
+	if t := targetFrom(ctx); t != "" && !strings.EqualFold(t, resp.EndDeviceLFDI) {
+		return fmt.Errorf("Response device LFDI %q does not match the request target %s", resp.EndDeviceLFDI, t)
+	}
 
 	return c.sendResponse(ctx, replyToHref, resp)
 }

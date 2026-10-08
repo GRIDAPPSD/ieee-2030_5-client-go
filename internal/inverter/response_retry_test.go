@@ -434,6 +434,24 @@ func TestPostResponseWithRetry_DeadLetterLog(t *testing.T) {
 	}
 }
 
+// The dead-letter line names the device whose Response was dropped, so
+// several managed devices answering one control can be told apart.
+func TestPostResponseWithRetry_DeadLetterLogNamesTheDevice(t *testing.T) {
+	const lfdi = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	resp := sampleResp()
+	resp.EndDeviceLFDI = lfdi
+	poster := &fakePoster{errs: []error{transientErr("a1"), transientErr("a2"), transientErr("a3")}}
+
+	logs := captureLogs(t, func() {
+		_ = inverter.PostResponseWithRetryForTest(
+			context.Background(), poster, "/rsps/1/rsp", resp, tightCfg(), &fakeRetryClock{},
+		)
+	})
+	if want := `lfdi="` + lfdi + `"`; !strings.Contains(logs, want) {
+		t.Errorf("dead-letter log missing %s; got:\n%s", want, logs)
+	}
+}
+
 // =============================================================================
 // (8) Defaults
 // =============================================================================

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
@@ -112,6 +113,12 @@ type managedDevice struct {
 	// down is set when the last tick could not read or apply the device,
 	// so a grant leaves it out of its split until a tick succeeds.
 	down bool
+
+	// edev is this device's own copy of its EndDevice, so its session
+	// follows redirects without touching another device's links. ctl is its
+	// control state, set before any session goroutine starts.
+	edev sep2.EndDevice
+	ctl  *controlSession
 }
 
 // managedFleet is every managed device session of one aggregator process.
@@ -123,6 +130,9 @@ type managedFleet struct {
 	// the server-synchronized clock the grant's interval is read against.
 	dispatch *dispatcher
 	now      func() time.Time
+
+	// wg counts the control session goroutines (StartControls).
+	wg sync.WaitGroup
 }
 
 // setDispatcher installs the dispatcher that plans battery setpoints under
@@ -139,7 +149,9 @@ func (f *managedFleet) setDispatcher(d *dispatcher) {
 func (f *managedFleet) batteries() []fleetMember {
 	var out []fleetMember
 	for _, md := range f.devices {
-		if md.kind != "battery" {
+		// A device a control is driving takes no share of the grant; its
+		// achieved power still counts against it (Tick).
+		if md.kind != "battery" || (md.ctl != nil && md.ctl.active()) {
 			continue
 		}
 		m := fleetMember{key: md.lfdi, ratedW: md.ratedW, up: !md.down}
@@ -182,10 +194,29 @@ func startManaged(ctx context.Context, client *inverter.SEP2Client, dcap sep2.De
 		if err != nil {
 			return nil, err
 		}
+		md.edev = ownEndDevice(list, m.LFDI)
+		md.ctl = newControlSession(m.Controls)
 		fleet.devices = append(fleet.devices, md)
 		log.Printf("managed device %s: LFDI %s", m.Name, m.LFDI)
 	}
 	return fleet, nil
+}
+
+// ownEndDevice returns a copy of the listed EndDevice with the given LFDI,
+// its FSA list link copied too: that link is rewritten when the server
+// redirects, and a shared one would move every device's session.
+func ownEndDevice(list sep2.EndDeviceList, lfdi string) sep2.EndDevice {
+	for _, ed := range list.EndDevice {
+		if !strings.EqualFold(ed.LFDI, lfdi) {
+			continue
+		}
+		if ed.FunctionSetAssignmentsListLink != nil {
+			l := *ed.FunctionSetAssignmentsListLink
+			ed.FunctionSetAssignmentsListLink = &l
+		}
+		return ed
+	}
+	return sep2.EndDevice{LFDI: lfdi}
 }
 
 func startManagedDevice(ctx context.Context, client *inverter.SEP2Client, dcap sep2.DeviceCapability, m simconfig.Managed, reportInterval time.Duration) (*managedDevice, error) {
@@ -297,7 +328,11 @@ func (f *managedFleet) Tick(ctx context.Context) {
 			log.Printf("managed device %s: ReadState failed: %v", md.name, err)
 			continue
 		}
-		controls := inverter.ApplyControlsWithCurves(nil, reading.Grid, reading.MaxPowerW, inverter.RatedW(md.ratedW), nil)
+		var base *sep2.DERControlBase
+		if md.ctl != nil {
+			base = md.ctl.base()
+		}
+		controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, inverter.RatedW(md.ratedW), nil)
 		if w, ok := plan[md.lfdi]; ok {
 			controls.ActivePowerW = w
 		}

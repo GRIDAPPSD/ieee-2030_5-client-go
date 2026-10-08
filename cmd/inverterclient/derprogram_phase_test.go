@@ -697,3 +697,46 @@ func TestWalkDERProgramTree_GetProgramListErrorWraps(t *testing.T) {
 		t.Errorf("error chain has no inner error (production code uses %%w, this should never happen)")
 	}
 }
+
+// failingDefaultFixture serves one FSA whose program links a
+// DefaultDERControl that answers 503.
+func failingDefaultFixture(t *testing.T) (sep2.FunctionSetAssignmentsList, *http.ServeMux) {
+	t.Helper()
+	fsas := []fsaFixture{{
+		mRID:               "FSA-DDC-503",
+		derProgramListPath: "/edev/1/fsa/0/derp",
+		programs: []derProgramFixture{
+			{mRID: "PROG-DDC", defaultDERControlPath: "/edev/1/derp/0/dderc"},
+		},
+	}}
+	mux := http.NewServeMux()
+	hitsByPath := map[string]*atomic.Int32{}
+	registerHandler(t, mux, hitsByPath, fsas[0].derProgramListPath, func(w http.ResponseWriter, _ *http.Request) {
+		writeSepXML(t, w, &sep2.DERProgramList{
+			ListResource: sep2.ListResource{All: 1, Results: 1},
+			DERProgram: []sep2.DERProgram{{
+				MRID:                  "PROG-DDC",
+				Primacy:               1,
+				DefaultDERControlLink: &sep2.Link{Href: "/edev/1/derp/0/dderc"},
+			}},
+		})
+	})
+	registerHandler(t, mux, hitsByPath, "/edev/1/derp/0/dderc", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	})
+	return buildFSAList(fsas), mux
+}
+
+// The der role's walk is strict: an unreadable DefaultDERControl fails it.
+// Only the managed-device path opts into a lenient default.
+func TestWalkDERProgramTree_UnreadableDefaultFailsTheWalk(t *testing.T) {
+	t.Parallel()
+	fsaList, mux := failingDefaultFixture(t)
+	out, err := drive(t, fsaList, mux)
+	if err == nil {
+		t.Fatalf("walkDERProgramTree returned nil error on a 503 DefaultDERControl; cache=%+v", out)
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("error %q does not surface status 503", err.Error())
+	}
+}
