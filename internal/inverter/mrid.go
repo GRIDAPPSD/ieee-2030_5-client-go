@@ -1,9 +1,12 @@
 package inverter
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
+	"time"
 )
 
 // mRIDType (IEEE 2030.5-2018 sec 10.x object model, "mRIDType object
@@ -43,4 +46,17 @@ func avoidReservedAllF(b []byte) []byte {
 // from reading mRIDs (readingMRID) so the two families never collide.
 func MirrorUsagePointMRID(deviceLFDI string) string {
 	return deriveMRID("mup", deviceLFDI)
+}
+
+// NewFlowReservationRequestMRID mints the mRID of one FlowReservationRequest
+// from the aggregator's LFDI, the creation instant and 16 random bytes, so
+// two requests made in the same second or by one LFDI never share an mRID:
+// the server keys its answer on it and a repeat would be read as the same
+// request. It fails if the system's random source does.
+func NewFlowReservationRequestMRID(selfLFDI string, now time.Time) (string, error) {
+	entropy := make([]byte, 16)
+	if _, err := rand.Read(entropy); err != nil {
+		return "", fmt.Errorf("mint FlowReservationRequest mRID: %w", err)
+	}
+	return deriveMRID("frq", selfLFDI, now.UTC().Format(time.RFC3339Nano), hex.EncodeToString(entropy)), nil
 }
