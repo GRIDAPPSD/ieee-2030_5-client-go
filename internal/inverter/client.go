@@ -844,6 +844,11 @@ func (c *SEP2Client) CreateMirrorUsagePoint(ctx context.Context, mupListHref str
 	if t := targetFrom(ctx); t != "" && !strings.EqualFold(t, string(deviceLFDI)) {
 		return "", fmt.Errorf("mirror device LFDI %s does not match the request target %s", deviceLFDI, t)
 	}
+	// With no target the request is judged as this client's own, so a mirror
+	// naming another device must not ride on that judgement.
+	if targetFrom(ctx) == "" && !strings.EqualFold(c.LFDI(), string(deviceLFDI)) {
+		return "", fmt.Errorf("mirror device LFDI %s is not this client's LFDI and the request names no target", deviceLFDI)
+	}
 	mup.DeviceLFDI = string(deviceLFDI)
 	loc, _, err := c.Post(ctx, guard.KindMirrorPost, mupListHref, &mup)
 	return loc, err

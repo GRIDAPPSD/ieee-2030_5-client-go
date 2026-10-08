@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
@@ -52,7 +53,9 @@ func TestCreateMirrorUsagePoint_DeviceLFDI(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 	})
 	serverURL, _ := startIdleListener(t, env, mux)
-	client := newCSIPClient(t, env, serverURL, true)
+	// A manager acts for other devices; a der client may only name itself.
+	client := newGuardTestClient(t, serverURL, env, "aggregator")
+	client.SetManagedSet(guard.NewStaticManagedSet(deviceALFDI, deviceBLFDI))
 	ctx := testCtx(t)
 
 	for _, dev := range []struct {
@@ -62,7 +65,7 @@ func TestCreateMirrorUsagePoint_DeviceLFDI(t *testing.T) {
 		{deviceALFDI, inverter.MirrorUsagePointMRID(deviceALFDI)},
 		{deviceBLFDI, inverter.MirrorUsagePointMRID(deviceBLFDI)},
 	} {
-		if _, err := client.CreateMirrorUsagePoint(ctx, "/mup", inverter.DeviceLFDI(dev.lfdi), sep2.MirrorUsagePoint{
+		if _, err := client.CreateMirrorUsagePoint(inverter.WithTarget(ctx, dev.lfdi), "/mup", inverter.DeviceLFDI(dev.lfdi), sep2.MirrorUsagePoint{
 			MRID:                dev.mrid,
 			Description:         "PV Inverter Metering",
 			ServiceCategoryKind: 0,
