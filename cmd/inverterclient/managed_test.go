@@ -69,6 +69,8 @@ type fakeServer struct {
 	// mupAttempts counts every mirror POST that reached the server.
 	mupFailures int
 	mupAttempts int
+	// noLocation makes a successful mirror POST answer 201 with no Location.
+	noLocation bool
 }
 
 func newFakeServer(t *testing.T, env *derWalkTestEnv, listed ...string) (*inverter.SEP2Client, *fakeServer) {
@@ -99,7 +101,9 @@ func newFakeServer(t *testing.T, env *derWalkTestEnv, listed ...string) (*invert
 		loc := fmt.Sprintf("/mup/%d", len(fs.mupLFDI)+1)
 		fs.mupLFDI[loc] = mup.DeviceLFDI
 		fs.mupBodies = append(fs.mupBodies, string(b))
-		w.Header().Set("Location", loc)
+		if !fs.noLocation {
+			w.Header().Set("Location", loc)
+		}
 		w.WriteHeader(http.StatusCreated)
 	})
 	mux.HandleFunc("/mup/", func(w http.ResponseWriter, r *http.Request) {
@@ -307,36 +311,204 @@ func TestManagedFleet_FailedMirrorIsRetriedAndThenReports(t *testing.T) {
 	}
 }
 
-// A mirror that never succeeds is retried a bounded number of times, each
-// attempt is logged, and every skipped reading is logged.
-func TestManagedFleet_MirrorRetryIsBoundedAndSkippedReadingsAreLogged(t *testing.T) {
+// fakeClock is a manual clock for the retry and report-interval timing.
+type fakeClock struct{ t time.Time }
+
+func (c *fakeClock) now() time.Time          { return c.t }
+func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+// useFakeClock moves every device of the fleet onto a clock that starts at
+// the real time, so the backoff the start attempt set is on the same scale.
+func useFakeClock(fleet *managedFleet) *fakeClock {
+	c := &fakeClock{t: time.Now()}
+	for _, md := range fleet.devices {
+		md.now = c.now
+	}
+	return c
+}
+
+func TestMirrorBackoff_DoublesFromTheReportIntervalAndIsCapped(t *testing.T) {
+	for _, tc := range []struct {
+		base     time.Duration
+		failures int
+		want     time.Duration
+	}{
+		{time.Second, 1, time.Second},
+		{time.Second, 2, 2 * time.Second},
+		{time.Second, 3, 4 * time.Second},
+		{time.Second, 9, 256 * time.Second},
+		{time.Second, 10, maxMirrorBackoff},
+		{time.Second, 500, maxMirrorBackoff},
+		{time.Hour, 1, maxMirrorBackoff},
+		{0, 1, 0},
+		{0, 500, 0},
+	} {
+		if got := mirrorBackoff(tc.base, tc.failures); got != tc.want {
+			t.Errorf("mirrorBackoff(%v, %d) = %v, want %v", tc.base, tc.failures, got, tc.want)
+		}
+	}
+}
+
+// A mirror that fails for far longer than the old five-attempt window still
+// ends up reporting once the server answers, the retries are spaced by the
+// backoff rather than made on every tick, and nothing is posted meanwhile.
+func TestManagedFleet_LongMirrorOutageStillReportsAfterRecovery(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, pvLFDI)
+	const outage = 8 // more than the five attempts the old cap allowed
+	fs.mupFailures = outage
+	logs := captureManagedLog(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	fleet, err := startManaged(ctx, client, dcapWithMirrors, "/edev", []simconfig.Managed{managedCfg(t, "pv", pvLFDI, "pv", 3000)}, time.Second)
+	if err != nil {
+		t.Fatalf("startManaged: %v", err)
+	}
+	clock := useFakeClock(fleet)
+	if fs.mupAttempts != 1 {
+		t.Fatalf("mirror attempts at start = %d, want 1", fs.mupAttempts)
+	}
+
+	// Ticks inside the backoff make no attempt.
+	for i := 0; i < 3; i++ {
+		fleet.Tick(ctx)
+	}
+	if fs.mupAttempts != 1 {
+		t.Fatalf("mirror attempts after 3 ticks inside the backoff = %d, want 1", fs.mupAttempts)
+	}
+
+	// Each step is longer than the backoff, so every tick retries.
+	for i := 0; i < outage-1; i++ {
+		clock.advance(maxMirrorBackoff)
+		fleet.Tick(ctx)
+		if fs.mupAttempts != i+2 {
+			t.Fatalf("after step %d: mirror attempts = %d, want %d", i, fs.mupAttempts, i+2)
+		}
+	}
+	if n := len(fs.readings); n != 0 {
+		t.Fatalf("readings posted before the mirror existed: %v", fs.readings)
+	}
+
+	clock.advance(maxMirrorBackoff)
+	fleet.Tick(ctx)
+	if fs.mupLFDI["/mup/1"] != pvLFDI {
+		t.Fatalf("mirrors after recovery = %v, want /mup/1 naming %s", fs.mupLFDI, pvLFDI)
+	}
+	got := fs.readings["/mup/1"]
+	if len(got) != 1 || got[0].Reading == nil || got[0].Reading.Value == nil || *got[0].Reading.Value != 3000 {
+		t.Fatalf("readings after recovery = %v, want one of 3000 W", got)
+	}
+	if n := strings.Count(logs.String(), "create MirrorUsagePoint attempt"); n != outage {
+		t.Errorf("%d logged mirror failures, want %d (one per failed attempt)", n, outage)
+	}
+	if strings.Contains(logs.String(), "gave up") {
+		t.Errorf("log says the device gave up: %q", logs.String())
+	}
+}
+
+// The wait after a failure is the backoff: a tick just short of it makes no
+// attempt, a tick at it does.
+func TestManagedFleet_MirrorRetryWaitsForTheBackoff(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, pvLFDI)
+	fs.mupFailures = 1000
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fleet, err := startManaged(ctx, client, dcapWithMirrors, "/edev", []simconfig.Managed{managedCfg(t, "pv", pvLFDI, "pv", 3000)}, 10*time.Second)
+	if err != nil {
+		t.Fatalf("startManaged: %v", err)
+	}
+	clock := useFakeClock(fleet)
+	clock.advance(9 * time.Second)
+	fleet.Tick(ctx)
+	if fs.mupAttempts != 1 {
+		t.Errorf("attempts 9 s into a 10 s backoff = %d, want 1", fs.mupAttempts)
+	}
+	clock.advance(2 * time.Second)
+	fleet.Tick(ctx)
+	if fs.mupAttempts != 2 {
+		t.Errorf("attempts after the first backoff = %d, want 2", fs.mupAttempts)
+	}
+	// The second failure doubles the wait to 20 s.
+	clock.advance(19 * time.Second)
+	fleet.Tick(ctx)
+	if fs.mupAttempts != 2 {
+		t.Errorf("attempts 19 s into a 20 s backoff = %d, want 2", fs.mupAttempts)
+	}
+	clock.advance(2 * time.Second)
+	fleet.Tick(ctx)
+	if fs.mupAttempts != 3 {
+		t.Errorf("attempts after the second backoff = %d, want 3", fs.mupAttempts)
+	}
+}
+
+// A device with no mirror logs its skipped reading once per report
+// interval, not once per tick.
+func TestManagedFleet_SkippedReadingIsLoggedOncePerInterval(t *testing.T) {
 	env := newDERWalkTestEnv(t)
 	client, fs := newFakeServer(t, env, pvLFDI)
 	fs.mupFailures = 1000
 	logs := captureManagedLog(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fleet, err := startManaged(ctx, client, dcapWithMirrors, "/edev", []simconfig.Managed{managedCfg(t, "pv", pvLFDI, "pv", 3000)}, time.Hour)
+	if err != nil {
+		t.Fatalf("startManaged: %v", err)
+	}
+	clock := useFakeClock(fleet)
+	const skipped = "reading skipped: no MirrorUsagePoint"
+	for i := 0; i < 5; i++ {
+		fleet.Tick(ctx)
+	}
+	if n := strings.Count(logs.String(), skipped); n != 1 {
+		t.Errorf("%d skipped-reading lines over 5 ticks inside one interval, want 1", n)
+	}
+	clock.advance(time.Hour + time.Second)
+	fleet.Tick(ctx)
+	fleet.Tick(ctx)
+	if n := strings.Count(logs.String(), skipped); n != 2 {
+		t.Errorf("%d skipped-reading lines after the interval passed, want 2", n)
+	}
+	if len(fs.readings) != 0 {
+		t.Errorf("readings posted without a mirror: %v", fs.readings)
+	}
+}
+
+// A 201 with no Location does not create a usable mirror: it is logged as
+// the failure it is, no reading is posted to a guessed "/mr" path, and the
+// next attempt can still succeed.
+func TestManagedFleet_EmptyLocationIsAFailureNotAMirror(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, pvLFDI)
+	fs.noLocation = true
+	logs := captureManagedLog(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	fleet, err := startManaged(ctx, client, dcapWithMirrors, "/edev", []simconfig.Managed{managedCfg(t, "pv", pvLFDI, "pv", 3000)}, 0)
 	if err != nil {
 		t.Fatalf("startManaged: %v", err)
 	}
-	const ticks = maxMirrorAttempts + 4
-	for i := 0; i < ticks; i++ {
-		fleet.Tick(ctx)
+	fleet.Tick(ctx)
+	if fleet.devices[0].hasMirror {
+		t.Error("device has a mirror after a POST that returned no Location")
 	}
-	if fs.mupAttempts != maxMirrorAttempts {
-		t.Errorf("mirror attempts = %d over %d ticks, want %d", fs.mupAttempts, ticks, maxMirrorAttempts)
+	if len(fs.readings) != 0 {
+		t.Errorf("readings posted after a POST with no Location: %v", fs.readings)
 	}
-	if n := len(fs.readings); n != 0 {
-		t.Errorf("readings posted without a mirror: %v", fs.readings)
+	if !strings.Contains(logs.String(), "returned empty Location") {
+		t.Errorf("log %q does not report the empty Location", logs.String())
 	}
-	out := logs.String()
-	if n := strings.Count(out, "create MirrorUsagePoint"); n != maxMirrorAttempts {
-		t.Errorf("%d logged mirror failures, want %d (one per attempt)", n, maxMirrorAttempts)
-	}
-	if n := strings.Count(out, "reading skipped: no MirrorUsagePoint"); n != ticks {
-		t.Errorf("%d skipped-reading log lines over %d ticks, want one per tick", n, ticks)
+
+	fs.noLocation = false
+	fleet.Tick(ctx)
+	// The two location-less POSTs still created server-side points 1 and 2,
+	// so the third is the one the device now reports to.
+	if !fleet.devices[0].hasMirror || len(fs.readings["/mup/3"]) != 1 {
+		t.Errorf("after a good Location: hasMirror=%v readings=%v, want a mirror and one reading at /mup/3", fleet.devices[0].hasMirror, fs.readings)
 	}
 }
 
@@ -451,8 +623,22 @@ func TestStartManagedForRole_NoSimConfigIsALoggedState(t *testing.T) {
 	if err != nil || fleet != nil {
 		t.Fatalf("startManagedForRole(nil) = %v, %v, want nil, nil", fleet, err)
 	}
-	if !strings.Contains(logs.String(), "no managed devices") {
-		t.Errorf("log %q does not say the aggregator runs no managed devices", logs.String())
+	if !strings.Contains(logs.String(), "no sim config") {
+		t.Errorf("log %q does not say there is no sim config", logs.String())
+	}
+}
+
+// A sim config that exists but lists no managed devices is a different
+// state from no config, and the log says which.
+func TestStartManagedForRole_ConfigWithNoManagedDevicesIsALoggedState(t *testing.T) {
+	logs := captureManagedLog(t)
+	fleet, err := startManagedForRole(context.Background(), nil, sep2.DeviceCapability{}, "/edev", &simconfig.File{}, 0)
+	if err != nil || fleet != nil {
+		t.Fatalf("startManagedForRole(empty config) = %v, %v, want nil, nil", fleet, err)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "lists no managed devices") || strings.Contains(out, "no sim config") {
+		t.Errorf("log %q does not say the config lists no managed devices", out)
 	}
 }
 
@@ -472,9 +658,55 @@ func TestStartManagedForRole_StartsTheConfiguredDevices(t *testing.T) {
 	}
 }
 
-// main.go must call startManagedForRole and tick the fleet: nothing else
-// starts the aggregator's managed devices, and a test of the helper alone
-// cannot see the call being removed.
+// A start error reaches the exit path (fatalf in main) with the device
+// named, and no fleet comes back; a good start never calls it.
+func TestStartManagedOrExit_PassesAStartErrorToExit(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	client, _ := newFakeServer(t, env, pvLFDI)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var exits []string
+	exit := func(format string, args ...any) { exits = append(exits, fmt.Sprintf(format, args...)) }
+
+	bad := &simconfig.File{Managed: []simconfig.Managed{managedCfg(t, "ghost", notListedLFDI, "pv", 3000)}}
+	if fleet := startManagedOrExit(ctx, client, dcapWithMirrors, "/edev", bad, 0, exit); fleet != nil {
+		t.Errorf("fleet = %v after a start error, want nil", fleet)
+	}
+	if len(exits) != 1 || !strings.Contains(exits[0], "ghost") || !strings.Contains(exits[0], "managed devices") {
+		t.Fatalf("exit calls = %q, want one naming ghost", exits)
+	}
+
+	good := &simconfig.File{Managed: []simconfig.Managed{managedCfg(t, "pv", pvLFDI, "pv", 3000)}}
+	fleet := startManagedOrExit(ctx, client, dcapWithMirrors, "/edev", good, 0, exit)
+	if fleet == nil || len(fleet.devices) != 1 || len(exits) != 1 {
+		t.Errorf("good start: fleet = %v, exit calls = %q, want a fleet of 1 and no new exit call", fleet, exits)
+	}
+}
+
+// Ticking the fleet main holds posts the readings; a nil fleet (no managed
+// devices) ticks nothing and does not panic.
+func TestManagedFleet_TickDrivesReadingsAndIsNilSafe(t *testing.T) {
+	var none *managedFleet
+	none.Tick(context.Background())
+
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, pvLFDI)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fleet := startManagedOrExit(ctx, client, dcapWithMirrors, "/edev",
+		&simconfig.File{Managed: []simconfig.Managed{managedCfg(t, "pv", pvLFDI, "pv", 3000)}}, 0,
+		func(format string, args ...any) { t.Fatalf(format, args...) })
+	fleet.Tick(ctx)
+	if n := len(fs.readings["/mup/1"]); n != 1 {
+		t.Errorf("%d readings after one tick, want 1", n)
+	}
+}
+
+// The wiring in main.go is the part no helper test reaches. It must hand
+// fatalf to startManagedOrExit, so a start error exits, and tick the fleet
+// as the first statement of the aggregator branch, not inside a condition
+// that can be made dead.
 func TestMain_WiresTheManagedFleet(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	if err != nil {
@@ -482,17 +714,23 @@ func TestMain_WiresTheManagedFleet(t *testing.T) {
 	}
 	var code []string
 	for _, line := range strings.Split(string(src), "\n") {
-		if t := strings.TrimSpace(line); !strings.HasPrefix(t, "//") {
-			code = append(code, t)
+		if tr := strings.TrimSpace(line); tr != "" && !strings.HasPrefix(tr, "//") {
+			code = append(code, tr)
 		}
 	}
-	joined := strings.Join(code, "\n")
-	for _, want := range []string{
-		"managed, err = startManagedForRole(ctx, client, dcap, edevListHref, simFile, cfg.ReportInterval)",
-		"managed.Tick(ctx)",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("main.go no longer contains %q", want)
+	var startCalls, tickAt []int
+	for i, l := range code {
+		if strings.Contains(l, "startManagedOrExit(") {
+			startCalls = append(startCalls, i)
 		}
+		if l == "managed.Tick(ctx)" {
+			tickAt = append(tickAt, i)
+		}
+	}
+	if len(startCalls) != 1 || !strings.HasSuffix(code[startCalls[0]], "cfg.ReportInterval, fatalf)") {
+		t.Errorf("main.go must call startManagedOrExit once, ending in cfg.ReportInterval, fatalf); got lines %v", startCalls)
+	}
+	if len(tickAt) != 1 || code[tickAt[0]-1] != "if skipDERPipelineForRole(cfg) {" {
+		t.Errorf("main.go must hold exactly one unconditional managed.Tick(ctx) directly under the aggregator role branch; got %v", tickAt)
 	}
 }

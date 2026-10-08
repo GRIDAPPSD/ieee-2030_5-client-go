@@ -1001,10 +1001,7 @@ func main() {
 		// posts no mirror for itself; each managed device's mirror names
 		// that device. Without a sim config there are no managed devices,
 		// which startManagedForRole logs.
-		managed, err = startManagedForRole(ctx, client, dcap, edevListHref, simFile, cfg.ReportInterval)
-		if err != nil {
-			fatalf("managed devices: %v", err)
-		}
+		managed = startManagedOrExit(ctx, client, dcap, edevListHref, simFile, cfg.ReportInterval, fatalf)
 	} else {
 		reporter = runPhase4Metering(ctx, client, dcap, derStatusHref)
 	}
@@ -1070,9 +1067,7 @@ func main() {
 				// or status/metering report applies to it. The tick still
 				// fires so this select stays responsive to ctx.Done(), and
 				// drives the managed devices' sessions.
-				if managed != nil {
-					managed.Tick(ctx)
-				}
+				managed.Tick(ctx)
 				continue
 			}
 			// ReadState: advance the device's internal clock, walk scenario

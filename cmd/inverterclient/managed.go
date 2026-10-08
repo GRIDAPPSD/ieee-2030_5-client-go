@@ -23,21 +23,49 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
-// maxMirrorAttempts bounds the MirrorUsagePoint POSTs one managed device
-// makes, the one at start included. A mirror that still fails after that is
-// logged as given up on, and the device's readings stay off.
-const maxMirrorAttempts = 5
+// maxMirrorBackoff caps the wait between MirrorUsagePoint attempts for one
+// device. The aggregator never gives up on a mirror: a server that is down
+// for minutes at start must not leave a device without readings for the
+// life of the process, so retries continue at this cadence.
+const maxMirrorBackoff = 5 * time.Minute
+
+// mirrorBackoff is the wait after the nth consecutive failed attempt: the
+// report interval doubled per failure, capped at maxMirrorBackoff. A zero
+// interval means no wait, so a retry happens on the next tick.
+func mirrorBackoff(base time.Duration, failures int) time.Duration {
+	d := base
+	for i := 1; i < failures && d < maxMirrorBackoff; i++ {
+		d *= 2
+	}
+	return min(d, maxMirrorBackoff)
+}
 
 // startManagedForRole starts the aggregator's managed devices from the sim
 // config. An aggregator run without a sim config is valid (it has no managed
 // set to resolve), so that state is logged rather than silent and returns a
 // nil fleet.
 func startManagedForRole(ctx context.Context, client *inverter.SEP2Client, dcap sep2.DeviceCapability, edevListHref string, simFile *simconfig.File, reportInterval time.Duration) (*managedFleet, error) {
-	if simFile == nil || len(simFile.Managed) == 0 {
-		log.Println("aggregator role: no managed devices configured (no sim config); no device sessions, mirrors or readings will run")
+	switch {
+	case simFile == nil:
+		log.Println("aggregator role: no sim config; no managed devices, so no device sessions, mirrors or readings will run")
+		return nil, nil
+	case len(simFile.Managed) == 0:
+		log.Println("aggregator role: sim config lists no managed devices; no device sessions, mirrors or readings will run")
 		return nil, nil
 	}
 	return startManaged(ctx, client, dcap, edevListHref, simFile.Managed, reportInterval)
+}
+
+// startManagedOrExit starts the managed devices and hands a start error to
+// exit, which does not return in main (fatalf). It exists so a test can
+// observe that the error reaches the exit path.
+func startManagedOrExit(ctx context.Context, client *inverter.SEP2Client, dcap sep2.DeviceCapability, edevListHref string, simFile *simconfig.File, reportInterval time.Duration, exit func(format string, args ...any)) *managedFleet {
+	fleet, err := startManagedForRole(ctx, client, dcap, edevListHref, simFile, reportInterval)
+	if err != nil {
+		exit("managed devices: %v", err)
+		return nil
+	}
+	return fleet
 }
 
 // missingManaged returns an error naming every configured device the
@@ -69,14 +97,16 @@ type managedDevice struct {
 	reporter   *inverter.Reporter
 	lastReport time.Time
 
-	// The mirror is retried on later ticks until it exists or
-	// maxMirrorAttempts is spent. mupListHref is empty when the server
-	// advertised no MirrorUsagePointList, which no retry can fix.
-	client       *inverter.SEP2Client
-	mupListHref  string
-	mirrorTries  int
-	hasMirror    bool
-	gaveUpLogged bool
+	// The mirror is retried on later ticks, with backoff, until it exists.
+	// mupListHref is empty when the server advertised no
+	// MirrorUsagePointList, which no retry can fix.
+	client        *inverter.SEP2Client
+	mupListHref   string
+	mirrorTries   int
+	mirrorBase    time.Duration
+	nextMirrorTry time.Time
+	hasMirror     bool
+	now           func() time.Time
 }
 
 // managedFleet is every managed device session of one aggregator process.
@@ -112,7 +142,7 @@ func startManaged(ctx context.Context, client *inverter.SEP2Client, dcap sep2.De
 
 	fleet := &managedFleet{reportInterval: reportInterval}
 	for _, m := range configured {
-		md, err := startManagedDevice(ctx, client, dcap, m)
+		md, err := startManagedDevice(ctx, client, dcap, m, reportInterval)
 		if err != nil {
 			return nil, err
 		}
@@ -122,7 +152,7 @@ func startManaged(ctx context.Context, client *inverter.SEP2Client, dcap sep2.De
 	return fleet, nil
 }
 
-func startManagedDevice(ctx context.Context, client *inverter.SEP2Client, dcap sep2.DeviceCapability, m simconfig.Managed) (*managedDevice, error) {
+func startManagedDevice(ctx context.Context, client *inverter.SEP2Client, dcap sep2.DeviceCapability, m simconfig.Managed, reportInterval time.Duration) (*managedDevice, error) {
 	soc := 0.0
 	if m.Device.InitialSOC != nil {
 		soc = *m.Device.InitialSOC
@@ -135,7 +165,7 @@ func startManagedDevice(ctx context.Context, client *inverter.SEP2Client, dcap s
 		return nil, fmt.Errorf("managed device %s (%s): %w", m.Name, m.LFDI, err)
 	}
 
-	md := &managedDevice{name: m.Name, lfdi: m.LFDI, ratedW: m.Device.RatedW, dev: replay, client: client}
+	md := &managedDevice{name: m.Name, lfdi: m.LFDI, ratedW: m.Device.RatedW, dev: replay, client: client, mirrorBase: reportInterval, now: time.Now}
 	if dcap.MirrorUsagePointListLink == nil {
 		log.Printf("managed device %s: DeviceCapability has no MirrorUsagePointListLink; readings disabled", m.Name)
 	} else {
@@ -160,8 +190,8 @@ func (md *managedDevice) setReporter(mmrHref string) error {
 }
 
 // tryMirror makes one MirrorUsagePoint attempt when the device has none and
-// attempts remain, and logs the outcome. It reports whether the device now
-// has a mirror.
+// its backoff has elapsed, and logs the outcome. It reports whether the
+// device now has a mirror.
 func (md *managedDevice) tryMirror(ctx context.Context) bool {
 	if md.hasMirror {
 		return true
@@ -169,14 +199,20 @@ func (md *managedDevice) tryMirror(ctx context.Context) bool {
 	if md.mupListHref == "" {
 		return false
 	}
-	if md.mirrorTries >= maxMirrorAttempts {
-		if !md.gaveUpLogged {
-			log.Printf("managed device %s: gave up on the MirrorUsagePoint after %d attempts; readings stay disabled", md.name, maxMirrorAttempts)
-			md.gaveUpLogged = true
-		}
+	if md.now().Before(md.nextMirrorTry) {
 		return false
 	}
 	md.mirrorTries++
+	if !md.postMirror(ctx) {
+		md.nextMirrorTry = md.now().Add(mirrorBackoff(md.mirrorBase, md.mirrorTries))
+		return false
+	}
+	return true
+}
+
+// postMirror makes one MirrorUsagePoint POST and installs the reporter that
+// posts to the new mirror.
+func (md *managedDevice) postMirror(ctx context.Context) bool {
 	mupLoc, err := md.client.CreateMirrorUsagePoint(inverter.WithTarget(ctx, md.lfdi), md.mupListHref, inverter.DeviceLFDI(md.lfdi), sep2.MirrorUsagePoint{
 		MRID:                inverter.MirrorUsagePointMRID(md.lfdi),
 		Description:         md.name + " Metering",
@@ -185,10 +221,10 @@ func (md *managedDevice) tryMirror(ctx context.Context) bool {
 	})
 	switch {
 	case err != nil:
-		log.Printf("managed device %s: create MirrorUsagePoint attempt %d of %d: %v", md.name, md.mirrorTries, maxMirrorAttempts, err)
+		log.Printf("managed device %s: create MirrorUsagePoint attempt %d: %v", md.name, md.mirrorTries, err)
 		return false
 	case mupLoc == "":
-		log.Printf("managed device %s: MirrorUsagePoint POST attempt %d of %d returned empty Location", md.name, md.mirrorTries, maxMirrorAttempts)
+		log.Printf("managed device %s: MirrorUsagePoint POST attempt %d returned empty Location", md.name, md.mirrorTries)
 		return false
 	}
 	if err := md.setReporter(mupLoc + "/mr"); err != nil {
@@ -202,8 +238,12 @@ func (md *managedDevice) tryMirror(ctx context.Context) bool {
 
 // Tick advances every session one step: read the recorded output, apply it
 // with no controls, and post a reading when the report interval has passed.
-// A failing device is logged and does not stop the others.
+// A failing device is logged and does not stop the others. A nil fleet (an
+// aggregator with no managed devices) ticks nothing.
 func (f *managedFleet) Tick(ctx context.Context) {
+	if f == nil {
+		return
+	}
 	for _, md := range f.devices {
 		reading, err := md.dev.ReadState(ctx)
 		if err != nil {
@@ -217,17 +257,17 @@ func (f *managedFleet) Tick(ctx context.Context) {
 			continue
 		}
 		md.tryMirror(ctx)
-		if time.Since(md.lastReport) < f.reportInterval {
+		if md.now().Sub(md.lastReport) < f.reportInterval {
 			continue
 		}
 		if !md.hasMirror {
 			log.Printf("managed device %s: reading skipped: no MirrorUsagePoint for this device", md.name)
-			md.lastReport = time.Now()
+			md.lastReport = md.now()
 			continue
 		}
 		if err := md.reporter.ReportMetering(ctx, state); err != nil {
 			log.Printf("managed device %s: ReportMetering failed: %v", md.name, err)
 		}
-		md.lastReport = time.Now()
+		md.lastReport = md.now()
 	}
 }
