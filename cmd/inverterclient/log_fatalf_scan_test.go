@@ -77,6 +77,11 @@ var expectedFatalfSitePrefixes = []string{
 	// this is unreachable in practice; fail loudly rather than silently
 	// disable metering if that ever changes.
 	`fatalf("build reporter: %v", err)`,
+	// #72: a configured managed device the server does not list, or one
+	// whose replay backend cannot be built, stops the aggregator's start
+	// naming the device. Reached after fleets have started, so it must run
+	// shutdown before exiting.
+	`fatalf("managed devices: %v", err)`,
 }
 
 // expectedFatalfPercentSCount is the number of `fatalf("%s", fe.Error())`

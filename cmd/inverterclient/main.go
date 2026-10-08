@@ -190,7 +190,8 @@ func main() {
 
 	flag.Parse()
 
-	if err := maybeApplySimConfig(flag.CommandLine, &cfg, *cf.SimConfigPath, osLookupEnv); err != nil {
+	simFile, err := loadSimConfig(flag.CommandLine, &cfg, *cf.SimConfigPath, osLookupEnv)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
@@ -987,6 +988,7 @@ func main() {
 	// backstop (guard.aggregatorSelfKinds), but the call is skipped here
 	// so it is never attempted.
 	var reporter *inverter.Reporter
+	var managed *managedFleet
 	if skipDERPipelineForRole(cfg) {
 		log.Println("=== Phase 4: Metering Setup ===")
 		log.Println("aggregator role: own EndDevice is not a DER; skipping Phase 4 metering setup")
@@ -994,6 +996,15 @@ func main() {
 		reporter, err = inverter.NewReporter(client, client.LFDI(), "", "")
 		if err != nil {
 			fatalf("build reporter: %v", err)
+		}
+		// The aggregator's own work: one session per managed device. It
+		// posts no mirror for itself; each managed device's mirror names
+		// that device. Without a sim config there are no managed devices.
+		if simFile != nil {
+			managed, err = startManaged(ctx, client, dcap, edevListHref, simFile.Managed, cfg.ReportInterval)
+			if err != nil {
+				fatalf("managed devices: %v", err)
+			}
 		}
 	} else {
 		reporter = runPhase4Metering(ctx, client, dcap, derStatusHref)
@@ -1058,8 +1069,11 @@ func main() {
 				// The aggregator's own EndDevice is not a DER: no
 				// simulated device tick, alarm evaluation, HMI broadcast
 				// or status/metering report applies to it. The tick still
-				// fires so this select stays responsive to ctx.Done();
-				// the aggregator's own work is #72.
+				// fires so this select stays responsive to ctx.Done(), and
+				// drives the managed devices' sessions.
+				if managed != nil {
+					managed.Tick(ctx)
+				}
 				continue
 			}
 			// ReadState: advance the device's internal clock, walk scenario
