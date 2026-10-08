@@ -376,3 +376,121 @@ func TestAck_UnacknowledgedAtTheEndIsLogged(t *testing.T) {
 		t.Errorf("owed acknowledgement logged %d times at the end, want 1\n%s", n, buf.String())
 	}
 }
+
+// The request is followed to its end plus the grace, not only to its end:
+// an acknowledgement still owed is retried and a newer answer is followed
+// inside [end, end+grace), and the reads stop at end+grace exactly.
+func TestFollow_InsideTheGraceAfterTheEnd(t *testing.T) {
+	r, f, clk := startedReserver(t, nil)
+	f.ackErr = errors.New("503")
+	g := needAck(resp("G", r.cur.mrid, at(r, 1).Unix(), sep2.EventStatusScheduled, windowIV(r), 6000, 3000), "/rsps/1/rsp")
+	f.list = listOf(g)
+	clk.t = at(r, 100)
+	r.Poll(context.Background())
+	if len(f.acks) != 0 {
+		t.Fatalf("%d acks while the post fails, want 0", len(f.acks))
+	}
+
+	f.ackErr = nil
+	rev := resp("G2", r.cur.mrid, at(r, 3610).Unix(), sep2.EventStatusScheduled, windowIV(r), 4000, 2000)
+	f.list = listOf(g, rev)
+	clk.t = at(r, 3630)
+	r.Poll(context.Background())
+	if len(f.acks) != 1 || f.acks[0].Subject != "G" {
+		t.Errorf("acks %+v inside the grace, want the owed one for G", f.acks)
+	}
+	if r.cur.terms.ResponseMRID != "G2" || r.cur.terms.EnergyWh != 4000 {
+		t.Errorf("terms %+v inside the grace, want the revision G2 with 4000 Wh", r.cur.terms)
+	}
+	if r.cur.done {
+		t.Error("request finished before the end plus the grace")
+	}
+
+	// The previous read set the next poll to exactly end+grace, so only the
+	// boundary comparison stops the read here.
+	gets := f.gets
+	clk.t = at(r, 3660)
+	r.Poll(context.Background())
+	if f.gets != gets || !r.cur.done {
+		t.Errorf("reads %d -> %d, done %v at end+grace exactly, want no read and done", gets, f.gets, r.cur.done)
+	}
+}
+
+// A response to another request is read for nothing and not acknowledged,
+// even when it asks for an acknowledgement.
+func TestAck_ResponseToAnotherRequestIsNotAcknowledged(t *testing.T) {
+	r, f, clk := startedReserver(t, nil)
+	other := needAck(resp("OTHER", "SOME-OTHER-REQUEST", at(r, 1).Unix(), sep2.EventStatusScheduled, windowIV(r), 6000, 3000), "/rsps/9/rsp")
+	f.list = listOf(other)
+	clk.t = at(r, 100)
+	r.Poll(context.Background())
+	if len(f.acks) != 0 {
+		t.Errorf("acks %+v for a response to another request, want none", f.acks)
+	}
+}
+
+// A response with no mRID cannot be acknowledged (the subject would be
+// empty) even though it has a replyTo: nothing is posted and it is logged
+// once.
+func TestAck_RequiredButNoMRIDIsLoggedOnce(t *testing.T) {
+	buf := captureLog(t)
+
+	r, f, clk := startedReserver(t, nil)
+	f.list = listOf(needAck(resp("", r.cur.mrid, at(r, 1).Unix(), sep2.EventStatusScheduled, windowIV(r), 6000, 3000), "/rsps/1/rsp"))
+	for i := 1; i <= 3; i++ {
+		clk.t = at(r, 100*i)
+		r.Poll(context.Background())
+	}
+	if len(f.acks) != 0 {
+		t.Errorf("%d acks posted for a response with no mRID: %+v", len(f.acks), f.acks)
+	}
+	if n := strings.Count(buf.String(), "has no replyTo or no mRID"); n != 1 {
+		t.Errorf("logged %d times over 3 polls, want 1\n%s", n, buf.String())
+	}
+}
+
+// A response acknowledged after one failed attempt is no longer owed, so the
+// end of the request does not report it as never acknowledged.
+func TestAck_AcknowledgedAfterARetryIsNotReportedAsOwed(t *testing.T) {
+	buf := captureLog(t)
+
+	r, f, clk := startedReserver(t, nil)
+	f.ackErr = errors.New("503")
+	f.list = listOf(needAck(resp("RETRIED", r.cur.mrid, at(r, 1).Unix(), sep2.EventStatusScheduled, windowIV(r), 6000, 3000), "/rsps/1/rsp"))
+	clk.t = at(r, 100)
+	r.Poll(context.Background())
+	f.ackErr = nil
+	clk.t = at(r, 200)
+	r.Poll(context.Background())
+	if len(f.acks) != 1 {
+		t.Fatalf("%d acks after the retry, want 1", len(f.acks))
+	}
+	clk.t = at(r, 3600+60)
+	r.Poll(context.Background())
+	if !r.cur.done {
+		t.Fatal("request did not finish")
+	}
+	if strings.Contains(buf.String(), "never acknowledged") {
+		t.Errorf("an acknowledged response was reported as owed\n%s", buf.String())
+	}
+}
+
+// A grant whose power sign or interval differs from the request is logged
+// with the reason for each.
+func TestAnswer_PowerSignAndIntervalMismatchAreLogged(t *testing.T) {
+	buf := captureLog(t)
+
+	r, f, clk := startedReserver(t, nil)
+	s := r.cur.start.Unix()
+	g := resp("G", r.cur.mrid, at(r, 1).Unix(), sep2.EventStatusScheduled, &sep2.DateTimeInterval{Start: s - 600, Duration: 7200}, 6000, -3000)
+	f.list = listOf(g)
+	clk.t = at(r, 100)
+	r.Poll(context.Background())
+	out := buf.String()
+	if !strings.Contains(out, "power sign differs from the request: asked 3000 W in the direction of the energy, granted -3000 W") {
+		t.Errorf("log lacks the power sign note\n%s", out)
+	}
+	if !strings.Contains(out, "outside the requested window, clipped") {
+		t.Errorf("log lacks the interval clip note\n%s", out)
+	}
+}
