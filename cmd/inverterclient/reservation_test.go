@@ -28,6 +28,11 @@ type fakeFrq struct {
 	acks    []sep2.FlowReservationResponseResponse
 	ackTo   []string
 	ackErr  error
+	puts    []sep2.FlowReservationRequest
+	putHref []string
+	putErr  error
+	// location is what a post returns; empty means "/edev/1/frq/1".
+	location string
 }
 
 func (f *fakeFrq) PostFlowReservationRequest(_ context.Context, _ string, req sep2.FlowReservationRequest) (string, error) {
@@ -35,7 +40,19 @@ func (f *fakeFrq) PostFlowReservationRequest(_ context.Context, _ string, req se
 		return "", f.postErr
 	}
 	f.posted = append(f.posted, req)
+	if f.location != "" {
+		return f.location, nil
+	}
 	return "/edev/1/frq/1", nil
+}
+
+func (f *fakeFrq) PutFlowReservationRequest(_ context.Context, href string, req sep2.FlowReservationRequest) error {
+	if f.putErr != nil {
+		return f.putErr
+	}
+	f.puts = append(f.puts, req)
+	f.putHref = append(f.putHref, href)
+	return nil
 }
 
 func (f *fakeFrq) GetFlowReservationResponses(context.Context, string) (sep2.FlowReservationResponseList, error) {

@@ -27,6 +27,7 @@ type reservationClient interface {
 	PostFlowReservationRequest(ctx context.Context, listHref string, req sep2.FlowReservationRequest) (string, error)
 	GetFlowReservationResponses(ctx context.Context, listHref string) (sep2.FlowReservationResponseList, error)
 	PostFlowReservationResponseResponse(ctx context.Context, replyToHref string, resp sep2.FlowReservationResponseResponse) error
+	PutFlowReservationRequest(ctx context.Context, href string, req sep2.FlowReservationRequest) error
 }
 
 // ioTimeout bounds one reservation request, so a stalled server cannot
@@ -113,12 +114,18 @@ func (d *dispatcher) record(achievedChargingW float64) {
 type currentRequest struct {
 	requestFacts
 	mrid  string
+	href  string                      // where the server stored the request: the withdrawal PUT goes here
+	req   sep2.FlowReservationRequest // the request as posted: a withdrawal differs from it only in RequestStatus
 	kind  answerKind
 	terms grantTerms
-	done  bool            // the window and grace have passed: no more reads
-	acked map[string]bool // response mRIDs already acknowledged as received
-	owed  map[string]bool // response mRIDs that asked for an acknowledgement and have none yet
-	noted map[string]bool // log lines already written once, by key
+	// respMRID is the response the current state rests on, empty when none;
+	// a change of either kind or respMRID is an answer change and is logged.
+	respMRID  string
+	withdrawn bool
+	done      bool            // the window and grace have passed: no more reads
+	acked     map[string]bool // response mRIDs already acknowledged as received
+	owed      map[string]bool // response mRIDs that asked for an acknowledgement and have none yet
+	noted     map[string]bool // log lines already written once, by key
 }
 
 // note reports whether key is new, and remembers it: a line keyed by a
@@ -162,8 +169,9 @@ func newReserver(client reservationClient, selfLFDI string, edev sep2.EndDevice,
 
 // Trigger handles one SIGUSR1: merge the config defaults with the request
 // file (consuming it), validate, and post one request. A failure is logged
-// and posts nothing. A request already being followed is replaced as the
-// one to follow; withdrawing it is not done here.
+// and posts nothing. A request already being followed is withdrawn once its
+// replacement is posted, so the server gives its capacity back; if the post
+// fails the earlier request is left as it was.
 func (r *reserver) Trigger(ctx context.Context) {
 	if r == nil {
 		return
@@ -197,15 +205,59 @@ func (r *reserver) Trigger(ctx context.Context) {
 	}
 	if r.cur != nil {
 		log.Printf("flow reservation: now following request %s instead of %s", mrid, r.cur.mrid)
+		r.withdraw(ctx, r.cur, now)
 	}
 	r.cur = &currentRequest{
-		requestFacts: factsOf(req), mrid: mrid, kind: answerPending,
+		requestFacts: factsOf(req), mrid: mrid, href: loc, req: req, kind: answerPending,
 		acked: map[string]bool{}, owed: map[string]bool{}, noted: map[string]bool{},
 	}
 	r.disp.reset()
 	r.nextPoll = now
 	log.Printf("flow reservation: posted request %s at %s: %.0f Wh at up to %.0f W, start %s, %ds",
 		mrid, loc, s.EnergyWh, s.PowerW, r.cur.start.UTC().Format(time.RFC3339), s.DurationS)
+}
+
+// Withdraw cancels the request being followed: the RequestStatus PUT, then
+// the grant is dropped so the devices return to baseline on the next tick.
+// Nothing to withdraw, or a request already withdrawn or finished, is
+// logged and does nothing.
+func (r *reserver) Withdraw(ctx context.Context) {
+	if r == nil {
+		return
+	}
+	if r.cur == nil || r.cur.done || r.cur.withdrawn {
+		log.Printf("flow reservation: no request to withdraw")
+		return
+	}
+	if r.withdraw(ctx, r.cur, r.now()) {
+		r.disp.setGrant(nil)
+	}
+}
+
+// withdraw PUTs c as cancelled to the href the server gave it, and reports
+// whether the server accepted it. Only RequestStatus differs from the
+// request as posted, which is all the server accepts of a PUT. A failure is
+// logged and leaves c as it was, to be withdrawn again on request.
+func (r *reserver) withdraw(ctx context.Context, c *currentRequest, now time.Time) bool {
+	if c.done || c.withdrawn {
+		return false
+	}
+	if c.href == "" {
+		log.Printf("flow reservation: request %s cannot be withdrawn: the server gave no Location for it", c.mrid)
+		return false
+	}
+	req := c.req
+	req.Href = c.href
+	req.RequestStatus = sep2.RequestStatus{DateTime: now.Unix(), RequestStatus: sep2.RequestStatusCancelled}
+	ctx, cancel := context.WithTimeout(ctx, ioTimeout)
+	defer cancel()
+	if err := r.client.PutFlowReservationRequest(ctx, c.href, req); err != nil {
+		log.Printf("flow reservation: withdrawing request %s at %s failed: %v", c.mrid, c.href, err)
+		return false
+	}
+	c.withdrawn = true
+	log.Printf("flow reservation: withdrew request %s at %s", c.mrid, c.href)
+	return true
 }
 
 // grace is the time after the requested start within which the first answer
@@ -247,13 +299,17 @@ func (r *reserver) Poll(ctx context.Context) {
 		return
 	}
 	kind, terms := judge(list, c.mrid, c.requestFacts, r.grace(), now)
-	if kind != c.kind || terms != c.terms {
-		log.Printf("flow reservation: request %s is %s%s", c.mrid, kind, describeTerms(kind, terms))
+	respMRID := terms.ResponseMRID
+	if respMRID == "" {
+		respMRID = newestResponseMRID(list, c.mrid)
+	}
+	if kind != c.kind || terms != c.terms || respMRID != c.respMRID {
+		log.Printf("flow reservation: request %s is %s%s", c.mrid, kind, describeTerms(kind, terms, respMRID))
 	}
 	if terms.Clipped != "" && c.note("clip:"+terms.ResponseMRID) {
 		log.Printf("flow reservation: response %s read against request %s: %s", terms.ResponseMRID, c.mrid, terms.Clipped)
 	}
-	c.kind, c.terms = kind, terms
+	c.kind, c.terms, c.respMRID = kind, terms, respMRID
 	if kind.dispatches() {
 		t := terms
 		r.disp.setGrant(&t)
@@ -283,12 +339,34 @@ func (r *reserver) finish(c *currentRequest) {
 	log.Printf("flow reservation: request %s finished: %s", c.mrid, c.kind)
 }
 
-func describeTerms(kind answerKind, t grantTerms) string {
-	if !kind.dispatches() {
-		return ""
+// describeTerms is the part of an answer-change line after the state: the
+// response the state rests on, and for a grant its terms. A state with no
+// response (pending, or expired) says so.
+func describeTerms(kind answerKind, t grantTerms, respMRID string) string {
+	resp := "no response"
+	if respMRID != "" {
+		resp = "response " + respMRID
 	}
-	return fmt.Sprintf(": %.0f Wh at up to %.0f W from %s to %s (response %s)",
-		t.EnergyWh, t.PowerW, t.Start.UTC().Format(time.RFC3339), t.End.UTC().Format(time.RFC3339), t.ResponseMRID)
+	if !kind.dispatches() {
+		return " (" + resp + ")"
+	}
+	return fmt.Sprintf(": %.0f Wh at up to %.0f W from %s to %s (%s)",
+		t.EnergyWh, t.PowerW, t.Start.UTC().Format(time.RFC3339), t.End.UTC().Format(time.RFC3339), resp)
+}
+
+// newestResponseMRID is the mRID of the newest response for subject by
+// creationTime, whatever its status, empty when there is none. It names the
+// response behind a revoked request, which has no live one.
+func newestResponseMRID(list sep2.FlowReservationResponseList, subject string) string {
+	var mrid string
+	var created int64
+	found := false
+	for _, r := range list.FlowReservationResponse {
+		if r.Subject == subject && (!found || r.CreationTime >= created) {
+			mrid, created, found = r.MRID, r.CreationTime, true
+		}
+	}
+	return mrid
 }
 
 // responseRequiredReceived is bit 0 of responseRequired: the sender wants
