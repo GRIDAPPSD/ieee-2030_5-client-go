@@ -950,14 +950,21 @@ func (c *SEP2Client) PostResponse(ctx context.Context, replyToHref string, resp 
 		return fmt.Errorf("POST Response %s: %w", replyToHref, err)
 	}
 
+	return c.sendResponse(ctx, replyToHref, resp)
+}
+
+// sendResponse resolves replyToHref, marshals resp and POSTs it with the
+// one-shot transient retry. The caller has already passed the guard for the
+// Kind it is sending.
+func (c *SEP2Client) sendResponse(ctx context.Context, replyToHref string, resp any) error {
 	target, err := c.resolveServerURL(replyToHref)
 	if err != nil {
 		return fmt.Errorf("resolve replyTo: %w", err)
 	}
 
-	body, err := xml.Marshal(&resp)
+	body, err := xml.Marshal(resp)
 	if err != nil {
-		return fmt.Errorf("marshal DERControlResponse: %w", err)
+		return fmt.Errorf("marshal %T: %w", resp, err)
 	}
 
 	// One-shot retry: attempt + (optional) single retry on transient
