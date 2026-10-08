@@ -25,3 +25,22 @@ It refuses any other version, and a rerun writes byte-identical files.
 
 `solo-pv-1.example.json` is a sim config for the standalone PV device:
 `inverterclient --sim-config sim/derms/solo-pv-1.example.json ...`.
+
+## Protocol decisions
+
+Where each choice in the aggregator's managed-device sessions comes from.
+
+* DER output reports flowDirection 19. Source: IEEE 2030.5-2018 Table E.2,
+  which gives 19 for DER active power and no other value.
+* A charging battery reports flowDirection 1. Source: FlowDirectionType
+  alone; Table E.2 does not give a value for charging, so this is a reading
+  of that type, not a table row.
+* The reading carries the magnitude and flowDirection carries the sign. This
+  is this client's choice, not a clause of the standard; issue 72.
+* The aggregator acts for a managed device by naming its LFDI in the request
+  and in the mirror. Source: issue 72 (a design choice, not a clause).
+* A recording whose timestamps are not UTC is refused. Source: review of #100.
+* Config keys are written lowercase and matched case-insensitively. Source:
+  operator decision, 2026-10-07.
+* The flow reservation `reserve` trigger, with command-line overrides of the
+  config defaults. Source: operator decision, 2026-10-07, issue 73.

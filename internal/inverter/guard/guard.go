@@ -216,12 +216,39 @@ type Action struct {
 }
 
 // ManagedSet answers whether an LFDI is a device the aggregator currently
-// manages. Issue #72 wires the real device-mapping loader; a Guard given a
-// nil ManagedSet refuses every non-self LFDI (fail closed), except a
+// manages. The aggregator builds it from its configured devices that the
+// server also lists (StaticManagedSet); a Guard given a nil ManagedSet refuses every non-self LFDI (fail closed), except a
 // KindEndDeviceCreate proposing a brand new device: management begins with
 // that POST, so it is never gated on the target already being managed.
 type ManagedSet interface {
 	IsManaged(lfdi string) bool
+}
+
+// StaticManagedSet is a ManagedSet fixed at construction. LFDIs compare
+// case-insensitively, as the guard compares the process's own LFDI.
+type StaticManagedSet struct {
+	lfdis map[string]struct{}
+}
+
+// NewStaticManagedSet builds the set from lfdis. An empty LFDI is dropped,
+// so it can never make an unnamed target look managed.
+func NewStaticManagedSet(lfdis ...string) *StaticManagedSet {
+	m := &StaticManagedSet{lfdis: make(map[string]struct{}, len(lfdis))}
+	for _, l := range lfdis {
+		if l != "" {
+			m.lfdis[strings.ToUpper(l)] = struct{}{}
+		}
+	}
+	return m
+}
+
+// IsManaged reports whether lfdi is in the set.
+func (m *StaticManagedSet) IsManaged(lfdi string) bool {
+	if m == nil || lfdi == "" {
+		return false
+	}
+	_, ok := m.lfdis[strings.ToUpper(lfdi)]
+	return ok
 }
 
 // RefusalError reports an Action the Guard refused, naming the role, the
@@ -317,6 +344,15 @@ func New(role Role, selfLFDI string, managed ManagedSet, opts ...Option) *Guard 
 		opt(g)
 	}
 	return g
+}
+
+// SetManagedSet installs the set of devices the aggregator manages. It is
+// for the start-up path, before any goroutine sends a request: it is not
+// safe to call while Allow runs concurrently. A nil guard ignores it.
+func (g *Guard) SetManagedSet(m ManagedSet) {
+	if g != nil {
+		g.managed = m
+	}
 }
 
 // Allow classifies a request whose actual HTTP method is method (the verb

@@ -180,12 +180,19 @@ func applyNameplate(ratedW float64) {
 // config path every flag behaves as it always has and no sim-mode env var
 // is read; with one, the config is applied or the start is refused.
 func maybeApplySimConfig(fs *flag.FlagSet, cfg *inverter.SimConfig, flagPath string, lookupEnv func(string) (string, bool)) error {
+	_, err := loadSimConfig(fs, cfg, flagPath, lookupEnv)
+	return err
+}
+
+// loadSimConfig is maybeApplySimConfig that also hands back the decoded
+// file, which the aggregator needs for its managed devices. The file is nil
+// when sim mode is off.
+func loadSimConfig(fs *flag.FlagSet, cfg *inverter.SimConfig, flagPath string, lookupEnv func(string) (string, bool)) (*simconfig.File, error) {
 	path := simConfigPath(flagPath, lookupEnv)
 	if path == "" {
-		return nil
+		return nil, nil
 	}
-	_, err := applySimConfig(fs, cfg, path, lookupEnv)
-	return err
+	return applySimConfig(fs, cfg, path, lookupEnv)
 }
 
 // osLookupEnv is the production env source.

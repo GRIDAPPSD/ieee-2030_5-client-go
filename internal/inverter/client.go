@@ -181,9 +181,9 @@ func NewSEP2Client(cfg SimConfig) (*SEP2Client, error) {
 		sfdi:    sepTLS.SFDI(parsedCert),
 		lfdi:    lfdi,
 		pen:     cfg.LogEventPEN,
-		// No ManagedSet and no in-band opts yet: #72 wires the device-
-		// mapping loader and the in-band delete/create settings. Until
-		// then every non-self LFDI is refused (fail closed). Refusals log
+		// No ManagedSet until SetManagedSet installs one, and no in-band
+		// opts yet: every non-self LFDI is refused (fail closed) until a
+		// manager resolves its managed devices. Refusals log
 		// through the standard logger, bounded per refusal shape so a
 		// caller retrying every tick cannot flood the log.
 		guard: guard.New(clientRole, lfdi, nil, guard.WithRefusalLogger(log.Printf, guard.DefaultRefusalLogWindow, nil)),
@@ -235,7 +235,7 @@ func (c *SEP2Client) SetLogEventRateLimiter(rl LogEventRateLimiter) {
 // one path every caller of Get shares. A refusal returns before any HTTP
 // request is built; see guard.Guard.Allow.
 func (c *SEP2Client) Get(ctx context.Context, kind guard.Kind, path string, out any) (newHref string, err error) {
-	if err := c.guard.Allow(http.MethodGet, guard.Action{Kind: kind}); err != nil {
+	if err := c.guard.Allow(http.MethodGet, guard.Action{Kind: kind, TargetLFDI: targetFrom(ctx)}); err != nil {
 		return "", fmt.Errorf("GET %s: %w", path, err)
 	}
 	if err := c.getOnce(ctx, c.baseURL+path, path, out); err != nil {
@@ -315,7 +315,7 @@ func (c *SEP2Client) getOnce(ctx context.Context, rawURL, logPath string, out an
 //
 // kind classifies the request for the guard; see Get.
 func (c *SEP2Client) Post(ctx context.Context, kind guard.Kind, path string, body any) (location string, newHref string, err error) {
-	if err := c.guard.Allow(http.MethodPost, guard.Action{Kind: kind}); err != nil {
+	if err := c.guard.Allow(http.MethodPost, guard.Action{Kind: kind, TargetLFDI: targetFrom(ctx)}); err != nil {
 		return "", "", fmt.Errorf("POST %s: %w", path, err)
 	}
 	data, err := xml.Marshal(body)
@@ -379,7 +379,7 @@ func (c *SEP2Client) postOnce(ctx context.Context, rawURL, logPath string, data 
 //
 // kind classifies the request for the guard; see Get.
 func (c *SEP2Client) Put(ctx context.Context, kind guard.Kind, path string, body any) (newHref string, err error) {
-	if err := c.guard.Allow(http.MethodPut, guard.Action{Kind: kind}); err != nil {
+	if err := c.guard.Allow(http.MethodPut, guard.Action{Kind: kind, TargetLFDI: targetFrom(ctx)}); err != nil {
 		return "", fmt.Errorf("PUT %s: %w", path, err)
 	}
 	data, err := xml.Marshal(body)
@@ -541,6 +541,30 @@ func (c *SEP2Client) LookupOwnEndDevice(ctx context.Context, edevListHref string
 		}
 	}
 	return sep2.EndDevice{}, newEdevListHref, ErrEndDeviceNotFound
+}
+
+// SetManagedSet installs the devices this aggregator-role client may act
+// for. Call it once at start-up, before any request is sent concurrently.
+// Until it is called every request naming another device is refused.
+func (c *SEP2Client) SetManagedSet(m guard.ManagedSet) { c.guard.SetManagedSet(m) }
+
+// GetEndDeviceList GETs the server's EndDeviceList at edevListHref and
+// returns it whole. It reads the first page only (l=255), like
+// LookupOwnEndDevice. newEdevListHref is the list's new base href when the
+// server redirected, "" otherwise.
+func (c *SEP2Client) GetEndDeviceList(ctx context.Context, edevListHref string) (list sep2.EndDeviceList, newEdevListHref string, err error) {
+	if edevListHref == "" {
+		return sep2.EndDeviceList{}, "", fmt.Errorf("edev list href required")
+	}
+	sep := "?"
+	if strings.Contains(edevListHref, "?") {
+		sep = "&"
+	}
+	followedHref, err := c.Get(ctx, guard.KindEndDeviceRead, edevListHref+sep+"l=255", &list)
+	if err != nil {
+		return sep2.EndDeviceList{}, "", fmt.Errorf("get edev list: %w", err)
+	}
+	return list, stripPagingQuery(followedHref, sep), nil
 }
 
 // stripPagingQuery removes a trailing "?l=255" or "&l=255" suffix from
@@ -813,6 +837,18 @@ func (c *SEP2Client) CreateMirrorUsagePoint(ctx context.Context, mupListHref str
 	if deviceLFDI == "" {
 		return "", fmt.Errorf("device LFDI required")
 	}
+	// The guard judges the POST for the target ctx carries (WithTarget), and
+	// the body names deviceLFDI; they must be one device or the guard would
+	// clear a mirror for a device other than the one it describes. A der
+	// client leaves the target unset and is not affected.
+	if t := targetFrom(ctx); t != "" && !strings.EqualFold(t, string(deviceLFDI)) {
+		return "", fmt.Errorf("mirror device LFDI %s does not match the request target %s", deviceLFDI, t)
+	}
+	// With no target the request is judged as this client's own, so a mirror
+	// naming another device must not ride on that judgement.
+	if targetFrom(ctx) == "" && !strings.EqualFold(c.LFDI(), string(deviceLFDI)) {
+		return "", fmt.Errorf("mirror device LFDI %s is not this client's LFDI and the request names no target", deviceLFDI)
+	}
 	mup.DeviceLFDI = string(deviceLFDI)
 	loc, _, err := c.Post(ctx, guard.KindMirrorPost, mupListHref, &mup)
 	return loc, err
@@ -910,7 +946,7 @@ func (c *SEP2Client) PostResponse(ctx context.Context, replyToHref string, resp 
 	// routing through Post, because of the replyTo href resolution and
 	// retry loop below; the guard check that Post/Get/Put give every other
 	// caller for free is applied here explicitly instead.
-	if err := c.guard.Allow(http.MethodPost, guard.Action{Kind: guard.KindResponsePost}); err != nil {
+	if err := c.guard.Allow(http.MethodPost, guard.Action{Kind: guard.KindResponsePost, TargetLFDI: targetFrom(ctx)}); err != nil {
 		return fmt.Errorf("POST Response %s: %w", replyToHref, err)
 	}
 

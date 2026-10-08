@@ -13,6 +13,7 @@ import (
 	"encoding/xml"
 	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -199,5 +200,33 @@ func TestSEP2Client_Get_GuardCheckIsLoadBearing(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(requests); got != 0 {
 		t.Errorf("server saw %d requests, want 0", got)
+	}
+}
+
+// A der client that sends no target is judged as acting for itself, so a
+// mirror naming another device must be refused before any send, while its
+// own LFDI (the control, in either case) still goes out.
+func TestSEP2Client_DERRole_RefusesAnUntargetedMirrorForAnotherDevice(t *testing.T) {
+	env := newCCMTestEnv(t)
+	serverURL, requests, stop := startCountingListener(t, env)
+	defer stop()
+
+	client := newGuardTestClient(t, serverURL, env, "der")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	const other = "111111111111111111111111111111111111AAAA"
+	if _, err := client.CreateMirrorUsagePoint(ctx, "/mup", inverter.DeviceLFDI(other), sep2.MirrorUsagePoint{}); err == nil {
+		t.Error("der CreateMirrorUsagePoint naming another device: want refusal, got nil")
+	}
+	if got := atomic.LoadInt32(requests); got != 0 {
+		t.Fatalf("server saw %d requests after the refused mirror, want 0", got)
+	}
+
+	if _, err := client.CreateMirrorUsagePoint(ctx, "/mup", inverter.DeviceLFDI(strings.ToLower(client.LFDI())), sep2.MirrorUsagePoint{}); err != nil {
+		t.Errorf("der CreateMirrorUsagePoint naming itself (lower case): want allow, got %v", err)
+	}
+	if got := atomic.LoadInt32(requests); got != 1 {
+		t.Errorf("server saw %d requests after the own-LFDI mirror, want 1", got)
 	}
 }

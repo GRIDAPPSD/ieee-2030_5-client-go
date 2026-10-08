@@ -26,6 +26,33 @@ type Reporter struct {
 	derStatusHref string // empty -> skip status PUT
 	mmrHref       string // empty -> skip metering POST
 	readingSeq    atomic.Uint64
+	// manager makes the reporter act for deviceLFDI as a manager: its
+	// requests carry that LFDI to the guard, and its readings carry a
+	// flowDirection. Off for a der-role reporter, whose requests and
+	// readings stay as they were.
+	manager bool
+}
+
+// AsManager marks the reporter as one a manager runs for a managed device.
+// Its POSTs are judged by the guard as actions for deviceLFDI, and each
+// reading carries flowDirection so the server's fleet view can tell export
+// from import. Call it before the first report.
+func (r *Reporter) AsManager() *Reporter {
+	r.manager = true
+	return r
+}
+
+// flowDirectionFor gives the flowDirection of an active power reading in
+// the DER sign (positive delivering): 19 (received from customer, export)
+// for output, 1 (delivered to customer, import) for a battery charging.
+// Source: IEEE 2030.5-2018, FlowDirectionType (1 forward, delivered to the
+// customer; 19 reverse, received from the customer) and Table E.2, which
+// gives DER active power (W) flowDirection 19.
+func flowDirectionFor(activeW float64) uint8 {
+	if activeW < 0 {
+		return sep2.FlowDirectionForward
+	}
+	return sep2.FlowDirectionReverse
 }
 
 // NewReporter creates a reporter for the DER named by deviceLFDI, PUTting
@@ -87,6 +114,17 @@ func (r *Reporter) ReportMetering(ctx context.Context, state InverterState) erro
 
 	uomW := sep2.UomWatts
 	activeW := int64(state.ActivePowerW)
+	rt := &sep2.ReadingType{Uom: &uomW}
+	if r.manager {
+		// Utility perspective, as the 2018 standard uses: the reading is
+		// the magnitude and flowDirection carries the sign.
+		if activeW < 0 {
+			activeW = -activeW
+		}
+		dir := flowDirectionFor(state.ActivePowerW)
+		rt.FlowDirection = &dir
+		ctx = WithTarget(ctx, r.deviceLFDI)
+	}
 
 	// Outbound identifier derives from the server-synced clock
 	// (client.Now()), not local wall-clock. state.Time is simulation time
@@ -101,9 +139,7 @@ func (r *Reporter) ReportMetering(ctx context.Context, state InverterState) erro
 		MRID:           readingMRID(r.deviceLFDI, r.client.Now(), seq),
 		Description:    "Active Power",
 		LastUpdateTime: state.Time.Unix(),
-		ReadingType: &sep2.ReadingType{
-			Uom: &uomW,
-		},
+		ReadingType:    rt,
 		Reading: &sep2.Reading{
 			Value: &activeW,
 			TimePeriod: &sep2.DateTimeInterval{
