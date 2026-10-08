@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -25,7 +26,10 @@ type Reporter struct {
 	deviceLFDI    string
 	derStatusHref string // empty -> skip status PUT
 	mmrHref       string // empty -> skip metering POST
-	readingSeq    atomic.Uint64
+	// derAvailabilityHref is set by a manager (SetManagedDERHrefs); empty
+	// -> skip the availability PUT.
+	derAvailabilityHref string
+	readingSeq          atomic.Uint64
 	// manager makes the reporter act for deviceLFDI as a manager: its
 	// requests carry that LFDI to the guard, and its readings carry a
 	// flowDirection. Off for a der-role reporter, whose requests and
@@ -40,6 +44,13 @@ type Reporter struct {
 func (r *Reporter) AsManager() *Reporter {
 	r.manager = true
 	return r
+}
+
+// SetManagedDERHrefs points a manager's reporter at its device's DERStatus
+// and DERAvailability resources, taken from the device's own DER.
+func (r *Reporter) SetManagedDERHrefs(derStatusHref, derAvailabilityHref string) {
+	r.derStatusHref = derStatusHref
+	r.derAvailabilityHref = derAvailabilityHref
 }
 
 // flowDirectionFor gives the flowDirection of an active power reading in
@@ -82,6 +93,13 @@ func NewReporter(client *SEP2Client, deviceLFDI, derStatusHref, mmrHref string) 
 // (without error) when the configured derStatusHref is empty : the server
 // did not advertise a DERStatusLink, so there is nothing to report against.
 func (r *Reporter) ReportStatus(ctx context.Context, state InverterState) error {
+	return r.ReportStatusWithSOC(ctx, state, nil)
+}
+
+// ReportStatusWithSOC is ReportStatus carrying a battery's state of charge
+// (0 to 1) as StateOfChargeStatus, in hundredths of a percent. A nil soc
+// leaves the element out.
+func (r *Reporter) ReportStatusWithSOC(ctx context.Context, state InverterState, soc *float64) error {
 	if r.derStatusHref == "" {
 		return nil
 	}
@@ -97,10 +115,35 @@ func (r *Reporter) ReportStatus(ctx context.Context, state InverterState) error 
 		},
 		ReadingTime: state.Time.Unix(),
 	}
+	if soc != nil {
+		status.StateOfChargeStatus = &sep2.StateOfChargeStatusType{
+			DateTime: state.Time.Unix(),
+			Value:    uint16(math.Round(math.Max(0, math.Min(1, *soc)) * 10000)),
+		}
+	}
+	if r.manager {
+		ctx = WithTarget(ctx, r.deviceLFDI)
+	}
 
 	err := r.client.PutDERStatus(ctx, r.derStatusHref, status)
 	if err != nil {
 		log.Printf("reporter: status PUT failed: %v", err)
+	}
+	return err
+}
+
+// ReportAvailability sends a DERAvailability PUT. Returns nil immediately
+// when no availability href is set.
+func (r *Reporter) ReportAvailability(ctx context.Context, avail sep2.DERAvailability) error {
+	if r.derAvailabilityHref == "" {
+		return nil
+	}
+	if r.manager {
+		ctx = WithTarget(ctx, r.deviceLFDI)
+	}
+	err := r.client.PutDERAvailability(ctx, r.derAvailabilityHref, avail)
+	if err != nil {
+		log.Printf("reporter: availability PUT failed: %v", err)
 	}
 	return err
 }

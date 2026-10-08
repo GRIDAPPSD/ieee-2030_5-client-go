@@ -119,12 +119,26 @@ type managedDevice struct {
 	// control state, set before any session goroutine starts.
 	edev sep2.EndDevice
 	ctl  *controlSession
+
+	// DER resources (managed_status.go): der is set once the device's
+	// DERList has been read; setupDone once capability and settings are
+	// PUT; lastStatus is when status and availability last went out.
+	capacityWh         float64
+	der                *derLinks
+	derTries           int
+	nextDERTry         time.Time
+	setupDone          bool
+	setupCap, setupSet bool
+	lastStatus         time.Time
 }
 
 // managedFleet is every managed device session of one aggregator process.
 type managedFleet struct {
 	devices        []*managedDevice
 	reportInterval time.Duration
+	// statusInterval is how often status and availability go out; zero
+	// means reportInterval.
+	statusInterval time.Duration
 
 	// dispatch, when set, plans the battery setpoints inside a grant. now is
 	// the server-synchronized clock the grant's interval is read against.
@@ -232,7 +246,7 @@ func startManagedDevice(ctx context.Context, client *inverter.SEP2Client, dcap s
 		return nil, fmt.Errorf("managed device %s (%s): %w", m.Name, m.LFDI, err)
 	}
 
-	md := &managedDevice{name: m.Name, lfdi: m.LFDI, kind: m.Device.Type, ratedW: m.Device.RatedW, dev: replay, client: client, mirrorBase: reportInterval, now: time.Now}
+	md := &managedDevice{name: m.Name, lfdi: m.LFDI, kind: m.Device.Type, ratedW: m.Device.RatedW, capacityWh: m.Device.CapacityWh, dev: replay, client: client, mirrorBase: reportInterval, now: time.Now}
 	if dcap.MirrorUsagePointListLink == nil {
 		log.Printf("managed device %s: DeviceCapability has no MirrorUsagePointListLink; readings disabled", m.Name)
 	} else {
@@ -253,6 +267,9 @@ func (md *managedDevice) setReporter(mmrHref string) error {
 		return fmt.Errorf("managed device %s: %w", md.name, err)
 	}
 	md.reporter = reporter.AsManager()
+	if md.der != nil {
+		md.reporter.SetManagedDERHrefs(md.der.status, md.der.availability)
+	}
 	return nil
 }
 
@@ -343,6 +360,7 @@ func (f *managedFleet) Tick(ctx context.Context) {
 			continue
 		}
 		md.down = false
+		md.reportDER(ctx, state, f.statusEvery())
 		if md.kind == "battery" {
 			achievedChargingW += chargingToDER(state.ActivePowerW)
 		}
