@@ -129,6 +129,9 @@ type managedDevice struct {
 	nextDERTry         time.Time
 	setupDone          bool
 	setupCap, setupSet bool
+	setupTries         int
+	nextSetupTry       time.Time
+	noListLogged       bool
 	lastStatus         time.Time
 }
 
@@ -360,7 +363,7 @@ func (f *managedFleet) Tick(ctx context.Context) {
 			continue
 		}
 		md.down = false
-		md.reportDER(ctx, state, f.statusEvery())
+		md.reportDER(ctx, state, reading.MaxPowerW, f.statusEvery())
 		if md.kind == "battery" {
 			achievedChargingW += chargingToDER(state.ActivePowerW)
 		}

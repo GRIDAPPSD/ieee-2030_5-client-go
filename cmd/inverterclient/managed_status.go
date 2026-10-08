@@ -27,6 +27,16 @@ const (
 	derTypeStorage uint8 = 80
 )
 
+// DERControlType bit positions, IEEE 2030.5-2018 DERControlType.
+const (
+	modeCharge    sep2.DERControlType = 1 << 0
+	modeDischarge sep2.DERControlType = 1 << 1
+	modeConnect   sep2.DERControlType = 1 << 2
+	modeEnergize  sep2.DERControlType = 1 << 3
+	modeFixedW    sep2.DERControlType = 1 << 7
+	modeMaxLimW   sep2.DERControlType = 1 << 20
+)
+
 // derLinks are the resource hrefs of a managed device's first DER.
 type derLinks struct {
 	capability, settings, status, availability string
@@ -60,17 +70,22 @@ func activePowerOf(w float64) sep2.ActivePower {
 }
 
 // capabilityFor is the DERCapability a managed device reports from its
-// configured rating.
+// configured rating. modesSupported lists the controls the device follows:
+// connect, energize, a fixed setpoint and a power limit for a PV device,
+// and charge and discharge as well for a battery.
 func capabilityFor(kind string, ratedW float64) sep2.DERCapability {
 	maxW := activePowerOf(ratedW)
+	modes := modeConnect | modeEnergize | modeFixedW | modeMaxLimW
 	c := sep2.DERCapability{RTGMaxW: &maxW}
 	t := derTypePV
 	if kind == "battery" {
 		t = derTypeStorage
+		modes |= modeCharge | modeDischarge
 		charge, discharge := activePowerOf(ratedW), activePowerOf(ratedW)
 		c.RTGMaxChargeRateW, c.RTGMaxDischargeRateW = &charge, &discharge
 	}
 	c.Type = &t
+	c.ModesSupported = &modes
 	return c
 }
 
@@ -86,25 +101,33 @@ func settingsFor(kind string, ratedW float64, at int64) sep2.DERSettings {
 	return s
 }
 
-// availabilityFor is the DERAvailability of a managed device. A PV device
-// offers its rating. A battery offers its rating for discharge only while
-// it holds charge, and states how long it can discharge and how long it can
-// still charge at that rating; soc is its state of charge, 0 to 1, or nil
-// when the backend does not report one (then only the rating is offered).
-func availabilityFor(kind string, ratedW, capacityWh float64, soc *float64, at int64) sep2.DERAvailability {
+// availabilityFor is the DERAvailability of a managed device. statWAvail is
+// the reserve active power: the most the device could output now minus what
+// it outputs now, never negative (IEEE 2030.5-2023, DERAvailability
+// statWAvail). A PV device could output the tick's recorded maximum, up to
+// its rating. A battery could output its rating while it holds charge and
+// nothing when empty. A battery also states how long it can discharge and
+// how long it can still charge at its rating; soc is its state of charge, 0
+// to 1, or nil when the backend does not report one (then only the reserve
+// is offered).
+func availabilityFor(kind string, ratedW, capacityWh float64, soc *float64, maxPossibleW, outputW float64, at int64) sep2.DERAvailability {
 	a := sep2.DERAvailability{ReadingTime: at}
-	avail := ratedW
-	if kind == "battery" && soc != nil {
-		if *soc <= 0 {
-			avail = 0
-		}
-		if ratedW > 0 {
-			discharge := uint32(math.Round(*soc * capacityWh / ratedW * 3600))
-			charge := uint32(math.Round((1 - *soc) * capacityWh / ratedW * 3600))
-			a.AvailabilityDuration, a.MaxChargeDuration = &discharge, &charge
+	ceiling := math.Min(math.Max(0, maxPossibleW), ratedW)
+	if kind == "battery" {
+		ceiling = ratedW
+		if soc != nil {
+			s := math.Max(0, math.Min(1, *soc))
+			if s == 0 {
+				ceiling = 0
+			}
+			if ratedW > 0 {
+				discharge := uint32(math.Round(s * capacityWh / ratedW * 3600))
+				charge := uint32(math.Round((1 - s) * capacityWh / ratedW * 3600))
+				a.AvailabilityDuration, a.MaxChargeDuration = &discharge, &charge
+			}
 		}
 	}
-	w := activePowerOf(avail)
+	w := activePowerOf(math.Max(0, ceiling-math.Max(0, outputW)))
 	a.StatWAvail = &w
 	return a
 }
@@ -156,6 +179,12 @@ func (md *managedDevice) resolveDER(ctx context.Context) bool {
 			l.availability = der.DERAvailabilityLink.Href
 		}
 		md.der = l
+		if l.status == "" {
+			log.Printf("managed device %s: DER has no DERStatusLink; no status will be reported", md.name)
+		}
+		if l.availability == "" {
+			log.Printf("managed device %s: DER has no DERAvailabilityLink; no availability will be reported", md.name)
+		}
 		md.reporter.SetManagedDERHrefs(l.status, l.availability)
 		return true
 	}
@@ -165,7 +194,7 @@ func (md *managedDevice) resolveDER(ctx context.Context) bool {
 
 // putSetup PUTs the capability and settings once from the configured
 // rating. A link the DER does not advertise is logged and skipped; a failed
-// PUT is retried on the next tick.
+// PUT is retried with the mirror's backoff.
 func (md *managedDevice) putSetup(ctx context.Context) {
 	ctx = inverter.WithTarget(ctx, md.lfdi)
 	ok := true
@@ -173,7 +202,7 @@ func (md *managedDevice) putSetup(ctx context.Context) {
 		log.Printf("managed device %s: DER has no DERCapabilityLink; skipping DERCapability PUT", md.name)
 	} else if !md.setupCap {
 		if err := md.client.PutDERCapability(ctx, md.der.capability, capabilityFor(md.kind, md.ratedW)); err != nil {
-			log.Printf("managed device %s: PUT DERCapability: %v", md.name, err)
+			log.Printf("managed device %s: PUT DERCapability attempt %d: %v", md.name, md.setupTries+1, err)
 			ok = false
 		} else {
 			md.setupCap = true
@@ -183,23 +212,34 @@ func (md *managedDevice) putSetup(ctx context.Context) {
 		log.Printf("managed device %s: DER has no DERSettingsLink; skipping DERSettings PUT", md.name)
 	} else if !md.setupSet {
 		if err := md.client.PutDERSettings(ctx, md.der.settings, settingsFor(md.kind, md.ratedW, md.client.Now().Unix())); err != nil {
-			log.Printf("managed device %s: PUT DERSettings: %v", md.name, err)
+			log.Printf("managed device %s: PUT DERSettings attempt %d: %v", md.name, md.setupTries+1, err)
 			ok = false
 		} else {
 			md.setupSet = true
 		}
 	}
 	md.setupDone = ok
+	if !ok {
+		md.setupTries++
+		md.nextSetupTry = md.now().Add(mirrorBackoff(md.mirrorBase, md.setupTries))
+	}
 }
 
 // reportDER sends the device's capability and settings (once) and, when
 // the status interval has passed, its status and availability. The caller
 // calls it only for a device it just read and applied.
-func (md *managedDevice) reportDER(ctx context.Context, state inverter.InverterState, every time.Duration) {
-	if md.edev.DERListLink == nil || !md.resolveDER(ctx) {
+func (md *managedDevice) reportDER(ctx context.Context, state inverter.InverterState, maxPowerW float64, every time.Duration) {
+	if md.edev.DERListLink == nil || md.edev.DERListLink.Href == "" {
+		if !md.noListLogged {
+			md.noListLogged = true
+			log.Printf("managed device %s: EndDevice advertises no DERListLink; no DER resources will be reported", md.name)
+		}
 		return
 	}
-	if !md.setupDone {
+	if !md.resolveDER(ctx) {
+		return
+	}
+	if !md.setupDone && !md.now().Before(md.nextSetupTry) {
 		md.putSetup(ctx)
 	}
 	if md.now().Sub(md.lastStatus) < every {
@@ -209,10 +249,11 @@ func (md *managedDevice) reportDER(ctx context.Context, state inverter.InverterS
 	at := md.client.Now()
 	state.Time = at
 	soc := md.socOf()
+	avail := availabilityFor(md.kind, md.ratedW, md.capacityWh, soc, maxPowerW, state.ActivePowerW, at.Unix())
 	if err := md.reporter.ReportStatusWithSOC(ctx, state, soc); err != nil {
 		log.Printf("managed device %s: DERStatus PUT failed: %v", md.name, err)
 	}
-	if err := md.reporter.ReportAvailability(ctx, availabilityFor(md.kind, md.ratedW, md.capacityWh, soc, at.Unix())); err != nil {
+	if err := md.reporter.ReportAvailability(ctx, avail); err != nil {
 		log.Printf("managed device %s: DERAvailability PUT failed: %v", md.name, err)
 	}
 }
