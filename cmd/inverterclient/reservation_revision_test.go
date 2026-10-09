@@ -109,7 +109,9 @@ func TestCancellation_ReturnsEveryDeviceToBaselineWithinOneTick(t *testing.T) {
 }
 
 // Every answer change is logged with the request mRID and the mRID of the
-// response it rests on: a grant, a revision, a cancellation, and a denial.
+// response it rests on: a grant, a revision, a cancellation, and a second
+// cancellation by a new response. A denial is covered in
+// TestAnswerChanges_DenialIsLoggedWithRequestAndResponseMRIDs.
 func TestAnswerChanges_AreLoggedWithRequestAndResponseMRIDs(t *testing.T) {
 	r, f, clk := startedReserver(t, nil)
 	buf := captureLog(t)
