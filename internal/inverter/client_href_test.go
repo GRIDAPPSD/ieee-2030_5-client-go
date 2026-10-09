@@ -1,9 +1,16 @@
 package inverter
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
+	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
 // A PUT target is the configured server or an error, whatever shape the href
@@ -44,5 +51,49 @@ func TestPutTarget_StaysOnTheConfiguredServer(t *testing.T) {
 				t.Errorf("putTarget(%q) = %q, %v; want %q", tc.href, got, err, tc.want)
 			}
 		})
+	}
+}
+
+// A relative href keeps the configured base path, as Get and Post do.
+func TestPutTarget_KeepsTheBasePath(t *testing.T) {
+	c := &SEP2Client{baseURL: "https://h:8443/sep2"}
+	for href, want := range map[string]string{
+		"/edev/1/der/1/dercap": "https://h:8443/sep2/edev/1/der/1/dercap",
+		"edev/1/frq/5":         "https://h:8443/sep2/edev/1/frq/5",
+		"https://h:8443/x":     "https://h:8443/x",
+	} {
+		got, err := c.putTarget(href)
+		if err != nil || got != want {
+			t.Errorf("putTarget(%q) = %q, %v; want %q", href, got, err, want)
+		}
+	}
+	for _, href := range []string{"//evil.example/x", "https://evil.example/x"} {
+		if got, err := c.putTarget(href); !errors.Is(err, ErrHrefOffServer) {
+			t.Errorf("putTarget(%q) = %q, %v; want a refusal", href, got, err)
+		}
+	}
+}
+
+// The requests a base URL with a path sends: a der-role DER PUT and an
+// aggregator's withdrawal both land under the base path, as a GET does.
+func TestPut_KeepsTheBasePathOnTheWire(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := newTestSEP2Client(t, srv.URL+"/sep2", srv.Client().Transport)
+	if err := c.PutDERCapability(context.Background(), "/edev/1/der/1/dercap", sep2.DERCapability{}); err != nil {
+		t.Fatalf("PutDERCapability: %v", err)
+	}
+	c.guard = guard.New(guard.RoleAggregator, c.lfdi, guard.NewStaticManagedSet())
+	if err := c.PutFlowReservationRequest(context.Background(), "/edev/1/frq/5", sep2.FlowReservationRequest{}); err != nil {
+		t.Fatalf("PutFlowReservationRequest: %v", err)
+	}
+	want := []string{"PUT /sep2/edev/1/der/1/dercap", "PUT /sep2/edev/1/frq/5"}
+	if !slices.Equal(paths, want) {
+		t.Errorf("server saw %q, want %q", paths, want)
 	}
 }

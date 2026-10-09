@@ -411,16 +411,21 @@ func (c *SEP2Client) Put(ctx context.Context, kind guard.Kind, path string, body
 // putTarget is the URL a PUT of path goes to: the href resolved against the
 // configured server and refused unless the result names that server's scheme
 // and host, so a PUT never carries the client certificate or the body to
-// another server. A relative href is resolved, never string-joined, because
-// a joined "@host/..." or ".host/..." changes the authority.
+// another server. A relative href keeps the base path, as Get and Post do; it
+// is joined only after the href is known to carry no scheme or host, so a
+// "@host/..." or ".host/..." lands in the path and cannot change the authority.
 func (c *SEP2Client) putTarget(path string) (string, error) {
-	target, err := c.resolveServerURL(path)
-	if err != nil {
-		return "", err
-	}
 	base, err := url.Parse(c.baseURL)
 	if err != nil {
 		return "", fmt.Errorf("parse base URL %q: %w", c.baseURL, err)
+	}
+	ref, err := url.Parse(path)
+	if err != nil {
+		return "", fmt.Errorf("parse href %q: %w", path, err)
+	}
+	target := strings.TrimSuffix(c.baseURL, "/") + "/" + strings.TrimPrefix(path, "/")
+	if ref.IsAbs() || ref.Host != "" {
+		target = ref.String()
 	}
 	t, err := url.Parse(target)
 	if err != nil {
