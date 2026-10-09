@@ -387,7 +387,11 @@ func (c *SEP2Client) Put(ctx context.Context, kind guard.Kind, path string, body
 		return "", fmt.Errorf("marshal: %w", err)
 	}
 
-	if err := c.putOnce(ctx, c.baseURL+path, path, data); err != nil {
+	target, err := c.putTarget(path)
+	if err != nil {
+		return "", fmt.Errorf("PUT %s: %w", path, err)
+	}
+	if err := c.putOnce(ctx, target, path, data); err != nil {
 		var moved *MovedError
 		if errors.As(err, &moved) && moved.Location != "" {
 			target, rerr := c.resolveServerURL(moved.Location)
@@ -402,6 +406,37 @@ func (c *SEP2Client) Put(ctx context.Context, kind guard.Kind, path string, body
 		return "", err
 	}
 	return "", nil
+}
+
+// putTarget is the URL a PUT of path goes to. A path is joined to the base
+// URL; an absolute href (a server may return one as a Location) is resolved
+// with resolveServerURL, and refused unless it names the configured server's
+// scheme and host, so a PUT never carries the client certificate or the body
+// to another server.
+func (c *SEP2Client) putTarget(path string) (string, error) {
+	u, err := url.Parse(path)
+	if err != nil {
+		return "", fmt.Errorf("parse href %q: %w", path, err)
+	}
+	if !u.IsAbs() && u.Host == "" {
+		return c.baseURL + path, nil
+	}
+	target, err := c.resolveServerURL(path)
+	if err != nil {
+		return "", err
+	}
+	base, err := url.Parse(c.baseURL)
+	if err != nil {
+		return "", fmt.Errorf("parse base URL %q: %w", c.baseURL, err)
+	}
+	t, err := url.Parse(target)
+	if err != nil {
+		return "", fmt.Errorf("parse href %q: %w", target, err)
+	}
+	if !strings.EqualFold(t.Scheme, base.Scheme) || !strings.EqualFold(t.Host, base.Host) {
+		return "", fmt.Errorf("href %q is not on the configured server", path)
+	}
+	return target, nil
 }
 
 // putOnce performs a single PUT attempt against rawURL.

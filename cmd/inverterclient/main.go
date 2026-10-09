@@ -305,12 +305,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// SIGUSR1 asks an aggregator to post a flow reservation. Only the
-	// aggregator registers for it; a nil channel never fires in other roles.
-	var reserveSig <-chan os.Signal
-	if skipDERPipelineForRole(cfg) {
-		reserveSig = reserveSignals()
-	}
+	// SIGUSR1 asks an aggregator to post a flow reservation and SIGUSR2 to
+	// withdraw it. Only the aggregator registers for them; a nil channel
+	// never fires in other roles.
+	reserveSig, withdrawSig := operatorSignals(cfg)
 
 	// notifyReceiver is declared here, ahead of its real construction
 	// further down, so the shutdown closure below can close over the same
@@ -1096,6 +1094,8 @@ func main() {
 				continue
 			}
 			reservations.Trigger(ctx)
+		case <-withdrawSig:
+			withdrawOnSignal(ctx, reservations)
 		case <-ticker.C:
 			if skipDERPipelineForRole(cfg) {
 				// The aggregator's own EndDevice is not a DER: no

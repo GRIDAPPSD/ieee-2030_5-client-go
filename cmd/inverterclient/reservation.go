@@ -34,6 +34,9 @@ type reservationClient interface {
 // hold the tick loop.
 const ioTimeout = 15 * time.Second
 
+// maxWithdrawBackoff caps the wait between retries of a refused withdrawal.
+const maxWithdrawBackoff = 5 * time.Minute
+
 // dispatcher turns the current grant into per-device battery setpoints and
 // accounts the energy actually moved. It does not own the devices: the
 // managed fleet asks it for a plan each tick and reports back what the
@@ -151,6 +154,17 @@ type reserver struct {
 
 	cur      *currentRequest
 	nextPoll time.Time
+
+	// stale holds replaced requests whose withdrawal the server refused,
+	// each retried until the server accepts it or its window has passed.
+	stale []staleWithdrawal
+}
+
+// staleWithdrawal is a replaced request still to be withdrawn.
+type staleWithdrawal struct {
+	c    *currentRequest
+	next time.Time     // the earliest next attempt
+	wait time.Duration // the wait that produced next; doubles on each failure
 }
 
 // newReserver builds a reserver on the aggregator's own EndDevice links.
@@ -196,16 +210,19 @@ func (r *reserver) Trigger(ctx context.Context) {
 		log.Printf("flow reservation: not posted: %v", err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, ioTimeout)
+	postCtx, cancel := context.WithTimeout(ctx, ioTimeout)
 	defer cancel()
-	loc, err := r.client.PostFlowReservationRequest(ctx, r.reqHref, req)
+	loc, err := r.client.PostFlowReservationRequest(postCtx, r.reqHref, req)
 	if err != nil {
 		log.Printf("flow reservation: post failed: %v", err)
 		return
 	}
-	if r.cur != nil {
-		log.Printf("flow reservation: now following request %s instead of %s", mrid, r.cur.mrid)
-		r.withdraw(ctx, r.cur, now)
+	if old := r.cur; old != nil {
+		log.Printf("flow reservation: now following request %s instead of %s", mrid, old.mrid)
+		// The caller's context, not the post's: the withdrawal gets its own timeout.
+		if !r.withdraw(ctx, old, now) {
+			r.retryLater(old, now)
+		}
 	}
 	r.cur = &currentRequest{
 		requestFacts: factsOf(req), mrid: mrid, href: loc, req: req, kind: answerPending,
@@ -237,7 +254,7 @@ func (r *reserver) Withdraw(ctx context.Context) {
 // withdraw PUTs c as cancelled to the href the server gave it, and reports
 // whether the server accepted it. Only RequestStatus differs from the
 // request as posted, which is all the server accepts of a PUT. A failure is
-// logged and leaves c as it was, to be withdrawn again on request.
+// logged and leaves c as it was; each attempt has a timeout of its own.
 func (r *reserver) withdraw(ctx context.Context, c *currentRequest, now time.Time) bool {
 	if c.done || c.withdrawn {
 		return false
@@ -260,6 +277,54 @@ func (r *reserver) withdraw(ctx context.Context, c *currentRequest, now time.Tim
 	return true
 }
 
+// pollInterval is the time between reads of the response list.
+func (r *reserver) pollInterval() time.Duration {
+	return max(time.Duration(r.cfg.PollS)*time.Second, time.Second)
+}
+
+// retryLater keeps a replaced request whose withdrawal just failed, to be
+// tried again a poll interval from now. A request with nothing to withdraw
+// (finished, already withdrawn, or no href) is not kept.
+func (r *reserver) retryLater(c *currentRequest, now time.Time) {
+	if c.done || c.withdrawn || c.href == "" {
+		return
+	}
+	wait := r.pollInterval()
+	r.stale = append(r.stale, staleWithdrawal{c: c, next: now.Add(wait), wait: wait})
+}
+
+// retryWithdrawals tries each kept withdrawal that is due. The wait doubles
+// after each failure up to maxWithdrawBackoff; a request whose window and
+// grace have passed is dropped, since the server no longer holds capacity
+// for it.
+func (r *reserver) retryWithdrawals(ctx context.Context) {
+	if len(r.stale) == 0 {
+		return
+	}
+	now := r.now()
+	kept := r.stale[:0]
+	for _, s := range r.stale {
+		switch {
+		case s.c.withdrawn:
+			continue
+		case !now.Before(s.c.end.Add(r.grace())):
+			log.Printf("flow reservation: request %s was never withdrawn and its window has passed; giving up", s.c.mrid)
+			continue
+		case now.Before(s.next):
+			kept = append(kept, s)
+			continue
+		}
+		log.Printf("flow reservation: retrying the withdrawal of request %s", s.c.mrid)
+		if r.withdraw(ctx, s.c, now) {
+			continue
+		}
+		s.wait = min(s.wait*2, maxWithdrawBackoff)
+		s.next = now.Add(s.wait)
+		kept = append(kept, s)
+	}
+	r.stale = kept
+}
+
 // grace is the time after the requested start within which the first answer
 // counts as on time, and after the requested end the request is followed
 // to.
@@ -271,9 +336,14 @@ func (r *reserver) grace() time.Duration {
 // updates the answer. No state stops the reads before the end of the
 // request's window plus the grace: a denial, an expiry or a cancellation can
 // each be followed by a newer answer. A failed or truncated read changes
-// nothing: an unreadable list is not read as no answer.
+// nothing: an unreadable list is not read as no answer. Every poll also
+// retries the withdrawals the server has refused.
 func (r *reserver) Poll(ctx context.Context) {
-	if r == nil || r.cur == nil || r.cur.done {
+	if r == nil {
+		return
+	}
+	r.retryWithdrawals(ctx)
+	if r.cur == nil || r.cur.done {
 		return
 	}
 	c := r.cur
@@ -310,7 +380,9 @@ func (r *reserver) Poll(ctx context.Context) {
 		log.Printf("flow reservation: response %s read against request %s: %s", terms.ResponseMRID, c.mrid, terms.Clipped)
 	}
 	c.kind, c.terms, c.respMRID = kind, terms, respMRID
-	if kind.dispatches() {
+	// A withdrawn request never dispatches again, whatever a read that
+	// has not yet caught up with the cancellation still shows.
+	if kind.dispatches() && !c.withdrawn {
 		t := terms
 		r.disp.setGrant(&t)
 	} else {
