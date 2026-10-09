@@ -227,3 +227,49 @@ func TestFlowReservation_WithdrawalRefusedForDERRoleAndEmptyHref(t *testing.T) {
 		t.Errorf("%d writes reached the server, want 0", len(seen.posts))
 	}
 }
+
+// A server may return a withdrawal href as an absolute URL: one on the
+// configured server is resolved and sent there; one on another host is
+// refused before anything is sent.
+func TestFlowReservation_WithdrawalResolvesAnAbsoluteHrefOnTheConfiguredServer(t *testing.T) {
+	env := newCCMTestEnv(t)
+	serverURL, seen := frqListener(t, env)
+	client := newGuardTestClient(t, serverURL, env, "aggregator")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req := sep2.FlowReservationRequest{
+		MRID:          "REQ1",
+		RequestStatus: sep2.RequestStatus{DateTime: 1_800_000_000, RequestStatus: sep2.RequestStatusCancelled},
+	}
+	if err := client.PutFlowReservationRequest(ctx, serverURL+"/edev/1/frq/5", req); err != nil {
+		t.Fatalf("an absolute href on the configured server: %v", err)
+	}
+	if got := len(seen.posts["/edev/1/frq/5"]); got != 1 {
+		t.Errorf("%d bodies reached /edev/1/frq/5, want 1", got)
+	}
+}
+
+func TestFlowReservation_WithdrawalRefusesAnAbsoluteHrefOnAnotherHost(t *testing.T) {
+	env := newCCMTestEnv(t)
+	serverURL, seen := frqListener(t, env)
+	otherURL, otherSeen := frqListener(t, env)
+	client := newGuardTestClient(t, serverURL, env, "aggregator")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req := sep2.FlowReservationRequest{MRID: "REQ1"}
+	for name, href := range map[string]string{
+		"another port":   otherURL + "/edev/1/frq/5",
+		"another scheme": "http://" + strings.TrimPrefix(serverURL, "https://") + "/edev/1/frq/5",
+		"another host":   "https://example.invalid/edev/1/frq/5",
+	} {
+		// The refusal is the client's own, made before any connection.
+		if err := client.PutFlowReservationRequest(ctx, href, req); err == nil || !strings.Contains(err.Error(), "not on the configured server") {
+			t.Errorf("%s: %s gave %v, want a refusal that names the server", name, href, err)
+		}
+	}
+	if n := len(seen.posts) + len(otherSeen.posts); n != 0 {
+		t.Errorf("%d writes reached a server, want 0", n)
+	}
+}
