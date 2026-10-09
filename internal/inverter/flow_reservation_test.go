@@ -174,3 +174,102 @@ func TestNewFlowReservationRequestMRID_IsFreshHex128(t *testing.T) {
 		}
 	}
 }
+
+// The withdrawal is a PUT of the request to its own href, as the aggregator's
+// own and whatever target the context carries; the body is the request with
+// its RequestStatus as given.
+func TestFlowReservation_WithdrawalIsPutToTheRequestHrefAsTheAggregatorsOwn(t *testing.T) {
+	env := newCCMTestEnv(t)
+	serverURL, seen := frqListener(t, env)
+	client := newGuardTestClient(t, serverURL, env, "aggregator")
+	client.SetManagedSet(guard.NewStaticManagedSet(managedLFDI))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req := sep2.FlowReservationRequest{
+		MRID:            "REQ1",
+		EnergyRequested: &sep2.SignedRealEnergy{Value: 6000},
+		RequestStatus:   sep2.RequestStatus{DateTime: 1_800_000_000, RequestStatus: sep2.RequestStatusCancelled},
+	}
+	if err := client.PutFlowReservationRequest(inverter.WithTarget(ctx, managedLFDI), "/edev/1/frq/1", req); err != nil {
+		t.Fatalf("PutFlowReservationRequest: %v", err)
+	}
+	bodies := seen.posts["/edev/1/frq/1"]
+	if len(bodies) != 1 {
+		t.Fatalf("%d bodies reached /edev/1/frq/1, want 1", len(bodies))
+	}
+	var got sep2.FlowReservationRequest
+	if err := xml.Unmarshal([]byte(bodies[0]), &got); err != nil {
+		t.Fatalf("body does not decode: %v", err)
+	}
+	if got.MRID != "REQ1" || got.RequestStatus.RequestStatus != sep2.RequestStatusCancelled || got.RequestStatus.DateTime != 1_800_000_000 {
+		t.Errorf("body = mRID %q status %+v, want REQ1 cancelled at 1800000000", got.MRID, got.RequestStatus)
+	}
+}
+
+// The der role has no reservation to withdraw: refused before anything is
+// sent, and an empty href is refused whatever the role.
+func TestFlowReservation_WithdrawalRefusedForDERRoleAndEmptyHref(t *testing.T) {
+	env := newCCMTestEnv(t)
+	serverURL, seen := frqListener(t, env)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	der := newGuardTestClient(t, serverURL, env, "der")
+	if err := der.PutFlowReservationRequest(ctx, "/edev/1/frq/1", sep2.FlowReservationRequest{MRID: "X"}); err == nil {
+		t.Error("der role withdrew a FlowReservationRequest")
+	}
+	agg := newGuardTestClient(t, serverURL, env, "aggregator")
+	if err := agg.PutFlowReservationRequest(ctx, "", sep2.FlowReservationRequest{MRID: "X"}); err == nil {
+		t.Error("an empty href was accepted")
+	}
+	if len(seen.posts) != 0 {
+		t.Errorf("%d writes reached the server, want 0", len(seen.posts))
+	}
+}
+
+// A server may return a withdrawal href as an absolute URL: one on the
+// configured server is resolved and sent there; one on another host is
+// refused before anything is sent.
+func TestFlowReservation_WithdrawalResolvesAnAbsoluteHrefOnTheConfiguredServer(t *testing.T) {
+	env := newCCMTestEnv(t)
+	serverURL, seen := frqListener(t, env)
+	client := newGuardTestClient(t, serverURL, env, "aggregator")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req := sep2.FlowReservationRequest{
+		MRID:          "REQ1",
+		RequestStatus: sep2.RequestStatus{DateTime: 1_800_000_000, RequestStatus: sep2.RequestStatusCancelled},
+	}
+	if err := client.PutFlowReservationRequest(ctx, serverURL+"/edev/1/frq/5", req); err != nil {
+		t.Fatalf("an absolute href on the configured server: %v", err)
+	}
+	if got := len(seen.posts["/edev/1/frq/5"]); got != 1 {
+		t.Errorf("%d bodies reached /edev/1/frq/5, want 1", got)
+	}
+}
+
+func TestFlowReservation_WithdrawalRefusesAnAbsoluteHrefOnAnotherHost(t *testing.T) {
+	env := newCCMTestEnv(t)
+	serverURL, seen := frqListener(t, env)
+	otherURL, otherSeen := frqListener(t, env)
+	client := newGuardTestClient(t, serverURL, env, "aggregator")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req := sep2.FlowReservationRequest{MRID: "REQ1"}
+	for name, href := range map[string]string{
+		"another port":   otherURL + "/edev/1/frq/5",
+		"another scheme": "http://" + strings.TrimPrefix(serverURL, "https://") + "/edev/1/frq/5",
+		"another host":   "https://example.invalid/edev/1/frq/5",
+	} {
+		// The refusal is the client's own, made before any connection.
+		if err := client.PutFlowReservationRequest(ctx, href, req); err == nil || !strings.Contains(err.Error(), "not on the configured server") {
+			t.Errorf("%s: %s gave %v, want a refusal that names the server", name, href, err)
+		}
+	}
+	if n := len(seen.posts) + len(otherSeen.posts); n != 0 {
+		t.Errorf("%d writes reached a server, want 0", n)
+	}
+}

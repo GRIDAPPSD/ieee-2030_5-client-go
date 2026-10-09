@@ -17,3 +17,12 @@ func reserveSignals() <-chan os.Signal {
 	signal.Notify(ch, syscall.SIGUSR1)
 	return ch
 }
+
+// withdrawSignals delivers SIGUSR2, the operator's request to withdraw the
+// flow reservation being followed. Registered with reserveSignals, for the
+// same reason.
+func withdrawSignals() <-chan os.Signal {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGUSR2)
+	return ch
+}

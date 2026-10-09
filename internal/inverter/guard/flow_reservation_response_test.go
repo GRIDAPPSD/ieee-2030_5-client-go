@@ -38,3 +38,17 @@ func TestGuard_FlowReservationResponsePost(t *testing.T) {
 		t.Errorf("String() = %q", got)
 	}
 }
+
+// The flow reservation kinds are named in refusal messages, so each name is
+// pinned.
+func TestKindString_FlowReservationKinds(t *testing.T) {
+	for k, want := range map[Kind]string{
+		KindFlowReservationPost:         "FlowReservationPost",
+		KindFlowReservationResponsePost: "FlowReservationResponsePost",
+		KindFlowReservationWithdraw:     "FlowReservationWithdraw",
+	} {
+		if got := k.String(); got != want {
+			t.Errorf("Kind %d is named %q, want %q", int(k), got, want)
+		}
+	}
+}

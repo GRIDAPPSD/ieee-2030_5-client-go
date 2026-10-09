@@ -387,10 +387,14 @@ func (c *SEP2Client) Put(ctx context.Context, kind guard.Kind, path string, body
 		return "", fmt.Errorf("marshal: %w", err)
 	}
 
-	if err := c.putOnce(ctx, c.baseURL+path, path, data); err != nil {
+	target, err := c.putTarget(path)
+	if err != nil {
+		return "", fmt.Errorf("PUT %s: %w", path, err)
+	}
+	if err := c.putOnce(ctx, target, path, data); err != nil {
 		var moved *MovedError
 		if errors.As(err, &moved) && moved.Location != "" {
-			target, rerr := c.resolveServerURL(moved.Location)
+			target, rerr := c.putTarget(moved.Location)
 			if rerr != nil {
 				return "", fmt.Errorf("PUT %s: resolve 301 Location: %w", path, rerr)
 			}
@@ -402,6 +406,56 @@ func (c *SEP2Client) Put(ctx context.Context, kind guard.Kind, path string, body
 		return "", err
 	}
 	return "", nil
+}
+
+// putTarget is the URL a PUT of path goes to: the href resolved against the
+// configured server and refused unless the result names that server's scheme
+// and host, so a PUT never carries the client certificate or the body to
+// another server. A relative href keeps the base path, as Get and Post do; it
+// is joined only after the href is known to carry no scheme or host, so a
+// "@host/..." or ".host/..." lands in the path and cannot change the authority.
+func (c *SEP2Client) putTarget(path string) (string, error) {
+	base, err := url.Parse(c.baseURL)
+	if err != nil {
+		return "", fmt.Errorf("parse base URL %q: %w", c.baseURL, err)
+	}
+	ref, err := url.Parse(path)
+	if err != nil {
+		return "", fmt.Errorf("parse href %q: %w", path, err)
+	}
+	target := strings.TrimSuffix(c.baseURL, "/") + "/" + strings.TrimPrefix(path, "/")
+	if ref.IsAbs() || ref.Host != "" {
+		target = ref.String()
+	}
+	t, err := url.Parse(target)
+	if err != nil {
+		return "", fmt.Errorf("parse href %q: %w", target, err)
+	}
+	if !sameServer(base, t) {
+		return "", fmt.Errorf("href %q: %w", path, ErrHrefOffServer)
+	}
+	return target, nil
+}
+
+// sameServer reports whether a and b name the same scheme, host and port,
+// with an explicit default port equal to none.
+func sameServer(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) &&
+		effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
 }
 
 // putOnce performs a single PUT attempt against rawURL.
@@ -887,8 +941,10 @@ func (c *SEP2Client) PostMeterReading(ctx context.Context, mmrListHref string, m
 // every advertised URI as opaque and resolve via RFC 3986, not by string
 // concatenation. Currently only PostResponse needs the full resolution
 // surface (Response.replyTo is the first href that the spec allows to be
-// absolute); the GET/PUT helpers still string-concat with c.baseURL because
-// every other advertised link in IEEE 2030.5 is a path under the server.
+// absolute). PUT resolves its href through here and then checks the result
+// is on the configured server (putTarget); the GET and POST helpers still
+// string-concat with c.baseURL because every other advertised link in
+// IEEE 2030.5 is a path under the server.
 func (c *SEP2Client) resolveServerURL(href string) (string, error) {
 	u, err := url.Parse(href)
 	if err != nil {

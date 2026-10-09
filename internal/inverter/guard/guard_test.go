@@ -123,7 +123,7 @@ func TestGuard_DER(t *testing.T) {
 	// Never allowed for der self, in either role: writing its own record,
 	// PUTting a DefaultDERControl, deleting itself, posting a flow
 	// reservation (der has no fleet to reserve for).
-	neverSelf := []Kind{KindEndDeviceWrite, KindDefaultControlWrite, KindEndDeviceDelete, KindFlowReservationPost}
+	neverSelf := []Kind{KindEndDeviceWrite, KindDefaultControlWrite, KindEndDeviceDelete, KindFlowReservationPost, KindFlowReservationWithdraw}
 	for _, k := range neverSelf {
 		if err := g.Allow(kindMethod[k], Action{Kind: k, TargetLFDI: ""}); err == nil {
 			t.Errorf("der self %v: want refusal, got allow", k)
@@ -170,7 +170,9 @@ func TestGuard_Aggregator_ManagerActions(t *testing.T) {
 		{"read for unmanaged device", Action{Kind: KindEndDeviceRead, TargetLFDI: testUnmanaged}, false},
 
 		{"self read", Action{Kind: KindEndDeviceRead, TargetLFDI: testSelf}, true},
+		{"flow reservation withdrawal on managed device", Action{Kind: KindFlowReservationWithdraw, TargetLFDI: testManaged}, false},
 		{"self flow reservation", Action{Kind: KindFlowReservationPost, TargetLFDI: testSelf}, true},
+		{"self flow reservation withdrawal", Action{Kind: KindFlowReservationWithdraw, TargetLFDI: testSelf}, true},
 	}
 	for _, tt := range tests {
 		err := g.Allow(kindMethod[tt.action.Kind], tt.action)
@@ -201,7 +203,7 @@ func TestGuard_Aggregator_SelfNeverActsAsDER(t *testing.T) {
 	}
 
 	// What the aggregator's own EndDevice still legitimately does.
-	allowed := []Kind{KindEndDeviceRead, KindRegistrationRead, KindLogEventPost, KindSubscriptionPost, KindFlowReservationPost}
+	allowed := []Kind{KindEndDeviceRead, KindRegistrationRead, KindLogEventPost, KindSubscriptionPost, KindFlowReservationPost, KindFlowReservationWithdraw}
 	for _, k := range allowed {
 		if err := g.Allow(kindMethod[k], Action{Kind: k, TargetLFDI: ""}); err != nil {
 			t.Errorf("aggregator self %v: want allow, got %v", k, err)

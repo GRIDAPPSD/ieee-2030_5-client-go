@@ -28,14 +28,47 @@ type fakeFrq struct {
 	acks    []sep2.FlowReservationResponseResponse
 	ackTo   []string
 	ackErr  error
+	puts    []sep2.FlowReservationRequest
+	putHref []string
+	putErr  error
+	// putTries counts every PUT attempt, failed ones included.
+	putTries int
+	// location is what a post returns; empty means "/edev/1/frq/1".
+	location string
+	// noLocation makes a post return no Location at all.
+	noLocation bool
+	// postDelay is how long a post takes; postDeadline and putDeadline are the
+	// context deadlines the last post and the last PUT attempt were given.
+	postDelay    time.Duration
+	postDeadline time.Time
+	putDeadline  time.Time
 }
 
-func (f *fakeFrq) PostFlowReservationRequest(_ context.Context, _ string, req sep2.FlowReservationRequest) (string, error) {
+func (f *fakeFrq) PostFlowReservationRequest(ctx context.Context, _ string, req sep2.FlowReservationRequest) (string, error) {
+	f.postDeadline, _ = ctx.Deadline()
+	time.Sleep(f.postDelay)
 	if f.postErr != nil {
 		return "", f.postErr
 	}
 	f.posted = append(f.posted, req)
+	if f.noLocation {
+		return "", nil
+	}
+	if f.location != "" {
+		return f.location, nil
+	}
 	return "/edev/1/frq/1", nil
+}
+
+func (f *fakeFrq) PutFlowReservationRequest(ctx context.Context, href string, req sep2.FlowReservationRequest) error {
+	f.putTries++
+	f.putDeadline, _ = ctx.Deadline()
+	if f.putErr != nil {
+		return f.putErr
+	}
+	f.puts = append(f.puts, req)
+	f.putHref = append(f.putHref, href)
+	return nil
 }
 
 func (f *fakeFrq) GetFlowReservationResponses(context.Context, string) (sep2.FlowReservationResponseList, error) {
