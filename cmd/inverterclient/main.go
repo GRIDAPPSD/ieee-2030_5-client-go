@@ -1086,6 +1086,7 @@ func main() {
 		select {
 		case <-ctx.Done():
 			log.Println("Shutting down...")
+			reservations.logPendingWithdrawals()
 			managed.WaitControls()
 			return // deferred shutdown() runs steps 2 to 4 (Decision 4)
 		case <-reserveSig:
