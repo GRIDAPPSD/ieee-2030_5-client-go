@@ -1,4 +1,6 @@
 #!/usr/bin/env bats
+bats_require_minimum_version 1.5.0
+
 # Tests for scripts/derms. No live server and no real aggregator: curl, go and
 # inverterclient are stubs on PATH. Run with TMPDIR pointing at a scratch
 # directory, because bats roots its temp directory there.
@@ -258,9 +260,9 @@ routes_ok() {
   run "$AGG" start
   [ "$status" -eq 0 ]
   [[ "$output" != *"s3cret-key-value"* ]]
-  ! /usr/bin/grep -q "s3cret-key-value" "$FAKE_LOG"
+  run ! /usr/bin/grep -q "s3cret-key-value" "$FAKE_LOG"
   /usr/bin/grep -q "Authorization: Bearer s3cret-key-value" "$FAKE_LOG.stdin"
-  ! /usr/bin/grep -q "s3cret-key-value" "$DERMS_DIR/agg-1.json"
+  run ! /usr/bin/grep -q "s3cret-key-value" "$DERMS_DIR/agg-1.json"
 }
 
 @test "start without an admin key sends no auth config" {
@@ -418,7 +420,7 @@ STUB
   [ "$status" -eq 0 ]
   sleep 0.3
   /usr/bin/grep -q USR2 "$FAKE_CLIENT_LOG"
-  ! /usr/bin/grep -q USR1 "$FAKE_CLIENT_LOG"
+  run ! /usr/bin/grep -q USR1 "$FAKE_CLIENT_LOG"
 }
 
 @test "withdraw with no running aggregator fails" {
