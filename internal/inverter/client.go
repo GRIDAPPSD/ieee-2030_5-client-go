@@ -427,7 +427,7 @@ func (c *SEP2Client) putTarget(path string) (string, error) {
 		return "", fmt.Errorf("parse href %q: %w", target, err)
 	}
 	if !sameServer(base, t) {
-		return "", fmt.Errorf("href %q is not on the configured server", path)
+		return "", fmt.Errorf("href %q: %w", path, ErrHrefOffServer)
 	}
 	return target, nil
 }

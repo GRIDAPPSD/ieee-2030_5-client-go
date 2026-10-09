@@ -1,6 +1,7 @@
 package inverter
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -34,7 +35,7 @@ func TestPutTarget_StaysOnTheConfiguredServer(t *testing.T) {
 				if err == nil {
 					t.Fatalf("putTarget(%q) = %q, want a refusal", tc.href, got)
 				}
-				if !strings.Contains(err.Error(), "not on the configured server") {
+				if !errors.Is(err, ErrHrefOffServer) || !strings.Contains(err.Error(), "not on the configured server") {
 					t.Errorf("putTarget(%q) error = %v, want one naming the server", tc.href, err)
 				}
 				return

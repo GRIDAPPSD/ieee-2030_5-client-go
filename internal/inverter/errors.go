@@ -66,6 +66,11 @@ var (
 	// implementation is PerCodeLogEventLimiter in log_event_ratelimiter.go
 	// (GRIDAPPSD/ieee-2030_5-server-go#190).
 	ErrRateLimited = errors.New("LogEvent rate limited")
+
+	// ErrHrefOffServer is returned by a PUT whose href resolves to anything
+	// but the configured server. The refusal is local and permanent: the
+	// same href will be refused again.
+	ErrHrefOffServer = errors.New("not on the configured server")
 )
 
 // MovedError signals a 3xx redirect (301/302/307/308). Carries the Location
