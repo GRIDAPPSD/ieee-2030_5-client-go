@@ -36,7 +36,8 @@ setup() {
   export GO="$BATS_TEST_TMPDIR/bin/fakego"
   export FAKE_CLIENT_LOG="$BATS_TEST_TMPDIR/client.log"
   export PICKUP_WAIT_S=2
-  unset SEP2_ADMIN_UI_KEY SEP2_ADMIN_KEY
+  unset SEP2_ADMIN_UI_KEY SEP2_SERVER SEP2_CERT SEP2_KEY SEP2_CA
+  export SEP2_ADMIN_KEY=admin-test-key
   cat >"$BATS_TEST_TMPDIR/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 # Fake curl: logs argv and stdin config, answers from $FAKE_ROUTES lines of
@@ -74,6 +75,7 @@ done
 cat >"$out" <<'CLIENT'
 #!/usr/bin/env bash
 echo "client pid=$$ args: $*" >>"$FAKE_CLIENT_LOG"
+echo "client env: SEP2_SERVER=${SEP2_SERVER-unset} SEP2_CERT=${SEP2_CERT-unset} SEP2_KEY=${SEP2_KEY-unset} SEP2_CA=${SEP2_CA-unset}" >>"$FAKE_CLIENT_LOG"
 CLIENT
 chmod +x "$out"
 STUB
@@ -91,6 +93,8 @@ teardown() {
 # signals the way the real one is documented to: SIGUSR1 consumes the
 # request file (when FAKE_PICKUP=1), SIGUSR2 logs.
 start_fake_client() {
+  local args=("$@")
+  ((${#args[@]} > 0)) || args=(--sim-config "$DERMS_DIR/agg-1.json")
   mkdir -p "$BATS_TEST_TMPDIR/fake"
   # /bin/bash directly: through env the kernel's process name becomes bash.
   cat >"$BATS_TEST_TMPDIR/fake/inverterclient" <<'STUB'
@@ -101,7 +105,7 @@ while :; do sleep 0.05; done
 STUB
   chmod +x "$BATS_TEST_TMPDIR/fake/inverterclient"
   # fd 3 closed so bats does not wait on the background stub.
-  "$BATS_TEST_TMPDIR/fake/inverterclient" 3>&- &
+  "$BATS_TEST_TMPDIR/fake/inverterclient" "${args[@]}" 3>&- &
   FAKE_PID=$!
   echo "$FAKE_PID" >"$DERMS_DIR/aggregator.pid"
   sleep 0.3
@@ -140,7 +144,7 @@ routes_ok() {
   start_fake_client
   run "$AGG" reserve --energy-wh abc
   [ "$status" -ne 0 ]
-  [[ "$output" == *"--energy-wh must be a positive number"* ]]
+  [[ "$output" == *"--energy-wh must be a non-zero number"* ]]
   run "$AGG" reserve --start-in-s 1.5
   [ "$status" -ne 0 ]
   [[ "$output" == *"--start-in-s must be a whole number"* ]]
@@ -235,8 +239,7 @@ routes_ok() {
   [ "$(jq -r '.managed[0].device.type' "$cfg")" = battery ]
   [ "$(jq -r '.managed[1].device.type' "$cfg")" = pv ]
   [ "$(jq -r '.frq.request_file' "$cfg")" = "$DERMS_DIR/frq-request.json" ]
-  [ "$(jq -r '.managed[0].replay.file' "$cfg")" = "$SCRIPTS/../../sim/derms/recordings/agg-bat-1.csv" ] ||
-    [ "$(jq -r '.managed[0].replay.file' "$cfg")" = "$(cd "$SCRIPTS/../.." && pwd -P)/sim/derms/recordings/agg-bat-1.csv" ]
+  [ "$(jq -r '.managed[0].replay.file' "$cfg")" = "$(cd "$SCRIPTS/../.." && pwd -P)/sim/derms/recordings/agg-bat-1.csv" ]
   # two pair POSTs, each naming the aggregator as manager
   [ "$(/usr/bin/grep -c '^POST /api/management-pairs' "$FAKE_LOG")" -eq 2 ]
   /usr/bin/grep -q "\"managerLFDI\":\"${agg^^}\"" "$FAKE_LOG"
@@ -256,7 +259,7 @@ routes_ok() {
 
 @test "start sends the admin key on stdin only and never prints it" {
   routes_ok
-  export SEP2_ADMIN_UI_KEY="s3cret-key-value"
+  export SEP2_ADMIN_KEY="s3cret-key-value"
   run "$AGG" start
   [ "$status" -eq 0 ]
   [[ "$output" != *"s3cret-key-value"* ]]
@@ -265,11 +268,136 @@ routes_ok() {
   run ! /usr/bin/grep -q "s3cret-key-value" "$DERMS_DIR/agg-1.json"
 }
 
-@test "start without an admin key sends no auth config" {
+@test "start without an admin key refuses before any request, naming SEP2_ADMIN_KEY and make run" {
+  routes_ok
+  unset SEP2_ADMIN_KEY
+  run "$AGG" start
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"SEP2_ADMIN_KEY"* ]]
+  [[ "$output" == *"make run"* ]]
+  [ ! -s "$FAKE_LOG" ]
+  [ ! -e "$FAKE_LOG.stdin" ]
+  [ ! -e "$DERMS_DIR/agg-1.json" ]
+}
+
+@test "an empty SEP2_ADMIN_KEY is refused like an unset one" {
+  routes_ok
+  export SEP2_ADMIN_KEY=""
+  run "$AGG" start
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"SEP2_ADMIN_KEY"* ]]
+  [ ! -s "$FAKE_LOG" ]
+}
+
+@test "unpair without an admin key refuses before any request" {
+  routes_ok
+  unset SEP2_ADMIN_KEY
+  run "$AGG" unpair
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"SEP2_ADMIN_KEY"* ]]
+  [ ! -s "$FAKE_LOG" ]
+}
+
+@test "the retired SEP2_ADMIN_UI_KEY name is not accepted" {
+  routes_ok
+  unset SEP2_ADMIN_KEY
+  export SEP2_ADMIN_UI_KEY="old-name-key"
+  run "$AGG" start
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"SEP2_ADMIN_KEY"* ]]
+  [ ! -s "$FAKE_LOG" ]
+}
+
+@test "an admin key with a double quote, backslash or newline is refused before any request" {
+  routes_ok
+  local bad
+  for bad in 'ab"cd' 'ab\cd' $'ab\ncd'; do
+    SEP2_ADMIN_KEY="$bad" run "$AGG" start
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"SEP2_ADMIN_KEY"* ]]
+    [[ "$output" == *"double quote"* ]]
+    [ ! -s "$FAKE_LOG" ]
+  done
+}
+
+@test "curl gets a connect timeout and a total timeout" {
   routes_ok
   run "$AGG" start
   [ "$status" -eq 0 ]
-  [ ! -e "$FAKE_LOG.stdin" ]
+  /usr/bin/grep -q -- '--connect-timeout [0-9]' "$FAKE_LOG"
+  /usr/bin/grep -q -- '--max-time [0-9]' "$FAKE_LOG"
+}
+
+@test "a plain-http ADMIN_URL off loopback is refused before any request" {
+  routes_ok
+  local u
+  for u in http://admin.example.com:8444 http://10.0.0.5:8444 http://127.0.0.1.evil.example:8444 http://127.0.0.1@evil.example:8444; do
+    ADMIN_URL="$u" run "$AGG" start
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"ADMIN_URL"* ]]
+    [ ! -s "$FAKE_LOG" ]
+  done
+}
+
+@test "loopback http and any https ADMIN_URL are accepted" {
+  routes_ok
+  local u
+  for u in http://127.0.0.1:8444 http://localhost:8444 "http://[::1]:8444" https://admin.example.com:8444; do
+    : >"$FAKE_LOG"
+    ADMIN_URL="$u" run "$AGG" start
+    [ "$status" -eq 0 ]
+    /usr/bin/grep -q '^GET /api/certs/ca' "$FAKE_LOG"
+  done
+}
+
+@test "an existing DERMS_DIR writable by group or others is refused" {
+  local m
+  for m in 770 707 775 777 720; do
+    chmod "$m" "$DERMS_DIR"
+    run "$AGG" unpair
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"writable by group or others"* ]]
+  done
+  chmod 700 "$DERMS_DIR"
+}
+
+@test "an existing DERMS_DIR with mode 750 or 755 is accepted" {
+  routes_ok
+  chmod 750 "$DERMS_DIR"
+  run "$AGG" unpair
+  [ "$status" -eq 0 ]
+}
+
+@test "an existing DERMS_DIR owned by someone else is refused" {
+  mkdir -p "$BATS_TEST_TMPDIR/statbin"
+  printf '#!/usr/bin/env bash\necho "0 700"\n' >"$BATS_TEST_TMPDIR/statbin/stat"
+  chmod +x "$BATS_TEST_TMPDIR/statbin/stat"
+  PATH="$BATS_TEST_TMPDIR/statbin:$PATH" run "$AGG" unpair
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not owned by you"* ]]
+}
+
+@test "start does not write through symlinks planted at the old fixed temp names" {
+  routes_ok
+  : >"$BATS_TEST_TMPDIR/victim"
+  ln -s "$BATS_TEST_TMPDIR/victim" "$DERMS_DIR/ca.crt.tmp"
+  ln -s "$BATS_TEST_TMPDIR/victim" "$DERMS_DIR/agg-1.json.tmp"
+  ln -s "$BATS_TEST_TMPDIR/victim" "$DERMS_DIR/aggregator.pid"
+  run "$AGG" start
+  [ "$status" -eq 0 ]
+  [ ! -s "$BATS_TEST_TMPDIR/victim" ]
+  [ ! -L "$DERMS_DIR/aggregator.pid" ]
+  cpid="$(sed -n 's/^client pid=\([0-9]*\) .*/\1/p' "$FAKE_CLIENT_LOG")"
+  [ "$(<"$DERMS_DIR/aggregator.pid")" = "$cpid" ]
+}
+
+@test "exported SEP2_SERVER, SEP2_CERT, SEP2_KEY and SEP2_CA do not reach the aggregator" {
+  routes_ok
+  export SEP2_SERVER=https://elsewhere.example SEP2_CERT=/nope.crt SEP2_KEY=/nope.key SEP2_CA=/nope-ca.crt
+  run "$AGG" start
+  [ "$status" -eq 0 ]
+  /usr/bin/grep -q -- '^client env: SEP2_SERVER=unset SEP2_CERT=unset SEP2_KEY=unset SEP2_CA=unset$' "$FAKE_CLIENT_LOG"
+  /usr/bin/grep -q -- "--sim-config $DERMS_DIR/agg-1.json" "$FAKE_CLIENT_LOG"
 }
 
 @test "a 409 on pairing stops start before the client runs" {
@@ -333,10 +461,42 @@ routes_ok() {
   start_fake_client
   run "$AGG" reserve --energy-wh 4000 --power-w 2000
   [ "$status" -eq 0 ]
-  [[ "$output" == *"picked up"* ]]
+  [[ "$output" == *"request file read by process"* ]]
   [ "$(jq -c . "$FAKE_CLIENT_LOG.req")" = '{"energy_wh":4000,"power_w":2000}' ]
   /usr/bin/grep -q USR1 "$FAKE_CLIENT_LOG"
   [ ! -e "$DERMS_DIR/frq-request.json" ]
+}
+
+@test "reserve accepts a negative energy (discharge) and writes it as a negative number" {
+  start_fake_client
+  run "$AGG" reserve --energy-wh -4000
+  [ "$status" -eq 0 ]
+  [ "$(jq -c . "$FAKE_CLIENT_LOG.req")" = '{"energy_wh":-4000}' ]
+  run "$AGG" reserve --energy-wh -250.5
+  [ "$status" -eq 0 ]
+  [ "$(jq -c . "$FAKE_CLIENT_LOG.req")" = '{"energy_wh":-250.5}' ]
+}
+
+@test "reserve refuses zero energy in every spelling, and writes no request" {
+  start_fake_client
+  local z
+  for z in 0 0.0 -0 -0.00 000; do
+    run "$AGG" reserve --energy-wh "$z"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--energy-wh must be a non-zero number"* ]]
+    [ ! -e "$DERMS_DIR/frq-request.json" ]
+  done
+  run "$AGG" reserve --energy-wh -
+  [ "$status" -ne 0 ]
+  run "$AGG" reserve --energy-wh --5
+  [ "$status" -ne 0 ]
+}
+
+@test "reserve still refuses a negative power" {
+  start_fake_client
+  run "$AGG" reserve --power-w -100
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--power-w must be a positive number"* ]]
 }
 
 @test "reserve with all four overrides writes all four keys the client reads" {
@@ -403,6 +563,21 @@ STUB
   [[ "$output" == *"not inverterclient"* ]]
   kill -0 "$FAKE_PID"
   [ ! -e "$DERMS_DIR/frq-request.json" ]
+}
+
+@test "reserve refuses an inverterclient that is not this aggregator and does not signal it" {
+  start_fake_client --sim-config "$BATS_TEST_TMPDIR/some-other-device.json"
+  run "$AGG" reserve --power-w 1000
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not the aggregator started from $DERMS_DIR/agg-1.json"* ]]
+  sleep 0.3
+  kill -0 "$FAKE_PID"
+  run ! /usr/bin/grep -q USR1 "$FAKE_CLIENT_LOG"
+  [ ! -e "$DERMS_DIR/frq-request.json" ]
+  run "$AGG" withdraw
+  [ "$status" -ne 0 ]
+  sleep 0.3
+  run ! /usr/bin/grep -q USR2 "$FAKE_CLIENT_LOG"
 }
 
 @test "reserve with a stale pid file fails naming it" {

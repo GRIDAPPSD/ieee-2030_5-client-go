@@ -5,18 +5,49 @@
 #        start-aggregator.sh withdraw
 #        start-aggregator.sh unpair
 # Environment: DERMS_DIR (default ~/derms-certs), SEP2_URL
-# (default https://127.0.0.1:8443), ADMIN_URL (default http://127.0.0.1:8444),
-# SEP2_ADMIN_UI_KEY (admin key; optional when the server runs without one),
-# PICKUP_WAIT_S (default 10).
+# (default https://127.0.0.1:8443), ADMIN_URL (default http://127.0.0.1:8444;
+# plain http is accepted only on loopback), SEP2_ADMIN_KEY (the admin key,
+# required by start and unpair; `make run` in the server checkout sets it to
+# "admin"), PICKUP_WAIT_S (default 10).
+# reserve --energy-wh: positive charges the battery, negative discharges it,
+# zero is refused (the client's convention).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-# shellcheck source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
 AGG=agg-1
 BAT=agg-bat-1
 PV=agg-pv-1
+
+# require_admin_key refuses to go on without the admin key, before any
+# request: the server needs a real credential even on loopback for the CA
+# fetch and the pair writes. The key goes into a quoted curl config line, so
+# a character that would break out of the quotes is refused too.
+require_admin_key() {
+  local key="${SEP2_ADMIN_KEY:-}"
+  [[ -n "$key" ]] ||
+    die "SEP2_ADMIN_KEY is not set; export the server's admin key (\`make run\` in the server checkout uses SEP2_ADMIN_KEY=admin)"
+  case "$key" in
+    *'"'* | *\\* | *$'\n'* | *$'\r'*)
+      die "SEP2_ADMIN_KEY contains a double quote, backslash or newline, which cannot be passed to curl safely"
+      ;;
+  esac
+}
+
+# require_safe_admin_url refuses a plain-http ADMIN_URL off loopback: the
+# Bearer key and the CA the client then trusts would cross the network in
+# clear. The host must be followed by a port, a path or the end, so a name
+# that merely starts with 127.0.0.1 does not pass.
+require_safe_admin_url() {
+  local url="${ADMIN_URL:-http://127.0.0.1:8444}"
+  case "$url" in
+    https://*) ;;
+    http://127.0.0.1 | http://127.0.0.1[:/]* | http://localhost | http://localhost[:/]* | 'http://[::1]' | 'http://[::1]'[:/]*) ;;
+    *) die "ADMIN_URL $url must be https, or http on 127.0.0.1, localhost or [::1]" ;;
+  esac
+}
 
 # admin_curl METHOD PATH [BODY] prints the HTTP status and leaves the
 # response body in ADMIN_BODY. The key goes to curl on stdin as a config
@@ -24,16 +55,11 @@ PV=agg-pv-1
 admin_curl() {
   local method="$1" path="$2" body="${3:-}"
   local url="${ADMIN_URL:-http://127.0.0.1:8444}$path"
-  local args=(-sS -o "$ADMIN_BODY" -w '%{http_code}' -X "$method")
+  local args=(-sS --connect-timeout 5 --max-time 30 -o "$ADMIN_BODY" -w '%{http_code}' -X "$method")
   if [[ -n "$body" ]]; then
     args+=(-H 'Content-Type: application/json' --data "$body")
   fi
-  local key="${SEP2_ADMIN_UI_KEY:-${SEP2_ADMIN_KEY:-}}"
-  if [[ -n "$key" ]]; then
-    printf 'header = "Authorization: Bearer %s"\n' "$key" | curl "${args[@]}" -K - "$url"
-  else
-    curl "${args[@]}" "$url"
-  fi
+  printf 'header = "Authorization: Bearer %s"\n' "$SEP2_ADMIN_KEY" | curl "${args[@]}" -K - "$url"
 }
 
 # fetch_ca writes the running server's CA to DERMS_DIR/ca.crt from
@@ -45,15 +71,20 @@ fetch_ca() {
   local pem
   pem="$(jq -er '.certPEM' "$ADMIN_BODY")" || die "GET /api/certs/ca returned no certPEM"
   [[ "$pem" == *"BEGIN CERTIFICATE"* ]] || die "certPEM is not a PEM certificate"
-  printf '%s\n' "$pem" >"$DERMS_DIR/ca.crt.tmp"
-  mv -f "$DERMS_DIR/ca.crt.tmp" "$DERMS_DIR/ca.crt"
+  # mktemp creates a fresh file, so a symlink planted at a fixed name is
+  # never written through.
+  local tmp
+  tmp="$(mktemp "$DERMS_DIR/.ca.crt.XXXXXX")" || die "cannot create a temporary CA file"
+  printf '%s\n' "$pem" >"$tmp"
+  mv -f "$tmp" "$DERMS_DIR/ca.crt"
 }
 
 # write_config writes the aggregator's sim config, with the managed LFDIs
 # filled in. Paths are absolute so the config does not depend on where it
 # sits. It holds no secret.
 write_config() {
-  local bat_lfdi="$1" pv_lfdi="$2" rec="$DERMS_REPO/sim/derms/recordings"
+  local bat_lfdi="$1" pv_lfdi="$2" rec="$DERMS_REPO/sim/derms/recordings" tmp
+  tmp="$(mktemp "$DERMS_DIR/.$AGG.json.XXXXXX")" || die "cannot create a temporary config file"
   jq -n \
     --arg server "${SEP2_URL:-https://127.0.0.1:8443}" \
     --arg cert "$DERMS_DIR/$AGG.crt" --arg key "$DERMS_DIR/$AGG.key" --arg ca "$DERMS_DIR/ca.crt" \
@@ -68,8 +99,8 @@ write_config() {
          replay: {file: $batf, clock: "wall"}},
         {name: $pv, lfdi: $pvl, device: {name: $pv, type: "pv", rated_w: 4000},
          replay: {file: $pvf, clock: "wall"}}
-      ]}' >"$DERMS_DIR/$AGG.json.tmp" || die "cannot write the aggregator config"
-  mv -f "$DERMS_DIR/$AGG.json.tmp" "$DERMS_DIR/$AGG.json"
+      ]}' >"$tmp" || die "cannot write the aggregator config"
+  mv -f "$tmp" "$DERMS_DIR/$AGG.json"
 }
 
 # pair_device creates one management pair. The server answers 201 on a
@@ -97,6 +128,8 @@ unpair_device() {
 }
 
 cmd_start() {
+  require_admin_key
+  require_safe_admin_url
   need_tool openssl
   need_tool sha256sum
   need_tool curl
@@ -117,22 +150,36 @@ cmd_start() {
   # The pid file holds this shell's pid, which the exec below turns into the
   # client's pid. Ctrl-C reaches the client directly; a stale file after an
   # exit is detected by running_pid, not trusted.
-  echo $$ >"$DERMS_DIR/aggregator.pid"
+  local pidtmp
+  pidtmp="$(mktemp "$DERMS_DIR/.aggregator.pid.XXXXXX")" || die "cannot create a temporary pid file"
+  echo $$ >"$pidtmp"
+  mv -f "$pidtmp" "$DERMS_DIR/aggregator.pid"
   # exec skips the EXIT trap, so drop the temporary file first.
   rm -f "$ADMIN_BODY"
   trap - EXIT
-  exec "$DERMS_DIR/inverterclient" --sim-config "$DERMS_DIR/$AGG.json"
+  # The generated config must be the whole configuration: env -u keeps an
+  # exported SEP2_SERVER, SEP2_CERT, SEP2_KEY or SEP2_CA from overriding it.
+  exec env -u SEP2_SERVER -u SEP2_CERT -u SEP2_KEY -u SEP2_CA \
+    "$DERMS_DIR/inverterclient" --sim-config "$DERMS_DIR/$AGG.json"
 }
 
 # running_pid prints the pid of the running aggregator, or fails. A pid file
-# naming some other program is refused, because SIGUSR1 would terminate it.
+# naming some other program is refused, because SIGUSR1 would terminate it:
+# the process must be an inverterclient whose command line carries this
+# aggregator's generated config, since a standalone device is an
+# inverterclient too and registers no SIGUSR1 handler.
 running_pid() {
-  local pidfile="$DERMS_DIR/aggregator.pid" pid comm
+  local pidfile="$DERMS_DIR/aggregator.pid" pid comm arg found=0 cmdline=()
   [[ -r "$pidfile" ]] || die "no pid file $pidfile: is the aggregator started (start-aggregator.sh start)?"
   pid="$(<"$pidfile")"
   [[ "$pid" =~ ^[0-9]+$ ]] || die "pid file $pidfile does not hold a pid"
   comm="$(cat "/proc/$pid/comm" 2>/dev/null)" || die "process $pid is not running (stale pid file $pidfile)"
   [[ "$comm" == inverterclient ]] || die "process $pid is '$comm', not inverterclient (stale pid file $pidfile)"
+  mapfile -d '' -t cmdline <"/proc/$pid/cmdline" 2>/dev/null || die "cannot read the command line of process $pid (stale pid file $pidfile)"
+  for arg in "${cmdline[@]}"; do
+    [[ "$arg" == "$DERMS_DIR/$AGG.json" ]] && found=1
+  done
+  ((found)) || die "process $pid is an inverterclient but not the aggregator started from $DERMS_DIR/$AGG.json (stale pid file $pidfile)"
   printf '%s\n' "$pid"
 }
 
@@ -165,8 +212,11 @@ cmd_reserve() {
       *) die "unknown reserve option '$1'" ;;
     esac
   done
-  local num='^[0-9]+([.][0-9]+)?$' int='^[0-9]+$'
-  [[ -z "$energy" || "$energy" =~ $num ]] || die "--energy-wh must be a positive number"
+  local num='^[0-9]+([.][0-9]+)?$' snum='^-?[0-9]+([.][0-9]+)?$' zero='^-?0+([.]0+)?$' int='^[0-9]+$'
+  # Positive energy charges the battery, negative discharges it (the client's
+  # convention); only zero is refused.
+  [[ -z "$energy" || ( "$energy" =~ $snum && ! "$energy" =~ $zero ) ]] ||
+    die "--energy-wh must be a non-zero number (positive charges, negative discharges)"
   [[ -z "$power" || "$power" =~ $num ]] || die "--power-w must be a positive number"
   [[ -z "$start_in" || "$start_in" =~ $int ]] || die "--start-in-s must be a whole number of seconds"
   [[ -z "$duration" || "$duration" =~ $int ]] || die "--duration-s must be a whole number of seconds"
@@ -189,7 +239,7 @@ cmd_reserve() {
     sleep 1
     waited=$((waited + 1))
   done
-  echo "request picked up by process $pid: $json"
+  echo "request file read by process $pid: $json (check the aggregator log for whether it accepted the request)"
 }
 
 cmd_withdraw() {
@@ -200,6 +250,8 @@ cmd_withdraw() {
 }
 
 cmd_unpair() {
+  require_admin_key
+  require_safe_admin_url
   need_tool openssl
   need_tool sha256sum
   need_tool curl

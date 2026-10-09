@@ -42,6 +42,16 @@ derms_dir_init() {
     # umask 077 makes every directory it creates private, parents included.
     (umask 077 && mkdir -p "$dir") || die "cannot create DERMS_DIR $dir"
   fi
+  # Generated keys and configs live here, so the directory must be private to
+  # this user: someone else's directory or a group- or world-writable one
+  # would let another account plant files the scripts then read or replace.
+  local owner_mode owner mode
+  owner_mode="$(stat -c '%u %a' "$dir")" || die "cannot stat DERMS_DIR $dir"
+  owner="${owner_mode%% *}"
+  mode="${owner_mode##* }"
+  [[ "$owner" == "$(id -u)" ]] || die "DERMS_DIR $dir is not owned by you; choose a directory you own"
+  ((8#$mode & 8#022)) &&
+    die "DERMS_DIR $dir is writable by group or others (mode $mode); run chmod go-w on it or choose another"
   DERMS_DIR="$dir"
 }
 
