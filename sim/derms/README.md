@@ -44,3 +44,6 @@ Where each choice in the aggregator's managed-device sessions comes from.
   operator decision, 2026-10-07.
 * The flow reservation `reserve` trigger, with command-line overrides of the
   config defaults. Source: operator decision, 2026-10-07, issue 73.
+
+`scripts/derms/` holds the start scripts and the walkthrough of a manual
+DERMS test that use these recordings.
