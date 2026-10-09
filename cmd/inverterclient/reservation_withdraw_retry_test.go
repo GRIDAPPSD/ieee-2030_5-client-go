@@ -68,7 +68,6 @@ func TestWithdraw_APermanentRefusalIsNotRetried(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"400", fmt.Errorf("PUT FlowReservationRequest: %w", inverter.ErrBadRequest), "400"},
 		{"404", fmt.Errorf("PUT FlowReservationRequest: %w", inverter.ErrNotFound), "404"},
 		{"off server", fmt.Errorf("PUT FlowReservationRequest: href %q: %w", "x", inverter.ErrHrefOffServer), "not on the configured server"},
 	}
@@ -230,4 +229,68 @@ func TestRetryLater_QueuesOnlyWhatCanStillBeWithdrawn(t *testing.T) {
 			t.Errorf("%d queued for a request with no href", len(r.stale))
 		}
 	})
+}
+
+// A retried withdrawal of the request being followed stops the dispatch at
+// once, even when every read of the response list fails.
+func TestRetryWithdrawals_AcceptedRetryOfTheFollowedRequestDropsTheGrant(t *testing.T) {
+	r, f, clk := startedReserver(t, nil)
+	ctx := context.Background()
+	s := r.cur.start
+	f.list = listOf(resp("G", r.cur.mrid, s.Unix()-1000, sep2.EventStatusScheduled, windowIV(r), 6000, 3000))
+	clk.t = s.Add(time.Minute)
+	r.Poll(ctx)
+	if r.disp.terms == nil {
+		t.Fatal("grant not installed")
+	}
+
+	f.putErr = errors.New("503")
+	r.Withdraw(ctx)
+	f.putErr = nil
+	f.getErr = errors.New("timeout")
+	clk.t = clk.t.Add(35 * time.Second)
+	r.Poll(ctx)
+	if !r.cur.withdrawn {
+		t.Fatal("the retry did not withdraw the followed request")
+	}
+	if r.disp.terms != nil {
+		t.Errorf("grant %+v still set after the retried withdrawal and a failed read, want none", r.disp.terms)
+	}
+}
+
+// A replaced request's accepted retry leaves the new request's grant alone.
+func TestRetryWithdrawals_AcceptedRetryOfAReplacedRequestKeepsTheGrant(t *testing.T) {
+	r, f, clk := startedReserver(t, nil)
+	ctx := context.Background()
+	f.putErr = errors.New("503")
+	r.Trigger(ctx)
+	f.putErr = nil
+	r.disp.terms = &grantTerms{}
+	clk.t = clk.t.Add(35 * time.Second)
+	r.retryWithdrawals(ctx)
+	if len(f.puts) != 1 || r.disp.terms == nil {
+		t.Errorf("%d PUTs, grant %v; want the old request withdrawn and the grant kept", len(f.puts), r.disp.terms)
+	}
+}
+
+// The server answers 400 for a RequestStatus dateTime too far ahead of its
+// clock, which a retry with a new dateTime fixes, so a 400 is retried.
+func TestWithdraw_A400IsRetriedWithAFreshDateTime(t *testing.T) {
+	r, f, clk := startedReserver(t, nil)
+	ctx := context.Background()
+	buf := captureLog(t)
+	f.putErr = fmt.Errorf("PUT FlowReservationRequest: %w", inverter.ErrBadRequest)
+	r.Withdraw(ctx)
+	if len(r.stale) != 1 {
+		t.Fatalf("%d withdrawals kept after a 400, want 1", len(r.stale))
+	}
+	if !strings.Contains(buf.String(), "400") {
+		t.Errorf("log %q does not name the status", buf.String())
+	}
+	f.putErr = nil
+	clk.t = clk.t.Add(35 * time.Second)
+	r.Poll(ctx)
+	if len(f.puts) != 1 || f.puts[0].RequestStatus.DateTime != clk.t.Unix() {
+		t.Fatalf("PUTs %+v, want one carrying dateTime %d", f.puts, clk.t.Unix())
+	}
 }

@@ -281,6 +281,10 @@ func (r *reserver) withdraw(ctx context.Context, c *currentRequest, now time.Tim
 			log.Printf("flow reservation: withdrawing request %s at %s refused (%s), not retrying: %v", c.mrid, c.href, status, err)
 			return false, true
 		}
+		if errors.Is(err, inverter.ErrBadRequest) {
+			log.Printf("flow reservation: withdrawing request %s at %s answered 400, will retry: %v", c.mrid, c.href, err)
+			return false, false
+		}
 		log.Printf("flow reservation: withdrawing request %s at %s failed: %v", c.mrid, c.href, err)
 		return false, false
 	}
@@ -290,12 +294,12 @@ func (r *reserver) withdraw(ctx context.Context, c *currentRequest, now time.Tim
 }
 
 // permanentRefusal names a withdrawal failure that retrying cannot change:
-// the server's 400 or 404, or the client's own refusal of an href that is not
-// on the configured server. Any other failure is treated as transient.
+// the server's 404, or the client's own refusal of an href that is not on the
+// configured server. A 400 is transient: the server also answers it for a
+// RequestStatus dateTime too far ahead of its clock, and a retry carries a new
+// one. Any other failure is treated as transient.
 func permanentRefusal(err error) (status string, permanent bool) {
 	switch {
-	case errors.Is(err, inverter.ErrBadRequest):
-		return "400", true
 	case errors.Is(err, inverter.ErrNotFound):
 		return "404", true
 	case errors.Is(err, inverter.ErrHrefOffServer):
@@ -347,7 +351,11 @@ func (r *reserver) retryWithdrawals(ctx context.Context) {
 			continue
 		}
 		log.Printf("flow reservation: retrying the withdrawal of request %s", s.c.mrid)
-		if ok, permanent := r.withdraw(ctx, s.c, now); ok || permanent {
+		ok, permanent := r.withdraw(ctx, s.c, now)
+		if ok && s.c == r.cur {
+			r.disp.setGrant(nil)
+		}
+		if ok || permanent {
 			continue
 		}
 		s.wait = min(s.wait*2, maxWithdrawBackoff)
