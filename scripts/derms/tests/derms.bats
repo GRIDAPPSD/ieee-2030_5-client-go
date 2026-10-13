@@ -644,3 +644,187 @@ STUB
   [ "$status" -eq 0 ]
   [ "$(git -C "$SCRIPTS" status --porcelain -- .)" = "$before" ]
 }
+
+# --- supplied CA (start-aggregator.sh) ---
+
+@test "start keeps a supplied DERMS_CA byte for byte, skips the CA fetch, and points the config at it" {
+  routes_ok
+  mkdir -p "$BATS_TEST_TMPDIR/supplied"
+  printf 'SUPPLIED-CA-BUNDLE-%s\n' "$$" >"$BATS_TEST_TMPDIR/supplied/bundle.pem"
+  cp "$BATS_TEST_TMPDIR/supplied/bundle.pem" "$BATS_TEST_TMPDIR/before.pem"
+  DERMS_CA="$BATS_TEST_TMPDIR/supplied/bundle.pem" run "$AGG" start
+  [ "$status" -eq 0 ]
+  cmp "$BATS_TEST_TMPDIR/supplied/bundle.pem" "$BATS_TEST_TMPDIR/before.pem"
+  [ "$(jq -r .ca "$DERMS_DIR/agg-1.json")" = "$BATS_TEST_TMPDIR/supplied/bundle.pem" ]
+  run ! /usr/bin/grep -q '^GET /api/certs/ca' "$FAKE_LOG"
+  [ ! -e "$DERMS_DIR/ca.crt" ]
+}
+
+@test "a DERMS_CA that is missing or empty stops start before any request" {
+  routes_ok
+  DERMS_CA="$BATS_TEST_TMPDIR/nope.pem" run "$AGG" start
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"DERMS_CA"* ]]
+  : >"$BATS_TEST_TMPDIR/empty.pem"
+  DERMS_CA="$BATS_TEST_TMPDIR/empty.pem" run "$AGG" start
+  [ "$status" -ne 0 ]
+  [ ! -s "$FAKE_LOG" ]
+}
+
+@test "without DERMS_CA start still fetches the CA from the server" {
+  routes_ok
+  run "$AGG" start
+  [ "$status" -eq 0 ]
+  /usr/bin/grep -q '^GET /api/certs/ca' "$FAKE_LOG"
+  [ "$(jq -r .ca "$DERMS_DIR/agg-1.json")" = "$DERMS_DIR/ca.crt" ]
+}
+
+# --- two aggregators (start-two-aggregators.sh) ---
+
+TWO="$SCRIPTS/start-two-aggregators.sh"
+
+# make_sun_cert name: a synthetic leaf in SUN with a second, unrelated cert
+# appended to the .crt, so the file is a chain with the leaf first.
+make_sun_cert() {
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout "$SUN/$1.key" \
+    -out "$SUN/$1.crt" -days 2 -subj "/CN=$1" 2>/dev/null
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout "$BATS_TEST_TMPDIR/ign.key" \
+    -out "$BATS_TEST_TMPDIR/ign.crt" -days 2 -subj "/CN=issuer-$1" 2>/dev/null
+  cat "$BATS_TEST_TMPDIR/ign.crt" >>"$SUN/$1.crt"
+}
+
+setup_sun() {
+  export SUN="$BATS_TEST_TMPDIR/sun"
+  mkdir -p "$SUN"
+  chmod 700 "$SUN"
+  local a n
+  for a in 1 2; do
+    make_sun_cert "agg-$a"
+    for n in 1 2 3 4; do make_sun_cert "agg-$a-dev-$n"; done
+  done
+  printf 'SUNSPEC-TRUST-BUNDLE\n' >"$SUN/ca.crt"
+  : >"$FAKE_ROUTES"
+  echo "POST /api/management-pairs 201 {}" >>"$FAKE_ROUTES"
+  local d
+  for a in 1 2; do
+    for n in 1 2 3 4; do
+      d="$(expected_lfdi "$SUN/agg-$a-dev-$n.crt")"
+      echo "DELETE /api/management-pairs?managed=${d^^} 204 -" >>"$FAKE_ROUTES"
+    done
+  done
+}
+
+@test "two aggregators: each gets its own config, chain, key, trust bundle and four managed LFDIs" {
+  setup_sun
+  SUNSPEC_DIR="$SUN" run "$TWO" start
+  [ "$status" -eq 0 ]
+  local a n cfg dev
+  for a in 1 2; do
+    cfg="$DERMS_DIR/agg-$a.json"
+    [ "$(jq -r .role "$cfg")" = aggregator ]
+    [ "$(jq -r .cert "$cfg")" = "$SUN/agg-$a.crt" ]
+    [ "$(jq -r .key "$cfg")" = "$SUN/agg-$a.key" ]
+    [ "$(jq -r .ca "$cfg")" = "$SUN/ca.crt" ]
+    [ "$(jq -r '.managed | length' "$cfg")" -eq 4 ]
+    for n in 1 2 3 4; do
+      dev="$(expected_lfdi "$SUN/agg-$a-dev-$n.crt")"
+      [ "$(jq -r ".managed[$((n - 1))].lfdi" "$cfg")" = "${dev^^}" ]
+    done
+  done
+  # the config of one never lists the other's devices
+  [ "$(jq -r '.managed[].lfdi' "$DERMS_DIR/agg-1.json" "$DERMS_DIR/agg-2.json" | sort -u | wc -l)" -eq 8 ]
+  # the trust bundle is the supplied one and no CA was fetched
+  run ! /usr/bin/grep -q '^GET /api/certs/ca' "$FAKE_LOG"
+  # the SunSpec material is untouched and nothing was copied into DERMS_DIR
+  [ "$(<"$SUN/ca.crt")" = SUNSPEC-TRUST-BUNDLE ]
+  [ ! -e "$DERMS_DIR/agg-2.key" ]
+  [ ! -e "$DERMS_DIR/ca.crt" ]
+}
+
+@test "two aggregators: eight pairs, four under each aggregator's own LFDI (the leaf of the chain)" {
+  setup_sun
+  SUNSPEC_DIR="$SUN" run "$TWO" start
+  [ "$status" -eq 0 ]
+  [ "$(/usr/bin/grep -c '^POST /api/management-pairs' "$FAKE_LOG")" -eq 8 ]
+  local a n mgr dev
+  for a in 1 2; do
+    mgr="$(expected_lfdi "$SUN/agg-$a.crt")"
+    for n in 1 2 3 4; do
+      dev="$(expected_lfdi "$SUN/agg-$a-dev-$n.crt")"
+      /usr/bin/grep -q "\"managerLFDI\":\"${mgr^^}\",\"managedLFDI\":\"${dev^^}\"" "$FAKE_LOG"
+    done
+  done
+}
+
+@test "two aggregators: both clients run with their own sim config and no env override" {
+  setup_sun
+  SUNSPEC_DIR="$SUN" run "$TWO" start
+  [ "$status" -eq 0 ]
+  [ "$(/usr/bin/grep -c -- "client pid=.* args: --sim-config $DERMS_DIR/agg-1.json" "$FAKE_CLIENT_LOG")" -eq 1 ]
+  [ "$(/usr/bin/grep -c -- "client pid=.* args: --sim-config $DERMS_DIR/agg-2.json" "$FAKE_CLIENT_LOG")" -eq 1 ]
+  /usr/bin/grep -q 'SEP2_SERVER=unset SEP2_CERT=unset SEP2_KEY=unset SEP2_CA=unset' "$FAKE_CLIENT_LOG"
+}
+
+@test "two aggregators: SEP2_URL reaches both configs" {
+  setup_sun
+  SEP2_URL=https://192.0.2.10:8443 SUNSPEC_DIR="$SUN" run "$TWO" start
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .server "$DERMS_DIR/agg-1.json")" = https://192.0.2.10:8443 ]
+  [ "$(jq -r .server "$DERMS_DIR/agg-2.json")" = https://192.0.2.10:8443 ]
+}
+
+@test "two aggregators: a missing file lists every missing file and pairs nothing" {
+  setup_sun
+  rm "$SUN/agg-2-dev-3.crt" "$SUN/agg-1.key"
+  SUNSPEC_DIR="$SUN" run "$TWO" start
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"agg-2-dev-3.crt"* ]]
+  [[ "$output" == *"agg-1.key"* ]]
+  [ ! -s "$FAKE_LOG" ]
+}
+
+@test "two aggregators: SUNSPEC_DIR unset or inside the checkout is refused" {
+  setup_sun
+  run "$TWO" start
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"SUNSPEC_DIR"* ]]
+  SUNSPEC_DIR="$SCRIPTS" run "$TWO" start
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"inside the checkout"* ]]
+  [ ! -s "$FAKE_LOG" ]
+}
+
+@test "two aggregators: one LFDI used twice is refused before any request" {
+  setup_sun
+  cp "$SUN/agg-1-dev-1.crt" "$SUN/agg-2-dev-1.crt"
+  SUNSPEC_DIR="$SUN" run "$TWO" start
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"more than once"* ]]
+  [ ! -s "$FAKE_LOG" ]
+}
+
+@test "two aggregators: a 409 stops start before any client runs" {
+  setup_sun
+  : >"$FAKE_ROUTES"
+  echo "POST /api/management-pairs 409 {}" >"$FAKE_ROUTES"
+  SUNSPEC_DIR="$SUN" run "$TWO" start
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"409"* ]]
+  run ! /usr/bin/grep -q "client pid=" "$FAKE_CLIENT_LOG"
+}
+
+@test "two aggregators: without an admin key it refuses before any request" {
+  setup_sun
+  unset SEP2_ADMIN_KEY
+  SUNSPEC_DIR="$SUN" run "$TWO" start
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"SEP2_ADMIN_KEY"* ]]
+  [ ! -s "$FAKE_LOG" ]
+}
+
+@test "two aggregators: unpair deletes all eight pairs" {
+  setup_sun
+  SUNSPEC_DIR="$SUN" run "$TWO" unpair
+  [ "$status" -eq 0 ]
+  [ "$(/usr/bin/grep -c '^DELETE /api/management-pairs' "$FAKE_LOG")" -eq 8 ]
+}
