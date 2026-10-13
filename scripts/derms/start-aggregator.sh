@@ -4,7 +4,9 @@
 #        start-aggregator.sh reserve [--energy-wh N] [--power-w N] [--start-in-s N] [--duration-s N]
 #        start-aggregator.sh withdraw
 #        start-aggregator.sh unpair
-# Environment: DERMS_DIR (default ~/derms-certs), SEP2_URL
+# Environment: DERMS_DIR (default ~/derms-certs), DERMS_CA (a CA or trust
+# bundle file to use as the client's --ca; kept as is, and the server's CA is
+# not fetched over it), SEP2_URL
 # (default https://127.0.0.1:8443), ADMIN_URL (default http://127.0.0.1:8444;
 # plain http is accepted only on loopback), SEP2_ADMIN_KEY (the admin key,
 # required by start and unpair; `make run` in the server checkout sets it to
@@ -18,6 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/lib.sh"
 
 AGG=agg-1
+CA_FILE=""
 BAT=agg-bat-1
 PV=agg-pv-1
 
@@ -79,6 +82,20 @@ fetch_ca() {
   mv -f "$tmp" "$DERMS_DIR/ca.crt"
 }
 
+# resolve_ca picks the CA file the client trusts. A supplied DERMS_CA is
+# used where it is and never rewritten: a server run on a test PKI serves a
+# local CA from the admin API that is not the one its certificate chains to.
+# Without DERMS_CA the running server's CA is fetched into DERMS_DIR.
+resolve_ca() {
+  if [[ -n "${DERMS_CA:-}" ]]; then
+    [[ -r "$DERMS_CA" && -s "$DERMS_CA" ]] || die "DERMS_CA $DERMS_CA is missing, empty or unreadable"
+    CA_FILE="$(cd "$(dirname "$DERMS_CA")" && pwd -P)/$(basename "$DERMS_CA")" || die "cannot resolve DERMS_CA $DERMS_CA"
+    return
+  fi
+  fetch_ca
+  CA_FILE="$DERMS_DIR/ca.crt"
+}
+
 # write_config writes the aggregator's sim config, with the managed LFDIs
 # filled in. Paths are absolute so the config does not depend on where it
 # sits. It holds no secret.
@@ -87,7 +104,7 @@ write_config() {
   tmp="$(mktemp "$DERMS_DIR/.$AGG.json.XXXXXX")" || die "cannot create a temporary config file"
   jq -n \
     --arg server "${SEP2_URL:-https://127.0.0.1:8443}" \
-    --arg cert "$DERMS_DIR/$AGG.crt" --arg key "$DERMS_DIR/$AGG.key" --arg ca "$DERMS_DIR/ca.crt" \
+    --arg cert "$DERMS_DIR/$AGG.crt" --arg key "$DERMS_DIR/$AGG.key" --arg ca "$CA_FILE" \
     --arg req "$DERMS_DIR/frq-request.json" \
     --arg bat "$BAT" --arg batl "$bat_lfdi" --arg batf "$rec/agg-bat-1.csv" \
     --arg pv "$PV" --arg pvl "$pv_lfdi" --arg pvf "$rec/agg-pv-1.csv" \
@@ -139,7 +156,7 @@ cmd_start() {
   agg_lfdi="$(lfdi_of "$DERMS_DIR/$AGG.crt")"
   bat_lfdi="$(lfdi_of "$DERMS_DIR/$BAT.crt")"
   pv_lfdi="$(lfdi_of "$DERMS_DIR/$PV.crt")"
-  fetch_ca
+  resolve_ca
   write_config "$bat_lfdi" "$pv_lfdi"
   pair_device "$agg_lfdi" "$bat_lfdi"
   pair_device "$agg_lfdi" "$pv_lfdi"

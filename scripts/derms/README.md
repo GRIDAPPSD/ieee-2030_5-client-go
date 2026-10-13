@@ -24,6 +24,7 @@ do not own or that is writable by group or others).
 | `SEP2_URL` | `https://127.0.0.1:8443` | protocol listener |
 | `ADMIN_URL` | `http://127.0.0.1:8444` | admin API; plain `http` is accepted only on `127.0.0.1`, `localhost` or `[::1]`, any other host needs `https` |
 | `SEP2_ADMIN_KEY` | none, required | the server's admin key, sent as a Bearer header on stdin to curl and never printed. `start` and `unpair` refuse to run without it. `make run` in the server checkout sets it to `admin`, so `export SEP2_ADMIN_KEY=admin`. A key containing a double quote, backslash or newline is refused. `SEP2_ADMIN_UI_KEY` is not read |
+| `DERMS_CA` | none | a CA or trust bundle file used as the client's `--ca`. Kept where it is and never overwritten; the server's CA is then not fetched. Without it `start` fetches the server's CA into `DERMS_DIR/ca.crt` |
 | `PICKUP_WAIT_S` | 10 | how long `reserve` waits for the aggregator to take the request |
 
 Needs `go`, `openssl`, `curl` and `jq`.
@@ -94,3 +95,36 @@ If you lower the start, keep it above the deadline.
 * `start` stops with 409: another manager already holds that device. Run
   `unpair` from that manager first (which removes that manager's pair for
   the device, whoever it is).
+
+## Two aggregators on supplied identities
+
+`start-two-aggregators.sh` runs two aggregators, four managed devices each,
+from certificates you supply, against one server. Nothing is copied: the
+configs name your files in place.
+
+Put these in one directory outside the checkout and export it as
+`SUNSPEC_DIR` (the script refuses one inside the checkout):
+
+* `ca.crt`: the trust bundle the clients verify the server with
+* `agg-1.crt`, `agg-2.crt`: each aggregator's full chain file, leaf first
+* `agg-1.key`, `agg-2.key`: the private keys
+* `agg-N-dev-M.crt` for N in 1, 2 and M in 1 to 4: the managed devices.
+  Only the LFDI is read, so the leaf or a chain file both work
+
+Then, with the server's admin key exported:
+
+    export SEP2_ADMIN_KEY=<admin key>
+    SUNSPEC_DIR=<dir> SEP2_URL=https://<ip>:8443 ADMIN_URL=<admin url> \
+      scripts/derms/start-two-aggregators.sh
+
+It checks every file first and names all that are missing, refuses an LFDI
+used twice, writes `agg-1.json` and `agg-2.json` in `DERMS_DIR`, pairs the
+eight devices under their aggregator through the admin API, builds the
+client, and runs both in the foreground. Ctrl-C stops both. `unpair` removes
+the eight pairs. Every device and both aggregators must already be enrolled
+as EndDevices on the server.
+
+client-go checks the server certificate against the CA by chain only
+(`VerifyPeerCertWithHardwareModuleSAN` in `internal/inverter/client.go`); it
+sets no server name. So `SEP2_URL` can be a bare IP, and a server
+certificate with no subject or SAN for that address still verifies.
