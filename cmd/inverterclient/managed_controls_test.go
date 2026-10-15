@@ -54,6 +54,41 @@ type controlsServer struct {
 	// subscribed is the resources the devices subscribed to, by the
 	// SubscriptionList they posted to.
 	subscribed map[string][]string
+
+	// subStatus, when set, is the status every Subscription POST answers;
+	// subAttempts counts the POSTs; respMask, when set, is the
+	// responseRequired mask of the controls.
+	subStatus   int
+	subAttempts map[string]int
+	respMask    sep2.HexBinary8
+
+	// failFSAAfterServe makes a device's FSA list answer once more and then
+	// fail.
+	failFSAAfterServe map[string]bool
+}
+
+func (s *controlsServer) setSubStatus(code int) {
+	s.mu.Lock()
+	s.subStatus = code
+	s.mu.Unlock()
+}
+
+func (s *controlsServer) subAttemptsTo(list string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.subAttempts[list]
+}
+
+func (s *controlsServer) setRespMask(m sep2.HexBinary8) {
+	s.mu.Lock()
+	s.respMask = m
+	s.mu.Unlock()
+}
+
+func (s *controlsServer) failFSANextRead(lfdi string) {
+	s.mu.Lock()
+	s.failFSAAfterServe[lfdi] = true
+	s.mu.Unlock()
 }
 
 func (s *controlsServer) subscriptionsTo(list string) []string {
@@ -68,6 +103,8 @@ const (
 	progNoList                  // only PROG0, which has no DERControlList link
 	progNoListAndNormal         // PROG0 (higher priority, no list) and PROG1
 	progWithPrimaryAdded        // PROG1 and PROG2, which outranks it and has its own list
+	progListMoved               // PROG1 alone, its control list moved to /derc2
+	progBrokenSibling           // PROG1, PROG2 (outranks it) and PROG3, whose control list answers 503
 )
 
 // secondControlW is the target of the control PROG2 serves at /derc2.
@@ -156,7 +193,7 @@ func newControlsFixture(t *testing.T, startOffset time.Duration, durationS uint3
 func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Duration, durationS uint32, lfdis ...string) (*inverter.SEP2Client, *controlsServer) {
 	t.Helper()
 	env := newDERWalkTestEnv(t)
-	srv := &controlsServer{hits: map[string]int{}, failFSA: map[string]bool{}, times: map[string][]time.Time{}, subscribed: map[string][]string{}}
+	srv := &controlsServer{hits: map[string]int{}, failFSA: map[string]bool{}, times: map[string][]time.Time{}, subscribed: map[string][]string{}, subAttempts: map[string]int{}, failFSAAfterServe: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/edev", func(w http.ResponseWriter, _ *http.Request) {
 		var list sep2.EndDeviceList
@@ -177,6 +214,12 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 				t.Errorf("unmarshal Subscription: %v", err)
 			}
 			srv.mu.Lock()
+			srv.subAttempts["/sub/"+l]++
+			if code := srv.subStatus; code != 0 {
+				srv.mu.Unlock()
+				http.Error(w, "refused", code)
+				return
+			}
 			srv.subscribed["/sub/"+l] = append(srv.subscribed["/sub/"+l], sub.SubscribedResource)
 			srv.mu.Unlock()
 			w.Header().Set("Location", fmt.Sprintf("/sub/%s/%d", l, len(srv.subscriptionsTo("/sub/"+l))))
@@ -186,6 +229,9 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 			srv.hit("/fsa/" + l)
 			srv.mu.Lock()
 			fail := srv.failFSA[l]
+			if srv.failFSAAfterServe[l] && !fail {
+				srv.failFSA[l], srv.failFSAAfterServe[l] = true, false
+			}
 			srv.mu.Unlock()
 			if fail {
 				http.Error(w, "unavailable", http.StatusServiceUnavailable)
@@ -218,6 +264,13 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 			progs = []sep2.DERProgram{{MRID: "PROG0", Primacy: 0}, prog}
 		case progWithPrimaryAdded:
 			progs = []sep2.DERProgram{prog, {MRID: "PROG2", Primacy: 0, DERControlListLink: &sep2.ListLink{Href: "/derc2"}}}
+		case progListMoved:
+			prog.DERControlListLink = &sep2.ListLink{Href: "/derc2"}
+			progs = []sep2.DERProgram{prog}
+		case progBrokenSibling:
+			progs = []sep2.DERProgram{prog,
+				{MRID: "PROG2", Primacy: 0, DERControlListLink: &sep2.ListLink{Href: "/derc2"}},
+				{MRID: "PROG3", Primacy: 5, DERControlListLink: &sep2.ListLink{Href: "/derc3"}}}
 		}
 		writeSepXML(t, w, sep2.DERProgramList{
 			ListResource: sep2.ListResource{All: uint32(len(progs)), Results: uint32(len(progs))},
@@ -236,6 +289,10 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 		var ddc sep2.DefaultDERControl
 		ddc.DERControlBase = &sep2.DERControlBase{OpModTargetW: &sep2.ActivePower{Value: int16(wv)}}
 		writeSepXML(t, w, ddc)
+	})
+	mux.HandleFunc("/derc3", func(w http.ResponseWriter, _ *http.Request) {
+		srv.hit("/derc3")
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	})
 	mux.HandleFunc("/derc2", func(w http.ResponseWriter, _ *http.Request) {
 		srv.hit("/derc2")
@@ -257,7 +314,12 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		srv.mu.Lock()
 		mask := sep2.HexBinary8(0x07)
+		if srv.respMask != 0 {
+			mask = srv.respMask
+		}
+		srv.mu.Unlock()
 		var dc sep2.DERControl
 		dc.MRID = "CTL1"
 		dc.ReplyTo = "/rsp"
@@ -1137,12 +1199,10 @@ func TestManagedControls_FailedRewalkKeepsTheFollowedProgram(t *testing.T) {
 	}
 }
 
-// Sessions subscribe to their own device's FSA list and to each program
-// list they walked, once, as that device; a notification for a subscribed
-// list wakes only the session that subscribed to it.
-func TestManagedControls_SessionsSubscribeAndNotificationsWakeThem(t *testing.T) {
-	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
-	router := newNotifyRouter()
+// startSubscribedFleet starts a PV and a battery whose sessions subscribe
+// through router, with the control poll at interval.
+func startSubscribedFleet(t *testing.T, client *inverter.SEP2Client, router *notifyRouter, interval time.Duration) *managedFleet {
+	t.Helper()
 	pv := managedCfg(t, "pv", pvLFDI, "pv", 4000)
 	bat := managedCfg(t, "bat", batLFDI, "battery", 0)
 	pv.Controls = &simconfig.Controls{Response: "follow"}
@@ -1153,11 +1213,21 @@ func TestManagedControls_SessionsSubscribeAndNotificationsWakeThem(t *testing.T)
 		t.Fatalf("startManaged: %v", err)
 	}
 	for _, md := range fleet.devices {
-		md.ctl.interval = 20 * time.Millisecond
+		md.ctl.interval = interval
 	}
 	fleet.StartControls(ctx, controlsEnv{client: client, notify: &sessionNotify{poster: client, url: "https://client.example/notify", router: router}})
 	t.Cleanup(func() { waitControlsBounded(t, fleet, "the test ended") })
 	t.Cleanup(cancel)
+	return fleet
+}
+
+// Sessions subscribe to their own device's FSA list and to each program
+// list they walked, once, as that device; a notification for a subscribed
+// list wakes only the session that subscribed to it.
+func TestManagedControls_SessionsSubscribeAndNotificationsWakeThem(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	router := newNotifyRouter()
+	fleet := startSubscribedFleet(t, client, router, 20*time.Millisecond)
 
 	waitFor(t, "both devices to follow PROG1", func() bool { return allStarted(fleet) })
 	for _, lfdi := range []string{pvLFDI, batLFDI} {
@@ -1191,6 +1261,172 @@ func TestManagedControls_SessionsSubscribeAndNotificationsWakeThem(t *testing.T)
 	waitFor(t, "the battery to follow PROG2", func() bool { return targetW(bt) == secondControlW })
 }
 
+// A subscription the server ended is made again on the next walk.
+func TestManagedControls_CancelledSubscriptionIsMadeAgain(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	router := newNotifyRouter()
+	fleet := startSubscribedFleet(t, client, router, 20*time.Millisecond)
+	waitFor(t, "both devices to follow PROG1", func() bool { return allStarted(fleet) })
+	waitFor(t, "the PV's subscriptions", func() bool { return len(srv.subscriptionsTo("/sub/"+pvLFDI)) >= 2 })
+
+	router.route(sep2.Notification{SubscribedResource: "/dp", Status: sep2.NotificationStatusCanceledNoInfo})
+	waitFor(t, "the PV to subscribe to /dp again", func() bool {
+		n := 0
+		for _, h := range srv.subscriptionsTo("/sub/" + pvLFDI) {
+			if h == "/dp" {
+				n++
+			}
+		}
+		return n >= 2
+	})
+}
+
+// A 405 means the server takes no subscriptions: the session asks once and
+// relies on the timer from then on.
+func TestManagedControls_RefusedSubscriptionsAreNotAskedForAgain(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	srv.setSubStatus(http.StatusMethodNotAllowed)
+	fleet := startSubscribedFleet(t, client, newNotifyRouter(), 20*time.Millisecond)
+	waitFor(t, "both devices to follow PROG1", func() bool { return allStarted(fleet) })
+	pv := deviceByLFDI(fleet, pvLFDI)
+	for range 3 {
+		pv.ctl.kick()
+		time.Sleep(60 * time.Millisecond)
+	}
+	if got := srv.subAttemptsTo("/sub/" + pvLFDI); got != 1 {
+		t.Errorf("PV posted %d Subscriptions to a server that answered 405, want 1", got)
+	}
+}
+
+// A subscription that failed is retried on a later walk.
+func TestManagedControls_FailedSubscriptionIsRetriedOnALaterWalk(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	srv.setSubStatus(http.StatusInternalServerError)
+	fleet := startSubscribedFleet(t, client, newNotifyRouter(), 20*time.Millisecond)
+	waitFor(t, "both devices to follow PROG1", func() bool { return allStarted(fleet) })
+	waitFor(t, "the first attempts", func() bool { return srv.subAttemptsTo("/sub/"+pvLFDI) >= 2 })
+	if got := len(srv.subscriptionsTo("/sub/" + pvLFDI)); got != 0 {
+		t.Fatalf("PV holds %d subscriptions from a server that refused them", got)
+	}
+
+	srv.setSubStatus(0)
+	deviceByLFDI(fleet, pvLFDI).ctl.kick()
+	waitFor(t, "the PV's subscriptions after the server recovered", func() bool { return len(srv.subscriptionsTo("/sub/"+pvLFDI)) >= 2 })
+}
+
+// A program that keeps its mRID but moves its control list is followed at the
+// new list.
+func TestManagedControls_ProgramWithAMovedControlListIsFollowedAtTheNewList(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	fleet, _, _, _ := startControlFleetEvery(t, client, "follow", 20*time.Millisecond)
+	waitFor(t, "both devices to follow PROG1", func() bool { return allStarted(fleet) })
+
+	srv.setProgMode(progListMoved)
+	pv := deviceByLFDI(fleet, pvLFDI)
+	pv.ctl.kick()
+	waitFor(t, "the PV to follow the moved list", func() bool { return targetW(pv) == secondControlW })
+}
+
+// A device with no program at start is woken by a notification, not left to
+// wait out the poll interval.
+func TestManagedControls_NotificationWakesASessionStillInDiscovery(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	srv.setProgMode(progEmpty)
+	fleet, _, _, _ := startControlFleetEvery(t, client, "follow", 30*time.Second)
+	waitFor(t, "the first walks", func() bool { return srv.hitsOf("/dp") >= 2 })
+
+	srv.setProgMode(progNormal)
+	for _, md := range fleet.devices {
+		md.ctl.kick()
+	}
+	waitFor(t, "both devices to follow PROG1 well before the 30s poll", func() bool { return allStarted(fleet) })
+}
+
+// A switch hands the replacement straight to the follower: a walk that fails
+// after the switch leaves the device on the new program, not on none.
+func TestManagedControls_SwitchNeedsNoSecondWalk(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	fleet, _, _, _ := startControlFleetEvery(t, client, "follow", 20*time.Millisecond)
+	waitFor(t, "both devices to follow PROG1", func() bool { return allStarted(fleet) })
+
+	srv.setProgMode(progWithPrimaryAdded)
+	srv.failFSANextRead(pvLFDI)
+	pv := deviceByLFDI(fleet, pvLFDI)
+	reads := srv.hitsOf("/fsa/" + pvLFDI)
+	pv.ctl.kick()
+	waitFor(t, "the PV to follow PROG2", func() bool { return targetW(pv) == secondControlW })
+	if got := srv.hitsOf("/fsa/"+pvLFDI) - reads; got != 1 {
+		t.Errorf("the switch read the PV's FSA list %d times, want 1", got)
+	}
+}
+
+// A control dropped because a different program outranks its program is
+// reported as superseded by an alternate program (status 14); one whose
+// program was deleted is reported as cancelled (status 6).
+func TestManagedControls_DroppedControlResponseStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		mode int
+		want []int
+	}{
+		{"outranked by another program", progWithPrimaryAdded, []int{1, 2, 14}},
+		{"program deleted", progEmpty, []int{1, 2, 6}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+			srv.setRespMask(0x27)
+			fleet, _, _, _ := startControlFleetEvery(t, client, "follow", 20*time.Millisecond)
+			pv := deviceByLFDI(fleet, pvLFDI)
+			waitFor(t, "the PV to start CTL1", func() bool { return pv.ctl.sm.Current().State == inverter.StateEventStarted })
+
+			srv.setProgMode(tc.mode)
+			pv.ctl.kick()
+			waitFor(t, "the third Response", func() bool { return len(srv.statusesFor(pvLFDI, "CTL1")) >= 3 })
+			time.Sleep(100 * time.Millisecond)
+			if got := srv.statusesFor(pvLFDI, "CTL1"); fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("CTL1 statuses = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// One program whose control list cannot be read does not stop a re-walk from
+// seeing the others.
+func TestManagedControls_BrokenSiblingProgramDoesNotBlindTheRewalk(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	fleet, _, _, _ := startControlFleetEvery(t, client, "follow", 20*time.Millisecond)
+	pv := deviceByLFDI(fleet, pvLFDI)
+	waitFor(t, "the PV to follow PROG1", func() bool { return targetW(pv) == controlTargetW })
+
+	srv.setProgMode(progBrokenSibling)
+	pv.ctl.kick()
+	waitFor(t, "the PV to follow PROG2", func() bool { return targetW(pv) == secondControlW })
+	if srv.hitsOf("/derc3") == 0 {
+		t.Error("the broken sibling's control list was never read, so the walk did not meet it")
+	}
+}
+
+// The receiver's callback gives a notification to the session that
+// subscribed to it and to nobody else, and every other one to the fallback.
+func TestRouteThenDispatch(t *testing.T) {
+	r := newNotifyRouter()
+	cs := newControlSession(nil)
+	r.watch("/edev/1/fsa", cs)
+	var fell []string
+	h := routeThenDispatch(r, func(_ context.Context, n sep2.Notification) { fell = append(fell, n.SubscribedResource) })
+
+	h(context.Background(), sep2.Notification{SubscribedResource: "/edev/1/fsa"})
+	h(context.Background(), sep2.Notification{SubscribedResource: "/derp/own"})
+
+	if len(cs.wake) != 1 {
+		t.Error("the subscribed session was not woken")
+	}
+	if fmt.Sprint(fell) != "[/derp/own]" {
+		t.Errorf("fallback got %v, want only [/derp/own]", fell)
+	}
+}
+
 func TestNotifyRouter_RoutesByResourceAndReportsUnknown(t *testing.T) {
 	r := newNotifyRouter()
 	a, b := newControlSession(nil), newControlSession(nil)
@@ -1215,6 +1451,7 @@ func TestNotifyRouter_RoutesByResourceAndReportsUnknown(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			drain(a)
 			drain(b)
+			a.setSubscribed("/edev/1/fsa/1/derp", true)
 			if got := r.route(tc.n); got != tc.handled {
 				t.Errorf("route handled = %v, want %v", got, tc.handled)
 			}
@@ -1224,8 +1461,8 @@ func TestNotifyRouter_RoutesByResourceAndReportsUnknown(t *testing.T) {
 			if got := len(b.wake) == 1; got != tc.wantB {
 				t.Errorf("session B woken = %v, want %v", got, tc.wantB)
 			}
-			if tc.unwatchA && a.subscribedTo("/edev/1/fsa/1/derp") {
-				t.Error("session A still counts the cancelled subscription as live")
+			if got := a.subscribedTo("/edev/1/fsa/1/derp"); got == tc.unwatchA {
+				t.Errorf("session A holds the subscription = %v after the notification, want %v", got, !tc.unwatchA)
 			}
 		})
 	}

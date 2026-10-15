@@ -93,6 +93,12 @@ type nowFunc func() time.Time
 // 30s cap, 2.0x multiplier). Tests pass a tight schedule so the suite
 // stays fast.
 func responsePOSTHook(client responsePoster, lfdi string, now nowFunc, retryCfg ...inverter.ResponseRetryConfig) inverter.TransitionHook {
+	return responseHook(client, lfdi, now, mapTransitionToStatus, retryCfg...)
+}
+
+// responseHook is responsePOSTHook with the transition-to-status mapping
+// supplied by the caller, for a session that knows why an event ended.
+func responseHook(client responsePoster, lfdi string, now nowFunc, statusOf func(prev, next inverter.EventState) uint8, retryCfg ...inverter.ResponseRetryConfig) inverter.TransitionHook {
 	cfg := defaultResponseRetryConfig
 	if len(retryCfg) > 0 {
 		cfg = retryCfg[0]
@@ -111,7 +117,7 @@ func responsePOSTHook(client responsePoster, lfdi string, now nowFunc, retryCfg 
 			return
 		}
 
-		status := mapTransitionToStatus(prev, next)
+		status := statusOf(prev, next)
 		if status == 0 {
 			return
 		}
@@ -213,7 +219,9 @@ func responseRequiredOn(mask uint8, status uint8) bool {
 		return mask&0x02 != 0
 	case sep2.ResponseStatusEventCompleted:
 		return mask&0x04 != 0
-	case sep2.ResponseStatusEventCancelled:
+	case sep2.ResponseStatusEventCancelled, sep2.ResponseStatusEventSupersededAlternateProgram:
+		// A superseded event is gated on the cancellation bit: the bit
+		// layout above has no bit of its own for it.
 		return mask&0x20 != 0
 	}
 	return false
@@ -252,6 +260,8 @@ func responseStatusName(status uint8) string {
 		return "completed"
 	case sep2.ResponseStatusEventCancelled:
 		return "cancelled"
+	case sep2.ResponseStatusEventSupersededAlternateProgram:
+		return "superseded-alternate-program"
 	default:
 		return fmt.Sprintf("0x%02x", status)
 	}

@@ -37,8 +37,8 @@ package main
 //       - len == 0 && CSIP-strict: idle on phase2cDERProgramPollInterval
 //         (dcap.PollRate). ctx-cancel returns ctx.Err().
 //       - len == 0 && (!CSIP || AllowUnregistered): log "No DERPrograms
-//         enumerated; proceeding with empty cache (--csip off or
-//         --allow-unregistered)" + return the (empty) cache, nil.
+//         enumerated; proceeding with empty cache (not CSIP-strict: ...)"
+//         + return the (empty) cache, nil.
 //
 // log.Fatalf stays in main() for two reasons:
 //  1. Exit-code preservation: log.Fatalf calls os.Exit(1); pushing it down
@@ -143,7 +143,7 @@ func runPhase2cDERProgramWalk(
 	return runPhase2cDERProgramWalkOpts(ctx, client, fsaList, cfg, dcap, false)
 }
 
-// runPhase2cDERProgramWalkOpts is runPhase2cDERProgramWalk; lenientDefault is
+// runPhase2cDERProgramWalkOpts is runPhase2cDERProgramWalk; lenient is
 // passed to walkDERProgramTreeOpts.
 func runPhase2cDERProgramWalkOpts(
 	ctx context.Context,
@@ -151,12 +151,12 @@ func runPhase2cDERProgramWalkOpts(
 	fsaList sep2.FunctionSetAssignmentsList,
 	cfg inverter.SimConfig,
 	dcap sep2.DeviceCapability,
-	lenientDefault bool,
+	lenient bool,
 ) (map[string]sep2.DERProgram, error) {
 	log.Println("=== Phase 2c: DERProgram Tree Walk ===")
 	for {
 		derProgramsByMRID := make(map[string]sep2.DERProgram)
-		if err := walkDERProgramTreeOpts(ctx, client, fsaList, derProgramsByMRID, lenientDefault); err != nil {
+		if err := walkDERProgramTreeOpts(ctx, client, fsaList, derProgramsByMRID, lenient); err != nil {
 			return map[string]sep2.DERProgram{}, &derProgramWalkFatal{
 				reason: fmt.Sprintf("walk DERProgram tree: %v", err),
 				inner:  err,
@@ -177,7 +177,7 @@ func runPhase2cDERProgramWalkOpts(
 			}
 			continue
 		}
-		log.Println("No DERPrograms enumerated; proceeding with empty cache (--csip off or --allow-unregistered)")
+		log.Println("No DERPrograms enumerated; proceeding with empty cache (not CSIP-strict: --csip off, --allow-unregistered, or a re-walk of a followed program)")
 		return derProgramsByMRID, nil
 	}
 }

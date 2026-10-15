@@ -163,6 +163,18 @@ type sessionNotify struct {
 	router *notifyRouter
 }
 
+// routeThenDispatch is the receiver's callback: a notification a managed
+// device's session subscribed to goes to that session alone, any other to
+// fallback. Managed-device hrefs never coincide with the main EndDevice's own
+// subscriptions, so routing first never swallows a dispatcher notification.
+func routeThenDispatch(r *notifyRouter, fallback inverter.NotificationDispatcher) inverter.NotificationDispatcher {
+	return func(ctx context.Context, n sep2.Notification) {
+		if !r.route(n) {
+			fallback(ctx, n)
+		}
+	}
+}
+
 // notifyRouter hands a Notification to the control sessions that subscribed
 // to the resource it names. Sessions register before they post, so a
 // delivery that beats the server's 201 still finds its session.

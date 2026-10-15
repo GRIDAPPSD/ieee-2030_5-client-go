@@ -64,6 +64,11 @@ type controlSession struct {
 	// stops asking and relies on the timer.
 	noSubs bool
 
+	// superseded is set while the session drops a program in favour of a
+	// different one, so the controls it cancels are reported as superseded
+	// by an alternate program rather than as cancelled.
+	superseded atomic.Bool
+
 	// onExit, when set, runs as the session goroutine's last act before it
 	// is counted done; a test seam for observing that WaitControls waits.
 	onExit func()
@@ -217,24 +222,43 @@ func (md *managedDevice) runControls(ctx context.Context, env controlsEnv) {
 	interval := md.ctl.pollInterval(env.dcap)
 
 	poster := targetedPoster{client: client, lfdi: md.lfdi, session: ctx}
-	md.ctl.sm.AddTransitionHook(responsePOSTHook(poster, md.lfdi, client.Now))
+	md.ctl.sm.AddTransitionHook(responseHook(poster, md.lfdi, client.Now, func(prev, next inverter.EventState) uint8 {
+		status := mapTransitionToStatus(prev, next)
+		if status == sep2.ResponseStatusEventCancelled && md.ctl.superseded.Load() {
+			return sep2.ResponseStatusEventSupersededAlternateProgram
+		}
+		return status
+	}))
 
+	var prog sep2.DERProgram
+	found := false
 	for {
-		prog, ok := md.discoverProgram(ctx, tctx, env, interval)
-		if !ok {
+		if !found {
+			var ok bool
+			if prog, ok = md.discoverProgram(ctx, tctx, env, interval); !ok {
+				return
+			}
+		}
+		next, more := md.followProgram(ctx, tctx, env, interval, prog)
+		if !more {
 			return
 		}
-		if !md.followProgram(ctx, tctx, env, interval, prog) {
-			return
+		// A replacement the re-walk already found is followed at once; only
+		// a program that is gone sends the session back to discovery.
+		if next != nil {
+			prog, found = *next, true
+		} else {
+			found = false
 		}
 	}
 }
 
 // followProgram polls prog's control list and default control. It returns
-// false when ctx ends, and true when the walk no longer selects prog (it
-// moved, was outranked or was deleted): the program's controls are then
-// cancelled, its default dropped, and the caller discovers again.
-func (md *managedDevice) followProgram(ctx, tctx context.Context, env controlsEnv, interval time.Duration, prog sep2.DERProgram) (rediscover bool) {
+// more=false when ctx ends. When a re-walk no longer selects prog, its
+// controls are cancelled and its default dropped, and it returns more=true
+// with the program to follow next, or nil when none is left and the caller
+// must discover again.
+func (md *managedDevice) followProgram(ctx, tctx context.Context, env controlsEnv, interval time.Duration, prog sep2.DERProgram) (next *sep2.DERProgram, more bool) {
 	client := env.client
 	sched := inverter.NewScheduler(client.Now, mathrand.New(mathrand.NewPCG(uint64(time.Now().UnixNano()), 0xCAFEBABE)))
 	cache := inverter.NewDERControlCache()
@@ -292,7 +316,7 @@ func (md *managedDevice) followProgram(ctx, tctx context.Context, env controlsEn
 		walk := false
 		select {
 		case <-ctx.Done():
-			return false
+			return nil, false
 		case <-t.C:
 			step()
 		case <-md.ctl.wake:
@@ -300,20 +324,30 @@ func (md *managedDevice) followProgram(ctx, tctx context.Context, env controlsEn
 		case <-rewalk.C:
 			walk = true
 		}
-		if walk && md.programMoved(ctx, tctx, env, prog) {
-			// Everything the program had delivered is gone with it.
-			_, gone := diffSnapshots(prev, nil)
-			md.ctl.defaultCtl.Store(nil)
-			md.ctl.sm.Tick(client.Now(), nil, gone, sched)
-			return true
+		if !walk {
+			continue
 		}
+		moved, replacement := md.programMoved(ctx, tctx, env, prog)
+		if !moved {
+			continue
+		}
+		// Everything the program had delivered is gone with it. A control
+		// dropped for a different program is superseded; one whose program
+		// was deleted, or replaced under the same mRID, is cancelled.
+		_, gone := diffSnapshots(prev, nil)
+		md.ctl.defaultCtl.Store(nil)
+		md.ctl.superseded.Store(replacement != nil && replacement.MRID != prog.MRID)
+		md.ctl.sm.Tick(client.Now(), nil, gone, sched)
+		md.ctl.superseded.Store(false)
+		return replacement, true
 	}
 }
 
 // programMoved re-walks the device's programs and reports whether prog is no
-// longer the one to follow. A walk that fails says nothing about the program,
-// so it keeps being followed.
-func (md *managedDevice) programMoved(ctx, tctx context.Context, env controlsEnv, prog sep2.DERProgram) bool {
+// longer the one to follow, with its replacement, or nil when no program is
+// left. A walk that fails says nothing about the program, so it keeps being
+// followed.
+func (md *managedDevice) programMoved(ctx, tctx context.Context, env controlsEnv, prog sep2.DERProgram) (moved bool, replacement *sep2.DERProgram) {
 	// The program is being followed, so an empty answer means it is gone and
 	// must come back to the caller, not idle inside the walk the way a
 	// session still discovering does.
@@ -323,18 +357,18 @@ func (md *managedDevice) programMoved(ctx, tctx context.Context, env controlsEnv
 		if ctx.Err() == nil {
 			log.Printf("managed device %s (%s): re-walk: %s failed (keeping program %s): %v", md.name, md.lfdi, what, prog.MRID, err)
 		}
-		return false
+		return false, nil
 	}
 	md.subscribe(tctx, env, watch)
 	if !found {
 		log.Printf("managed device %s (%s): program %s is gone; returning to discovery", md.name, md.lfdi, prog.MRID)
-		return true
+		return true, nil
 	}
 	if !sameProgram(prog, next) {
 		log.Printf("managed device %s (%s): program %s replaces %s; switching", md.name, md.lfdi, next.MRID, prog.MRID)
-		return true
+		return true, &next
 	}
-	return false
+	return false, nil
 }
 
 // sameProgram reports whether b is a followed program's a: the same mRID

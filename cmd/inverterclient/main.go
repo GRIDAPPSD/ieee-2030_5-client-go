@@ -144,15 +144,16 @@ func walkDERProgramTree(
 	return walkDERProgramTreeOpts(ctx, client, fsaList, out, false)
 }
 
-// walkDERProgramTreeOpts is walkDERProgramTree; with lenientDefault a failed
-// DefaultDERControl read is logged and skipped instead of failing the walk,
-// for callers that re-read the default on their own cadence.
+// walkDERProgramTreeOpts is walkDERProgramTree; with lenient a failed
+// DefaultDERControl, DERControlList or DERCurveList read is logged and the
+// program kept instead of failing the walk, for callers that re-read those
+// on their own cadence. One broken program then cannot blind a re-walk.
 func walkDERProgramTreeOpts(
 	ctx context.Context,
 	client *inverter.SEP2Client,
 	fsaList sep2.FunctionSetAssignmentsList,
 	out map[string]sep2.DERProgram,
-	lenientDefault bool,
+	lenient bool,
 ) error {
 	for _, fsa := range fsaList.FunctionSetAssignments {
 		if fsa.DERProgramListLink == nil {
@@ -172,7 +173,7 @@ func walkDERProgramTreeOpts(
 		for _, prog := range progList.DERProgram {
 			if prog.DefaultDERControlLink != nil {
 				if _, _, err := client.GetDefaultDERControl(ctx, prog.DefaultDERControlLink.Href); err != nil {
-					if !lenientDefault {
+					if !lenient {
 						return fmt.Errorf("DERProgram mRID=%s DefaultDERControl: %w", prog.MRID, err)
 					}
 					log.Printf("  DERProgram mRID=%s DefaultDERControl read failed (walk continues): %v", prog.MRID, err)
@@ -180,12 +181,18 @@ func walkDERProgramTreeOpts(
 			}
 			if prog.DERControlListLink != nil {
 				if _, _, err := client.GetDERControlList(ctx, prog.DERControlListLink.Href); err != nil {
-					return fmt.Errorf("DERProgram mRID=%s DERControlList: %w", prog.MRID, err)
+					if !lenient {
+						return fmt.Errorf("DERProgram mRID=%s DERControlList: %w", prog.MRID, err)
+					}
+					log.Printf("  DERProgram mRID=%s DERControlList read failed (walk continues): %v", prog.MRID, err)
 				}
 			}
 			if prog.DERCurveListLink != nil {
 				if _, err := client.GetDERCurveList(ctx, prog.DERCurveListLink.Href); err != nil {
-					return fmt.Errorf("DERProgram mRID=%s DERCurveList: %w", prog.MRID, err)
+					if !lenient {
+						return fmt.Errorf("DERProgram mRID=%s DERCurveList: %w", prog.MRID, err)
+					}
+					log.Printf("  DERProgram mRID=%s DERCurveList read failed (walk continues): %v", prog.MRID, err)
 				}
 			}
 			out[prog.MRID] = prog
@@ -427,11 +434,9 @@ func main() {
 	// A notification for a list a managed device's session subscribed to wakes
 	// that session; every other notification goes to the dispatcher.
 	sessionRouter := newNotifyRouter()
-	notifyReceiver = startNotifyReceiver(cfg, *notifyListen, hmi, func(ctx context.Context, n sep2.Notification) {
-		if !sessionRouter.route(n) {
-			notifyDispatcher.Dispatch(ctx, n)
-		}
-	})
+	// Managed-device hrefs never coincide with the main EndDevice's own
+	// subscriptions, so routing first never swallows a dispatcher notification.
+	notifyReceiver = startNotifyReceiver(cfg, *notifyListen, hmi, routeThenDispatch(sessionRouter, notifyDispatcher.Dispatch))
 	// effectiveAdvertiseHost is the host:port the notify URL actually
 	// names: --notify-advertise-host's own port when it gives one,
 	// otherwise --notify-advertise-host's host combined with the port the
