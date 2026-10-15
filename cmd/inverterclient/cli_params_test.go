@@ -8,10 +8,11 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -95,6 +96,11 @@ func TestScenarioFlagAcceptsEveryKnownName(t *testing.T) {
 			if strings.Contains(out, "unknown scenario") {
 				t.Fatalf("--scenario %s refused:\n%s", name, out)
 			}
+			// The log line shows the process went on with the scenario it
+			// was asked for, not a default or an early exit.
+			if want := "scenario: " + name + " ("; !strings.Contains(out, want) {
+				t.Fatalf("output lacks %q:\n%s", want, out)
+			}
 		})
 	}
 }
@@ -121,14 +127,23 @@ func TestListScenariosPrintsEveryNameAndExitsZero(t *testing.T) {
 
 func TestHelpListsEveryRegisteredFlagAndExitsZero(t *testing.T) {
 	t.Parallel()
+	// Pinned by hand: a list built from registerFlags could not notice a
+	// registration being deleted.
+	names := []string{
+		"allow-unregistered", "backend", "ca", "cert", "client-role", "csip",
+		"fleet-file", "hmi-port", "key", "list-scenarios", "notify-advertise-host",
+		"notify-listen", "pen", "pin", "report-interval", "role", "run-dir",
+		"scenario", "server", "sidecar-pythonpath", "sim-config", "tick", "timescale",
+	}
+	// Any flag registered but not pinned above fails here, so the list
+	// cannot silently fall behind the code.
 	fs := flag.NewFlagSet("names", flag.ContinueOnError)
 	registerFlags(fs, &inverter.SimConfig{})
-	var names []string
-	fs.VisitAll(func(f *flag.Flag) { names = append(names, f.Name) })
-	sort.Strings(names)
-	if len(names) == 0 {
-		t.Fatal("no flags registered; the check below would pass vacuously")
-	}
+	fs.VisitAll(func(f *flag.Flag) {
+		if !slices.Contains(names, f.Name) {
+			t.Errorf("flag -%s is registered but not pinned in this test", f.Name)
+		}
+	})
 
 	for _, helpFlag := range []string{"--help", "-h"} {
 		out, code := runCLI(t, helpFlag)
@@ -140,6 +155,52 @@ func TestHelpListsEveryRegisteredFlagAndExitsZero(t *testing.T) {
 				t.Errorf("%s output omits flag -%s", helpFlag, n)
 			}
 		}
+	}
+}
+
+// captureStderr returns what fn wrote to os.Stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	fn()
+	os.Stderr = orig
+	_ = w.Close()
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestApplyPENReachesTheConfig(t *testing.T) {
+	t.Parallel()
+	cfg := &inverter.SimConfig{}
+	if err := applyPEN(cfg, 40732); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LogEventPEN != 40732 {
+		t.Fatalf("LogEventPEN = %d, want 40732", cfg.LogEventPEN)
+	}
+	if err := applyPEN(&inverter.SimConfig{}, 4294967296); err == nil {
+		t.Fatal("a PEN above uint32 max was accepted")
+	}
+}
+
+func TestBadSEP2PENWarns(t *testing.T) {
+	t.Setenv("SEP2_PEN", "abc")
+	out := captureStderr(t, func() { registerFlags(flag.NewFlagSet("w", flag.ContinueOnError), &inverter.SimConfig{}) })
+	if !strings.Contains(out, `warning: SEP2_PEN="abc" is not a valid uint32`) {
+		t.Fatalf("no warning for a bad SEP2_PEN; stderr:\n%s", out)
+	}
+	t.Setenv("SEP2_PEN", "40732")
+	out = captureStderr(t, func() { registerFlags(flag.NewFlagSet("w", flag.ContinueOnError), &inverter.SimConfig{}) })
+	if out != "" {
+		t.Fatalf("warning printed for a valid SEP2_PEN: %q", out)
 	}
 }
 

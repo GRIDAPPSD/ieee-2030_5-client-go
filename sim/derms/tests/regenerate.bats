@@ -30,6 +30,13 @@ STUB
   [ ! -e "$BATS_TEST_TMPDIR/ran" ]
 }
 
+@test "regenerate.sh refuses a near-miss version 5.3.1" {
+  stub_gridlabd "GridLAB-D 5.3.1"
+  run -1 "$SCRIPT"
+  [[ "$output" == *"found: GridLAB-D 5.3.1"* ]]
+  [ ! -e "$BATS_TEST_TMPDIR/ran" ]
+}
+
 @test "regenerate.sh refuses a GridLAB-D that prints no version" {
   stub_gridlabd "unrelated output"
   run -1 "$SCRIPT"

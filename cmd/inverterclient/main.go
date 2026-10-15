@@ -208,6 +208,16 @@ func walkDERProgramTreeOpts(
 	return nil
 }
 
+// applyPEN clamps the PEN to uint32: flag.Uint64 lets us catch out-of-range
+// input from the CLI or env without silently truncating.
+func applyPEN(cfg *inverter.SimConfig, pen uint64) error {
+	if pen > 0xFFFFFFFF {
+		return fmt.Errorf("--pen=%d exceeds uint32 max (4294967295)", pen)
+	}
+	cfg.LogEventPEN = uint32(pen)
+	return nil
+}
+
 func main() {
 	cfg := inverter.SimConfig{}
 
@@ -257,13 +267,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Clamp PEN to uint32 range. flag.Uint64Var lets us catch out-of-range
-	// input from CLI / env without silently truncating.
-	if *penFlag > 0xFFFFFFFF {
-		fmt.Fprintf(os.Stderr, "--pen=%d exceeds uint32 max (4294967295)\n", *penFlag)
+	if err := applyPEN(&cfg, *penFlag); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	cfg.LogEventPEN = uint32(*penFlag)
 
 	if *listScenarios {
 		scenarios := inverter.AllScenarios()
