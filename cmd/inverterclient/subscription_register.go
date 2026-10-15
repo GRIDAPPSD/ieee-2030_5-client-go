@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
@@ -151,4 +152,60 @@ func registerSubscriptions(
 	}
 
 	return out
+}
+
+// sessionNotify is what a managed device's session needs to subscribe to the
+// lists it walks: who posts the Subscription, where the server delivers, and
+// where deliveries are routed.
+type sessionNotify struct {
+	poster subscriptionPoster
+	url    string
+	router *notifyRouter
+}
+
+// notifyRouter hands a Notification to the control sessions that subscribed
+// to the resource it names. Sessions register before they post, so a
+// delivery that beats the server's 201 still finds its session.
+type notifyRouter struct {
+	mu     sync.RWMutex
+	byHref map[string][]*controlSession
+}
+
+func newNotifyRouter() *notifyRouter {
+	return &notifyRouter{byHref: map[string][]*controlSession{}}
+}
+
+// watch routes notifications for href to cs. Watching twice is harmless.
+func (r *notifyRouter) watch(href string, cs *controlSession) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, w := range r.byHref[href] {
+		if w == cs {
+			return
+		}
+	}
+	r.byHref[href] = append(r.byHref[href], cs)
+}
+
+// route wakes the sessions watching the resource n names and reports whether
+// any did. A notice that the subscription itself ended also makes the session
+// forget it, so its next walk subscribes again.
+func (r *notifyRouter) route(n sep2.Notification) bool {
+	href := n.SubscribedResource
+	if href == "" {
+		href = n.Href
+	}
+	r.mu.RLock()
+	watchers := append([]*controlSession(nil), r.byHref[href]...)
+	r.mu.RUnlock()
+	ended := n.Status == sep2.NotificationStatusCanceledNoInfo ||
+		n.Status == sep2.NotificationStatusCanceledDefinitionChanged ||
+		n.Status == sep2.NotificationStatusCanceledDeleted
+	for _, cs := range watchers {
+		if ended {
+			cs.setSubscribed(href, false)
+		}
+		cs.kick()
+	}
+	return len(watchers) > 0
 }

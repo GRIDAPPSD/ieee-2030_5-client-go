@@ -424,7 +424,14 @@ func main() {
 	// require it; the inverter has working polling for every function set
 	// in scope. If cert load, TCP bind, or address resolution fails, log
 	// the error and continue with polling-only rather than crash.
-	notifyReceiver = startNotifyReceiver(cfg, *notifyListen, hmi, notifyDispatcher.Dispatch)
+	// A notification for a list a managed device's session subscribed to wakes
+	// that session; every other notification goes to the dispatcher.
+	sessionRouter := newNotifyRouter()
+	notifyReceiver = startNotifyReceiver(cfg, *notifyListen, hmi, func(ctx context.Context, n sep2.Notification) {
+		if !sessionRouter.route(n) {
+			notifyDispatcher.Dispatch(ctx, n)
+		}
+	})
 	// effectiveAdvertiseHost is the host:port the notify URL actually
 	// names: --notify-advertise-host's own port when it gives one,
 	// otherwise --notify-advertise-host's host combined with the port the
@@ -1027,7 +1034,11 @@ func main() {
 		if simFile != nil {
 			managed.setStatusInterval(time.Duration(simFile.Status.IntervalS) * time.Second)
 		}
-		managed.StartControls(ctx, controlsEnv{client: client, dcap: dcap, cfg: cfg})
+		env := controlsEnv{client: client, dcap: dcap, cfg: cfg}
+		if url := notifyURLForReceiver(notifyReceiver, effectiveAdvertiseHost); url != "" {
+			env.notify = &sessionNotify{poster: client, url: url, router: sessionRouter}
+		}
+		managed.StartControls(ctx, env)
 		reservations = startReservations(client, edev, simFile, managed)
 	} else {
 		reporter = runPhase4Metering(ctx, client, dcap, derStatusHref)
