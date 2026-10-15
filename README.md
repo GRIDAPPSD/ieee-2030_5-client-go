@@ -148,8 +148,7 @@ Rules:
 - `role: aggregator` needs at least one `managed` device, and refuses
   `lookup_own_edev`. The aggregator never creates its own EndDevice.
 - `device.type: battery` in the der role needs `replay.file`; the synthetic
-  backend simulates PV only. A battery with a non-replay backend is simulated as PV
-  today; see [#128](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/issues/128). A battery with a non-replay backend is simulated
+  backend simulates PV only. A battery with a non-replay backend is simulated
   as PV today; see
   [#128](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/issues/128).
 - `device.name` defaults to the config file name without its extension; for a
