@@ -31,25 +31,31 @@ is the intended role for protocol testing and interoperability runs.
 five safety guards before reaching hardware: nameplate range clamp,
 units/scale validation, write-rate limiting (token bucket), fail-safe hold on
 comms loss, and malformed-control rejection. `--role production` with
-`--backend realdevice` is the production commissioning path. Pairing
-`--role production` with `--backend synthetic` or `--backend gridlabd` is a
-permitted commissioning dry-run; the binary logs a warning at startup to
-confirm the intent.
+`--backend realdevice` is the intended production commissioning path, but the
+`realdevice` backend is not implemented yet (see "Device backends"), so that
+combination cannot run today. Pairing `--role production` with
+`--backend synthetic` is a permitted commissioning dry-run; the binary logs a
+warning at startup to confirm the intent.
 
 ## Device backends
 
 `--backend` selects the physical-state source for the tick loop:
 
 - `synthetic` (default): scenario-scripted grid states, no hardware.
-- `gridlabd`: reads state from a co-simulated GridLAB-D instance.
+- `gridlabd`: NOT IMPLEMENTED. Every method returns `ErrBackendNotImplemented`
+  (`internal/inverter/device/gridlabd.go`). Tracked in
+  [#126](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/issues/126).
 - `replay`: plays back recorded GridLAB-D output from a file (sim mode; needs
   `replay.file` in the sim config).
-- `realdevice`: talks to actual inverter hardware over SunSpec Modbus.
+- `realdevice`: NOT IMPLEMENTED. Every method returns `ErrBackendNotImplemented`
+  (`internal/inverter/device/realdevice.go`); it is meant to talk to inverter
+  hardware over SunSpec Modbus. Tracked in
+  [#127](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/issues/127).
 
 Any other value is refused at start. The role and backend axes are
-independent on the command line, and `--role production --backend realdevice`
-is the only path that writes to real hardware with all five safety guards
-enforced. In sim mode (below) `backend` and `SEP2_BACKEND` accept only
+independent on the command line. Once `realdevice` exists,
+`--role production --backend realdevice` is meant to be the only path that
+writes to real hardware with all five safety guards enforced. In sim mode (below) `backend` and `SEP2_BACKEND` accept only
 `replay` or `synthetic`; `gridlabd` and `realdevice` are reachable only
 through the `--backend` flag.
 
@@ -65,7 +71,6 @@ go build ./cmd/inverterclient/
 ./inverterclient --help
 ./inverterclient --list-scenarios
 ./inverterclient --server https://sep2-server:8443 --scenario voltvar
-./inverterclient --role production --backend realdevice --server https://sep2-server:8443
 ```
 
 Key flags:
@@ -79,7 +84,7 @@ Key flags:
 | `--scenario` | `normal` | Scenario name (see below) |
 | `--role` | `simulator` | Consumer-policy role: `simulator` or `production` |
 | `--client-role` | `der` | IEEE 2030.5 client role: `der` or `aggregator` |
-| `--backend` | `synthetic` | Device backend: `synthetic`, `gridlabd`, `replay`, or `realdevice` |
+| `--backend` | `synthetic` | Device backend: `synthetic`, `gridlabd`, `replay`, or `realdevice` (`gridlabd` and `realdevice` are not implemented) |
 | `--timescale` | `60.0` | Simulation speed multiplier (60 = 1 real minute = 1 sim hour) |
 | `--tick` | `1s` | Simulation tick interval |
 | `--report-interval` | `10s` | Status report interval |
@@ -103,7 +108,7 @@ Without a sim config the binary reads only `SEP2_PEN` and
 is read to find the sim config. The rest are read only when a sim config is
 loaded.
 
-| Variable | Overrides | Notes |
+| Variable | Stands in for | Notes |
 |----------|-----------|-------|
 | `SEP2_PEN` | `--pen` default | Must be a uint32; an invalid value prints a warning and the default stays 0 |
 | `SEP2_NOTIFY_LISTEN` | `--notify-listen` default | Empty means `127.0.0.1:0` |
@@ -124,8 +129,11 @@ An empty variable counts as unset.
 ## Sim mode
 
 `--sim-config FILE` (or `SEP2_SIM_CONFIG`) loads one JSON file that holds
-every sim setting. Each setting resolves in this order: explicit flag, then
-environment variable, then the file, then the default. With no file, every
+every sim setting. The settings that have an env var (the keys in the
+environment table below) resolve in this order: explicit flag, then
+environment variable, then the file, then the default. An explicit flag always
+wins, including over `SEP2_SIM_CONFIG`; the other keys come from the file or
+their default. With no file, every
 flag behaves as in the tables above.
 
 Rules:
@@ -140,8 +148,12 @@ Rules:
 - `role: aggregator` needs at least one `managed` device, and refuses
   `lookup_own_edev`. The aggregator never creates its own EndDevice.
 - `device.type: battery` in the der role needs `replay.file`; the synthetic
-  backend simulates PV only.
-- `device.name` defaults to the config file name without its extension.
+  backend simulates PV only. A battery with a non-replay backend is simulated as PV
+  today; see [#128](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/issues/128). A battery with a non-replay backend is simulated
+  as PV today; see
+  [#128](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/issues/128).
+- `device.name` defaults to the config file name without its extension; for a
+  `managed[]` entry it defaults to that entry's `name`.
 
 Keys, with defaults:
 
@@ -152,7 +164,7 @@ Keys, with defaults:
 | `lookup_own_edev` | `true` in the der role | Flag `--csip`; der only |
 | `pin` | `0` | Flag `--pin` |
 | `backend` | see above | `replay` or `synthetic` |
-| `device.name` | file name | |
+| `device.name` | file name; for `managed[]`, the entry's `name` | |
 | `device.type` | `pv` | `pv` or `battery` |
 | `device.rated_w` | `10000` | Nameplate watts, positive; also sets the VA (111 percent) and VAr (44 percent) ratings |
 | `device.capacity_wh` | `10000` | Positive |
@@ -167,7 +179,7 @@ Keys, with defaults:
 | `managed[]` | none | Aggregator devices: `name` (required), `lfdi` (40 hex characters, unique), and optional `device`, `replay` and `controls` objects with the keys above |
 | `frq.energy_wh` | `6000` | Flow reservation energy, positive |
 | `frq.power_w` | `3000` | Positive |
-| `frq.start_in_s` | `2400` | Not negative; must be later than `min_lead_s` |
+| `frq.start_in_s` | `2400` | Not negative; must be later than `min_lead_s`, checked when a request is built on SIGUSR1, not when the config loads |
 | `frq.duration_s` | `3600` | Positive |
 | `frq.min_lead_s` | `60` | Not negative |
 | `frq.poll_s` | `30` | Positive |
@@ -200,7 +212,14 @@ too.
 `--csip` is a der-only setting: it has no effect in the aggregator role
 (which always looks up its own EndDevice, never POSTs it), so the binary
 refuses to start with `--client-role aggregator --csip` rather than
-silently ignoring the flag.
+silently ignoring the flag. The refusal message names `--csip` even when the
+setting came from `SEP2_LOOKUP_OWN_EDEV` or `lookup_own_edev`.
+
+### Failure behavior
+
+- A missing or unreadable certificate or key exits 1 with `create client`.
+- A taken `--hmi-port` does not stop the process: the dashboard is disabled
+  and a line is logged.
 
 ## Scenarios
 
