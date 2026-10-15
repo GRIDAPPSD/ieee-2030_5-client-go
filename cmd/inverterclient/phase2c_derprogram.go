@@ -140,11 +140,12 @@ func runPhase2cDERProgramWalk(
 	cfg inverter.SimConfig,
 	dcap sep2.DeviceCapability,
 ) (map[string]sep2.DERProgram, error) {
-	return runPhase2cDERProgramWalkOpts(ctx, client, fsaList, cfg, dcap, false)
+	return runPhase2cDERProgramWalkOpts(ctx, client, fsaList, cfg, dcap, false, nil)
 }
 
-// runPhase2cDERProgramWalkOpts is runPhase2cDERProgramWalk; lenient is
-// passed to walkDERProgramTreeOpts.
+// runPhase2cDERProgramWalkOpts is runPhase2cDERProgramWalk; lenient and
+// unreadable are passed to walkDERProgramTreeOpts, and unreadable describes
+// the last walk.
 func runPhase2cDERProgramWalkOpts(
 	ctx context.Context,
 	client *inverter.SEP2Client,
@@ -152,11 +153,13 @@ func runPhase2cDERProgramWalkOpts(
 	cfg inverter.SimConfig,
 	dcap sep2.DeviceCapability,
 	lenient bool,
+	unreadable map[string]bool,
 ) (map[string]sep2.DERProgram, error) {
 	log.Println("=== Phase 2c: DERProgram Tree Walk ===")
 	for {
 		derProgramsByMRID := make(map[string]sep2.DERProgram)
-		if err := walkDERProgramTreeOpts(ctx, client, fsaList, derProgramsByMRID, lenient); err != nil {
+		clear(unreadable)
+		if err := walkDERProgramTreeOpts(ctx, client, fsaList, derProgramsByMRID, lenient, unreadable); err != nil {
 			return map[string]sep2.DERProgram{}, &derProgramWalkFatal{
 				reason: fmt.Sprintf("walk DERProgram tree: %v", err),
 				inner:  err,

@@ -141,19 +141,22 @@ func walkDERProgramTree(
 	fsaList sep2.FunctionSetAssignmentsList,
 	out map[string]sep2.DERProgram,
 ) error {
-	return walkDERProgramTreeOpts(ctx, client, fsaList, out, false)
+	return walkDERProgramTreeOpts(ctx, client, fsaList, out, false, nil)
 }
 
 // walkDERProgramTreeOpts is walkDERProgramTree; with lenient a failed
-// DefaultDERControl, DERControlList or DERCurveList read is logged and the
-// program kept instead of failing the walk, for callers that re-read those
-// on their own cadence. One broken program then cannot blind a re-walk.
+// DefaultDERControl or DERCurveList read is logged and the program kept
+// instead of failing the walk, for callers that re-read those on their own
+// cadence. A program whose DERControlList cannot be read is left out of out
+// and recorded in unreadable (when non-nil), so one broken program neither
+// blinds the walk nor can be chosen over a readable one.
 func walkDERProgramTreeOpts(
 	ctx context.Context,
 	client *inverter.SEP2Client,
 	fsaList sep2.FunctionSetAssignmentsList,
 	out map[string]sep2.DERProgram,
 	lenient bool,
+	unreadable map[string]bool,
 ) error {
 	for _, fsa := range fsaList.FunctionSetAssignments {
 		if fsa.DERProgramListLink == nil {
@@ -184,7 +187,11 @@ func walkDERProgramTreeOpts(
 					if !lenient {
 						return fmt.Errorf("DERProgram mRID=%s DERControlList: %w", prog.MRID, err)
 					}
-					log.Printf("  DERProgram mRID=%s DERControlList read failed (walk continues): %v", prog.MRID, err)
+					log.Printf("  DERProgram mRID=%s DERControlList read failed (program left out of this walk): %v", prog.MRID, err)
+					if unreadable != nil {
+						unreadable[prog.MRID] = true
+					}
+					continue
 				}
 			}
 			if prog.DERCurveListLink != nil {

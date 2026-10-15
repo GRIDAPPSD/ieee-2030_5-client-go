@@ -352,14 +352,21 @@ func (md *managedDevice) programMoved(ctx, tctx context.Context, env controlsEnv
 	// must come back to the caller, not idle inside the walk the way a
 	// session still discovering does.
 	env.cfg.CSIP = false
-	next, found, watch, what, err := md.walkPrograms(tctx, env)
+	w, what, err := md.walkPrograms(tctx, env)
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Printf("managed device %s (%s): re-walk: %s failed (keeping program %s): %v", md.name, md.lfdi, what, prog.MRID, err)
 		}
 		return false, nil
 	}
-	md.subscribe(tctx, env, watch)
+	md.subscribe(tctx, env, w.watch)
+	if w.unreadable[prog.MRID] {
+		// The followed program is still listed; failing to read its list
+		// now says nothing about whether it is gone.
+		log.Printf("managed device %s (%s): program %s control list unreadable in the re-walk; keeping it", md.name, md.lfdi, prog.MRID)
+		return false, nil
+	}
+	next, found := w.prog, w.found
 	if !found {
 		log.Printf("managed device %s (%s): program %s is gone; returning to discovery", md.name, md.lfdi, prog.MRID)
 		return true, nil
@@ -402,13 +409,13 @@ func linkHref(l *sep2.Link) string {
 func (md *managedDevice) discoverProgram(ctx, tctx context.Context, env controlsEnv, interval time.Duration) (sep2.DERProgram, bool) {
 	failures := 0
 	for {
-		prog, found, watch, what, err := md.walkPrograms(tctx, env)
+		w, what, err := md.walkPrograms(tctx, env)
 		var wait time.Duration
 		switch {
 		case err == nil:
-			md.subscribe(tctx, env, watch)
-			if found {
-				return prog, true
+			md.subscribe(tctx, env, w.watch)
+			if w.found {
+				return w.prog, true
 			}
 			wait = interval
 			log.Printf("managed device %s (%s): no DERProgram with a DERControlList; looking again in %s", md.name, md.lfdi, wait)
@@ -432,18 +439,27 @@ func (md *managedDevice) discoverProgram(ctx, tctx context.Context, env controls
 	}
 }
 
-// walkPrograms makes one FSA list and DERProgram walk as the device. watch is
-// the lists the answer came from, for subscribing to; what names the failed
-// phase.
-func (md *managedDevice) walkPrograms(tctx context.Context, env controlsEnv) (prog sep2.DERProgram, found bool, watch []string, what string, err error) {
+// programWalk is what one walk found: the program to follow, the programs
+// whose control list could not be read, and the lists the answer came from.
+type programWalk struct {
+	prog       sep2.DERProgram
+	found      bool
+	unreadable map[string]bool
+	watch      []string
+}
+
+// walkPrograms makes one FSA list and DERProgram walk as the device. what
+// names the failed phase.
+func (md *managedDevice) walkPrograms(tctx context.Context, env controlsEnv) (w programWalk, what string, err error) {
 	fsaList, err := runPhase2cFSAList(tctx, env.client, md.edev, env.cfg, env.dcap)
 	if err != nil {
-		return prog, false, nil, "FSA list", err
+		return w, "FSA list", err
 	}
 	programs := map[string]sep2.DERProgram{}
+	w.unreadable = map[string]bool{}
 	if len(fsaList.FunctionSetAssignments) > 0 {
-		if programs, err = runPhase2cDERProgramWalkOpts(tctx, env.client, fsaList, env.cfg, env.dcap, true); err != nil {
-			return prog, false, nil, "DERProgram walk", err
+		if programs, err = runPhase2cDERProgramWalkOpts(tctx, env.client, fsaList, env.cfg, env.dcap, true, w.unreadable); err != nil {
+			return w, "DERProgram walk", err
 		}
 	}
 	// A program with no DERControlList has nothing to follow, so it never
@@ -454,15 +470,15 @@ func (md *managedDevice) walkPrograms(tctx context.Context, env controlsEnv) (pr
 		}
 	}
 	if h := listHref(md.edev.FunctionSetAssignmentsListLink); h != "" {
-		watch = append(watch, h)
+		w.watch = append(w.watch, h)
 	}
 	for _, fsa := range fsaList.FunctionSetAssignments {
 		if h := listHref(fsa.DERProgramListLink); h != "" {
-			watch = append(watch, h)
+			w.watch = append(w.watch, h)
 		}
 	}
-	prog, found = inverter.SelectHighestPriority(programs)
-	return prog, found, watch, "", nil
+	w.prog, w.found = inverter.SelectHighestPriority(programs)
+	return w, "", nil
 }
 
 // subscribe subscribes the device, as itself, to each href it does not

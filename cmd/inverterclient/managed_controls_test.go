@@ -105,6 +105,7 @@ const (
 	progWithPrimaryAdded        // PROG1 and PROG2, which outranks it and has its own list
 	progListMoved               // PROG1 alone, its control list moved to /derc2
 	progBrokenSibling           // PROG1, PROG2 (outranks it) and PROG3, whose control list answers 503
+	progBrokenHigher            // PROG1 and PROG4, which outranks it but whose control list answers 404
 )
 
 // secondControlW is the target of the control PROG2 serves at /derc2.
@@ -267,6 +268,8 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 		case progListMoved:
 			prog.DERControlListLink = &sep2.ListLink{Href: "/derc2"}
 			progs = []sep2.DERProgram{prog}
+		case progBrokenHigher:
+			progs = []sep2.DERProgram{prog, {MRID: "PROG4", Primacy: 0, DERControlListLink: &sep2.ListLink{Href: "/derc3"}}}
 		case progBrokenSibling:
 			progs = []sep2.DERProgram{prog,
 				{MRID: "PROG2", Primacy: 0, DERControlListLink: &sep2.ListLink{Href: "/derc2"}},
@@ -292,6 +295,13 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 	})
 	mux.HandleFunc("/derc3", func(w http.ResponseWriter, _ *http.Request) {
 		srv.hit("/derc3")
+		srv.mu.Lock()
+		mode := srv.progMode
+		srv.mu.Unlock()
+		if mode == progBrokenHigher {
+			http.NotFound(w, nil)
+			return
+		}
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	})
 	mux.HandleFunc("/derc2", func(w http.ResponseWriter, _ *http.Request) {
@@ -1472,5 +1482,47 @@ func drain(cs *controlSession) {
 	select {
 	case <-cs.wake:
 	default:
+	}
+}
+
+// A higher-primacy program whose control list cannot be read is not chosen
+// over a readable one, whether the session is discovering or re-walking.
+func TestManagedControls_UnreadableHigherPrimacyProgramIsNotChosen(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	srv.setProgMode(progBrokenHigher)
+	fleet, _, _, _ := startControlFleetEvery(t, client, "follow", 20*time.Millisecond)
+	pv := deviceByLFDI(fleet, pvLFDI)
+	waitFor(t, "the PV to follow the readable PROG1", func() bool { return targetW(pv) == controlTargetW })
+
+	reads := srv.hitsOf("/fsa/" + pvLFDI)
+	pv.ctl.kick()
+	waitFor(t, "the re-walk that meets the broken program", func() bool { return srv.hitsOf("/fsa/"+pvLFDI) > reads })
+	time.Sleep(100 * time.Millisecond)
+	if got := targetW(pv); got != controlTargetW {
+		t.Errorf("PV target = %d W with an unreadable higher-primacy program, want %d W", got, controlTargetW)
+	}
+	if srv.hitsOf("/derc3") == 0 {
+		t.Error("the unreadable program's control list was never read")
+	}
+}
+
+// A control list that cannot be read during a re-walk does not make the
+// followed program look gone.
+func TestManagedControls_FollowedProgramWithAnUnreadableListIsKept(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	fleet, _, _, _ := startControlFleetEvery(t, client, "follow", 20*time.Millisecond)
+	pv := deviceByLFDI(fleet, pvLFDI)
+	waitFor(t, "the PV to follow PROG1", func() bool { return targetW(pv) == controlTargetW })
+
+	srv.setFailControls(true)
+	reads := srv.hitsOf("/fsa/" + pvLFDI)
+	pv.ctl.kick()
+	waitFor(t, "the re-walk", func() bool { return srv.hitsOf("/fsa/"+pvLFDI) > reads })
+	time.Sleep(100 * time.Millisecond)
+	if got := targetW(pv); got != controlTargetW {
+		t.Errorf("PV target = %d W after a transient control list failure, want %d W", got, controlTargetW)
+	}
+	if got := pv.ctl.sm.Current().State; got != inverter.StateEventStarted {
+		t.Errorf("PV state = %v, want the control still started", got)
 	}
 }
