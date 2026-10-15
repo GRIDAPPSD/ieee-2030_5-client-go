@@ -10,7 +10,7 @@
 //  2. Maps (prev, next) to an IEEE 2030.5-2023 section 10.10 Table 31 Response
 //     status (1/2/3/6) via mapTransitionToStatus. A return of 0 means "no
 //     wire status applies to this edge" -> skip.
-//  3. Honors the event's responseRequired bitmap (Table 32) via
+//  3. Honors the event's responseRequired bitmap (Table 27) via
 //     responseRequiredOn. A nil mask means "no opt-in" -> skip.
 //  4. Calls inverter.PostResponseWithRetry with a 30s context and the
 //     documented default retry schedule (3 attempts, 500ms
@@ -125,7 +125,7 @@ func responseHook(client responsePoster, lfdi string, now nowFunc, statusOf func
 		var mask uint8
 		if evt.ResponseRequired == nil {
 			// No opt-in. Nil means the server did not request any Response
-			// at all; spec default is "no Response required" (Table 32).
+			// at all; spec default is "no Response required" (Table 27).
 			return
 		}
 		mask = uint8(*evt.ResponseRequired)
@@ -197,32 +197,23 @@ func mapTransitionToStatus(prev, next inverter.EventState) uint8 {
 }
 
 // responseRequiredOn tests whether the responseRequired bitmap selects a
-// given Table 31 wire status. IEEE 2030.5-2023 section 10.10 Table 32 defines
-// the bit layout (HexBinary8 : one octet, eight bits):
+// given Response status. IEEE 2030.5-2018 Table 27 gives each status a
+// "response required bit position": status 1 (received) is bit 0, so mask
+// 0x01; statuses 2 to 10 and 12 to 14 are bit 1, so mask 0x02; status 11
+// (acknowledged) is bit 2. The hook emits 1, 2, 3, 6 and 14, so the common
+// CSIP mask 0x03 selects all of them and 0x01 only the first.
 //
-//	bit 0 (0x01) : Response required on receipt        (status 1)
-//	bit 1 (0x02) : Response required on event start    (status 2)
-//	bit 2 (0x04) : Response required on event complete (status 3)
-//	bit 3 (0x08) : Response required on user opt-out   (status 4)
-//	bit 4 (0x10) : Response required on user opt-in    (status 5)
-//	bit 5 (0x20) : Response required on cancellation   (status 6)
-//	bits 6..7    : reserved
-//
-// Returns false for any status the hook never emits (4/5/7+); those are
-// out of scope here (opt-in/opt-out and superseded paths land
-// later). Returns false for status 0 (the "no wire status" sentinel).
+// Returns false for any status the hook never emits; those are out of scope
+// here. Returns false for status 0 (the "no wire status" sentinel).
 func responseRequiredOn(mask uint8, status uint8) bool {
 	switch status {
 	case sep2.ResponseStatusEventReceived:
 		return mask&0x01 != 0
-	case sep2.ResponseStatusEventStarted:
+	case sep2.ResponseStatusEventStarted,
+		sep2.ResponseStatusEventCompleted,
+		sep2.ResponseStatusEventCancelled,
+		sep2.ResponseStatusEventSupersededAlternateProgram:
 		return mask&0x02 != 0
-	case sep2.ResponseStatusEventCompleted:
-		return mask&0x04 != 0
-	case sep2.ResponseStatusEventCancelled, sep2.ResponseStatusEventSupersededAlternateProgram:
-		// A superseded event is gated on the cancellation bit: the bit
-		// layout above has no bit of its own for it.
-		return mask&0x20 != 0
 	}
 	return false
 }

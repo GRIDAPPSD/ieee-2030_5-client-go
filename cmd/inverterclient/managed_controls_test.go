@@ -1375,7 +1375,7 @@ func TestManagedControls_DroppedControlResponseStatus(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
-			srv.setRespMask(0x27)
+			srv.setRespMask(0x03)
 			fleet, _, _, _ := startControlFleetEvery(t, client, "follow", 20*time.Millisecond)
 			pv := deviceByLFDI(fleet, pvLFDI)
 			waitFor(t, "the PV to start CTL1", func() bool { return pv.ctl.sm.Current().State == inverter.StateEventStarted })

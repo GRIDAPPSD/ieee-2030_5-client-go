@@ -130,114 +130,45 @@ func TestMapTransitionToStatus_Table(t *testing.T) {
 }
 
 // =============================================================================
-// (c) responseRequiredOn : bitmap selection per Table 32.
+// (c) responseRequiredOn : bitmap selection per Table 27.
 // =============================================================================
 
 func TestResponseRequiredOn_Bitmask(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
+	// Table 27 (IEEE 2030.5-2018) puts status 1 on bit 0 and statuses 2, 3, 6
+	// and 14 on bit 1; the mask 0x03 CSIP servers send therefore selects all
+	// five the hook emits.
+	statuses := []struct {
 		name   string
-		mask   uint8
 		status uint8
-		want   bool
+		bit    uint8
 	}{
-		{
-			name:   "0x00 mask selects nothing for status 1",
-			mask:   0x00,
-			status: sep2.ResponseStatusEventReceived,
-			want:   false,
-		},
-		{
-			name:   "0x00 mask selects nothing for status 2",
-			mask:   0x00,
-			status: sep2.ResponseStatusEventStarted,
-			want:   false,
-		},
-		{
-			name:   "0x00 mask selects nothing for status 3",
-			mask:   0x00,
-			status: sep2.ResponseStatusEventCompleted,
-			want:   false,
-		},
-		{
-			name:   "0x00 mask selects nothing for status 6",
-			mask:   0x00,
-			status: sep2.ResponseStatusEventCancelled,
-			want:   false,
-		},
-		{
-			name:   "0x01 mask selects status 1 (received)",
-			mask:   0x01,
-			status: sep2.ResponseStatusEventReceived,
-			want:   true,
-		},
-		{
-			name:   "0x01 mask does not select status 2 (started)",
-			mask:   0x01,
-			status: sep2.ResponseStatusEventStarted,
-			want:   false,
-		},
-		{
-			name:   "0x07 mask selects status 1 (received)",
-			mask:   0x07,
-			status: sep2.ResponseStatusEventReceived,
-			want:   true,
-		},
-		{
-			name:   "0x07 mask selects status 2 (started)",
-			mask:   0x07,
-			status: sep2.ResponseStatusEventStarted,
-			want:   true,
-		},
-		{
-			name:   "0x07 mask selects status 3 (completed)",
-			mask:   0x07,
-			status: sep2.ResponseStatusEventCompleted,
-			want:   true,
-		},
-		{
-			name:   "0x07 mask does not select status 6 (cancelled : bit 5)",
-			mask:   0x07,
-			status: sep2.ResponseStatusEventCancelled,
-			want:   false,
-		},
-		{
-			name:   "0x20 mask selects status 6 (cancelled)",
-			mask:   0x20,
-			status: sep2.ResponseStatusEventCancelled,
-			want:   true,
-		},
-		{
-			name:   "0x27 mask selects status 1 and status 6",
-			mask:   0x27,
-			status: sep2.ResponseStatusEventCancelled,
-			want:   true,
-		},
-		{
-			// Sentinel 0 ("no wire status") must never be selected,
-			// regardless of mask.
-			name:   "0xff mask does not select status 0 sentinel",
-			mask:   0xff,
-			status: 0,
-			want:   false,
-		},
-		{
-			// Out-of-scope statuses (4/5/7+) are not emitted by
-			// this hook and must read as false even if the bitmap would
-			// select them in principle.
-			name:   "0xff mask does not select status 4 (opt-out, out of scope)",
-			mask:   0xff,
-			status: sep2.ResponseStatusOptOut,
-			want:   false,
-		},
+		{"1 received", sep2.ResponseStatusEventReceived, 0x01},
+		{"2 started", sep2.ResponseStatusEventStarted, 0x02},
+		{"3 completed", sep2.ResponseStatusEventCompleted, 0x02},
+		{"6 cancelled", sep2.ResponseStatusEventCancelled, 0x02},
+		{"14 superseded by an alternate program", sep2.ResponseStatusEventSupersededAlternateProgram, 0x02},
 	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
+	for _, st := range statuses {
+		for _, mask := range []uint8{0x00, 0x01, 0x02, 0x03, 0x04, 0x07, 0x20} {
+			want := mask&st.bit != 0
+			t.Run(fmt.Sprintf("status %s mask %#02x", st.name, mask), func(t *testing.T) {
+				t.Parallel()
+				if got := responseRequiredOn(mask, st.status); got != want {
+					t.Errorf("responseRequiredOn(%#x, %d) = %v, want %v", mask, st.status, got, want)
+				}
+			})
+		}
+	}
+	for name, status := range map[string]uint8{
+		"status 0 sentinel":                  0,
+		"status 4 (opt-out, not emitted)":    sep2.ResponseStatusOptOut,
+		"status 11 (acknowledged, not sent)": sep2.ResponseStatusEventAcknowledged,
+	} {
+		t.Run("0xff mask does not select "+name, func(t *testing.T) {
 			t.Parallel()
-			got := responseRequiredOn(tc.mask, tc.status)
-			if got != tc.want {
-				t.Errorf("responseRequiredOn(%#x, %d) = %v, want %v", tc.mask, tc.status, got, tc.want)
+			if responseRequiredOn(0xff, status) {
+				t.Errorf("responseRequiredOn(0xff, %d) = true, want false", status)
 			}
 		})
 	}
@@ -441,7 +372,7 @@ func TestResponsePOSTHook_CancellationEmitsTwoPOSTs(t *testing.T) {
 	// Tick 1: add -> DEFAULT->RECEIVED (status 1, mask bit 0).
 	sm.Tick(clock(), []sep2.DERControl{dc}, nil, sched)
 	// Tick 2: cancel before fire -> RECEIVED->CANCELLED->DEFAULT
-	// (status 6, mask bit 5; DEFAULT auto-revert silent).
+	// (status 6, mask bit 1; DEFAULT auto-revert silent).
 	cancelled := dc.Copy()
 	cancelled.EventStatus = &sep2.EventStatus{CurrentStatus: sep2.EventStatusCancelled}
 	sm.Tick(clock(), nil, []sep2.DERControl{cancelled}, sched)
