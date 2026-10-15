@@ -16,8 +16,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	mathrand "math/rand/v2"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +32,16 @@ import (
 // the server's pollRate gives one.
 const defaultControlPoll = 900 * time.Second
 
+// A session re-walks its device's FSA list and programs on a notification, and
+// on a slow timer for when no notification arrives (subscriptions refused, a
+// notification lost). A walk costs an FSA list GET plus one program list GET
+// per FSA, per device, so the timer is a multiple of the control poll with a
+// floor, not the poll itself.
+const (
+	rewalkPollFactor = 4
+	minRewalk        = 5 * time.Minute
+)
+
 // controlSession is one managed device's control state, shared between its
 // session goroutine (which writes it) and the fleet tick (which reads it).
 type controlSession struct {
@@ -38,8 +50,24 @@ type controlSession struct {
 	sm         *inverter.StateMachine
 	defaultCtl atomic.Pointer[sep2.DefaultDERControl]
 
-	// interval, when set, replaces the poll interval; a test seam.
+	// interval, when set, replaces the poll interval; a test seam. rewalk
+	// does the same for the re-walk timer.
 	interval time.Duration
+	rewalk   time.Duration
+
+	// wake carries at most one pending "the program list may have changed";
+	// subs is the resources this session holds a subscription to.
+	wake chan struct{}
+	mu   sync.Mutex
+	subs map[string]bool
+	// noSubs is set when the server refuses subscriptions, so the session
+	// stops asking and relies on the timer.
+	noSubs bool
+
+	// superseded is set while the session drops a program in favour of a
+	// different one, so the controls it cancels are reported as superseded
+	// by an alternate program rather than as cancelled.
+	superseded atomic.Bool
 
 	// onExit, when set, runs as the session goroutine's last act before it
 	// is counted done; a test seam for observing that WaitControls waits.
@@ -47,7 +75,10 @@ type controlSession struct {
 }
 
 func newControlSession(c *simconfig.Controls) *controlSession {
-	cs := &controlSession{mode: simconfig.DefaultResponse, sm: inverter.NewStateMachine()}
+	cs := &controlSession{
+		mode: simconfig.DefaultResponse, sm: inverter.NewStateMachine(),
+		wake: make(chan struct{}, 1), subs: map[string]bool{},
+	}
 	if c != nil {
 		if c.Response != "" {
 			cs.mode = c.Response
@@ -55,6 +86,39 @@ func newControlSession(c *simconfig.Controls) *controlSession {
 		cs.pollS = c.PollS
 	}
 	return cs
+}
+
+// kick asks the session to re-walk its programs now. Requests made while one
+// is pending coalesce.
+func (cs *controlSession) kick() {
+	select {
+	case cs.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (cs *controlSession) subscribedTo(href string) bool {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return cs.subs[href]
+}
+
+func (cs *controlSession) setSubscribed(href string, on bool) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if on {
+		cs.subs[href] = true
+	} else {
+		delete(cs.subs, href)
+	}
+}
+
+// rewalkInterval is the re-walk timer for a session polling every poll.
+func (cs *controlSession) rewalkInterval(poll time.Duration) time.Duration {
+	if cs.rewalk > 0 {
+		return cs.rewalk
+	}
+	return max(rewalkPollFactor*poll, minRewalk)
 }
 
 func (cs *controlSession) follows() bool { return cs.mode == "follow" }
@@ -113,6 +177,9 @@ type controlsEnv struct {
 	client *inverter.SEP2Client
 	dcap   sep2.DeviceCapability
 	cfg    inverter.SimConfig
+
+	// notify, when set, has each session subscribe to the lists it walks.
+	notify *sessionNotify
 }
 
 // StartControls starts one control session goroutine per managed device
@@ -144,23 +211,55 @@ func (f *managedFleet) WaitControls() {
 	}
 }
 
-// runControls is one device's session. Discovering the device's programs is
-// retried with backoff until it succeeds, so a server that is down or slow
-// at start never leaves a follow device uncontrolled for the life of the
-// process; only another device's session is unaffected by it either way.
+// runControls is one device's session: discover the program to follow,
+// follow it, and discover again when it goes. Discovering is retried with
+// backoff until it succeeds, so a server that is down or slow at start never
+// leaves a follow device uncontrolled for the life of the process; only
+// another device's session is unaffected by it either way.
 func (md *managedDevice) runControls(ctx context.Context, env controlsEnv) {
 	client := env.client
 	tctx := inverter.WithTarget(ctx, md.lfdi)
 	interval := md.ctl.pollInterval(env.dcap)
 
-	prog, ok := md.discoverProgram(ctx, tctx, env, interval)
-	if !ok {
-		return
-	}
-
 	poster := targetedPoster{client: client, lfdi: md.lfdi, session: ctx}
-	md.ctl.sm.AddTransitionHook(responsePOSTHook(poster, md.lfdi, client.Now))
+	md.ctl.sm.AddTransitionHook(responseHook(poster, md.lfdi, client.Now, func(prev, next inverter.EventState) uint8 {
+		status := mapTransitionToStatus(prev, next)
+		if status == sep2.ResponseStatusEventCancelled && md.ctl.superseded.Load() {
+			return sep2.ResponseStatusEventSupersededAlternateProgram
+		}
+		return status
+	}))
 
+	var prog sep2.DERProgram
+	found := false
+	for {
+		if !found {
+			var ok bool
+			if prog, ok = md.discoverProgram(ctx, tctx, env, interval); !ok {
+				return
+			}
+		}
+		next, more := md.followProgram(ctx, tctx, env, interval, prog)
+		if !more {
+			return
+		}
+		// A replacement the re-walk already found is followed at once; only
+		// a program that is gone sends the session back to discovery.
+		if next != nil {
+			prog, found = *next, true
+		} else {
+			found = false
+		}
+	}
+}
+
+// followProgram polls prog's control list and default control. It returns
+// more=false when ctx ends. When a re-walk no longer selects prog, its
+// controls are cancelled and its default dropped, and it returns more=true
+// with the program to follow next, or nil when none is left and the caller
+// must discover again.
+func (md *managedDevice) followProgram(ctx, tctx context.Context, env controlsEnv, interval time.Duration, prog sep2.DERProgram) (next *sep2.DERProgram, more bool) {
+	client := env.client
 	sched := inverter.NewScheduler(client.Now, mathrand.New(mathrand.NewPCG(uint64(time.Now().UnixNano()), 0xCAFEBABE)))
 	cache := inverter.NewDERControlCache()
 	href := prog.DERControlListLink.Href
@@ -211,30 +310,113 @@ func (md *managedDevice) runControls(ctx context.Context, env controlsEnv) {
 	step()
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	rewalk := time.NewTicker(md.ctl.rewalkInterval(interval))
+	defer rewalk.Stop()
 	for {
+		walk := false
 		select {
 		case <-ctx.Done():
-			return
+			return nil, false
 		case <-t.C:
 			step()
+		case <-md.ctl.wake:
+			walk = true
+		case <-rewalk.C:
+			walk = true
 		}
+		if !walk {
+			continue
+		}
+		moved, replacement := md.programMoved(ctx, tctx, env, prog)
+		if !moved {
+			continue
+		}
+		// Everything the program had delivered is gone with it. A control
+		// dropped for a different program is superseded; one whose program
+		// was deleted, or replaced under the same mRID, is cancelled.
+		_, gone := diffSnapshots(prev, nil)
+		md.ctl.defaultCtl.Store(nil)
+		md.ctl.superseded.Store(replacement != nil && replacement.MRID != prog.MRID)
+		md.ctl.sm.Tick(client.Now(), nil, gone, sched)
+		md.ctl.superseded.Store(false)
+		return replacement, true
 	}
+}
+
+// programMoved re-walks the device's programs and reports whether prog is no
+// longer the one to follow, with its replacement, or nil when no program is
+// left. A walk that fails says nothing about the program, so it keeps being
+// followed.
+func (md *managedDevice) programMoved(ctx, tctx context.Context, env controlsEnv, prog sep2.DERProgram) (moved bool, replacement *sep2.DERProgram) {
+	// The program is being followed, so an empty answer means it is gone and
+	// must come back to the caller, not idle inside the walk the way a
+	// session still discovering does.
+	env.cfg.CSIP = false
+	w, what, err := md.walkPrograms(tctx, env)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("managed device %s (%s): re-walk: %s failed (keeping program %s): %v", md.name, md.lfdi, what, prog.MRID, err)
+		}
+		return false, nil
+	}
+	md.subscribe(tctx, env, w.watch)
+	if w.unreadable[prog.MRID] {
+		// The followed program is still listed; failing to read its list
+		// now says nothing about whether it is gone.
+		log.Printf("managed device %s (%s): program %s control list unreadable in the re-walk; keeping it", md.name, md.lfdi, prog.MRID)
+		return false, nil
+	}
+	next, found := w.prog, w.found
+	if !found {
+		log.Printf("managed device %s (%s): program %s is gone; returning to discovery", md.name, md.lfdi, prog.MRID)
+		return true, nil
+	}
+	if !sameProgram(prog, next) {
+		log.Printf("managed device %s (%s): program %s replaces %s; switching", md.name, md.lfdi, next.MRID, prog.MRID)
+		return true, &next
+	}
+	return false, nil
+}
+
+// sameProgram reports whether b is a followed program's a: the same mRID
+// served from the same control list and default control.
+func sameProgram(a, b sep2.DERProgram) bool {
+	return a.MRID == b.MRID &&
+		listHref(a.DERControlListLink) == listHref(b.DERControlListLink) &&
+		linkHref(a.DefaultDERControlLink) == linkHref(b.DefaultDERControlLink)
+}
+
+func listHref(l *sep2.ListLink) string {
+	if l == nil {
+		return ""
+	}
+	return l.Href
+}
+
+func linkHref(l *sep2.Link) string {
+	if l == nil {
+		return ""
+	}
+	return l.Href
 }
 
 // discoverProgram walks the device's FSA list and DERPrograms and returns
 // the program to follow. A failed read is logged naming the device and
 // retried after mirrorBackoff(interval, failures), forever. A walk that finds
 // no program with a DERControlList is logged and repeated every interval,
-// since a program may be added later. It returns false only when ctx ends.
+// since a program may be added later. A notification wakes the wait early. It
+// returns false only when ctx ends.
 func (md *managedDevice) discoverProgram(ctx, tctx context.Context, env controlsEnv, interval time.Duration) (sep2.DERProgram, bool) {
 	failures := 0
 	for {
-		prog, found, what, err := md.walkPrograms(tctx, env)
+		w, what, err := md.walkPrograms(tctx, env)
 		var wait time.Duration
 		switch {
-		case err == nil && found:
-			return prog, true
 		case err == nil:
+			md.subscribe(tctx, env, w.watch)
+			if w.found {
+				return w.prog, true
+			}
 			wait = interval
 			log.Printf("managed device %s (%s): no DERProgram with a DERControlList; looking again in %s", md.name, md.lfdi, wait)
 		default:
@@ -250,22 +432,34 @@ func (md *managedDevice) discoverProgram(ctx, tctx context.Context, env controls
 		case <-ctx.Done():
 			timer.Stop()
 			return sep2.DERProgram{}, false
+		case <-md.ctl.wake:
+			timer.Stop()
 		case <-timer.C:
 		}
 	}
 }
 
+// programWalk is what one walk found: the program to follow, the programs
+// whose control list could not be read, and the lists the answer came from.
+type programWalk struct {
+	prog       sep2.DERProgram
+	found      bool
+	unreadable map[string]bool
+	watch      []string
+}
+
 // walkPrograms makes one FSA list and DERProgram walk as the device. what
 // names the failed phase.
-func (md *managedDevice) walkPrograms(tctx context.Context, env controlsEnv) (prog sep2.DERProgram, found bool, what string, err error) {
+func (md *managedDevice) walkPrograms(tctx context.Context, env controlsEnv) (w programWalk, what string, err error) {
 	fsaList, err := runPhase2cFSAList(tctx, env.client, md.edev, env.cfg, env.dcap)
 	if err != nil {
-		return prog, false, "FSA list", err
+		return w, "FSA list", err
 	}
 	programs := map[string]sep2.DERProgram{}
+	w.unreadable = map[string]bool{}
 	if len(fsaList.FunctionSetAssignments) > 0 {
-		if programs, err = runPhase2cDERProgramWalkOpts(tctx, env.client, fsaList, env.cfg, env.dcap, true); err != nil {
-			return prog, false, "DERProgram walk", err
+		if programs, err = runPhase2cDERProgramWalkOpts(tctx, env.client, fsaList, env.cfg, env.dcap, true, w.unreadable); err != nil {
+			return w, "DERProgram walk", err
 		}
 	}
 	// A program with no DERControlList has nothing to follow, so it never
@@ -275,6 +469,46 @@ func (md *managedDevice) walkPrograms(tctx context.Context, env controlsEnv) (pr
 			delete(programs, mrid)
 		}
 	}
-	prog, found = inverter.SelectHighestPriority(programs)
-	return prog, found, "", nil
+	if h := listHref(md.edev.FunctionSetAssignmentsListLink); h != "" {
+		w.watch = append(w.watch, h)
+	}
+	for _, fsa := range fsaList.FunctionSetAssignments {
+		if h := listHref(fsa.DERProgramListLink); h != "" {
+			w.watch = append(w.watch, h)
+		}
+	}
+	w.prog, w.found = inverter.SelectHighestPriority(programs)
+	return w, "", nil
+}
+
+// subscribe subscribes the device, as itself, to each href it does not
+// already hold a subscription to. A refusal is logged and retried on a later
+// walk, except a 405, which means the server takes no subscriptions at all.
+func (md *managedDevice) subscribe(tctx context.Context, env controlsEnv, hrefs []string) {
+	n := env.notify
+	if n == nil || md.ctl.noSubs || listHref(md.edev.SubscriptionListLink) == "" {
+		return
+	}
+	for _, href := range hrefs {
+		if md.ctl.subscribedTo(href) {
+			continue
+		}
+		// Watch first: a notification that races the 201 must still wake us.
+		n.router.watch(href, md.ctl)
+		md.ctl.setSubscribed(href, true)
+		_, err := n.poster.PostSubscription(tctx, md.edev.SubscriptionListLink.Href, href, n.url)
+		if err == nil {
+			continue
+		}
+		md.ctl.setSubscribed(href, false)
+		if errors.Is(err, inverter.ErrMethodNotAllowed) {
+			md.ctl.noSubs = true
+			log.Printf("managed device %s: server takes no subscriptions; relying on the periodic re-walk", md.name)
+			return
+		}
+		if tctx.Err() != nil {
+			return
+		}
+		log.Printf("managed device %s: subscribe to %s failed (retrying on a later walk): %v", md.name, href, err)
+	}
 }

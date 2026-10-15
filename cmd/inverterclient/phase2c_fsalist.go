@@ -137,7 +137,7 @@ func runPhase2cFSAList(
 
 	switch {
 	case edev.FunctionSetAssignmentsListLink == nil && (!cfg.CSIP || cfg.AllowUnregistered):
-		log.Println("EndDevice has no FunctionSetAssignmentsListLink; skipping Phase 2c (--csip off or --allow-unregistered)")
+		log.Println("EndDevice has no FunctionSetAssignmentsListLink; skipping Phase 2c (not CSIP-strict: --csip off, --allow-unregistered, or a re-walk of a followed program)")
 		return fsaList, nil
 
 	case edev.FunctionSetAssignmentsListLink == nil:
@@ -178,7 +178,7 @@ func runPhase2cFSAList(
 				}
 				continue
 			}
-			log.Println("FSAList empty; proceeding (--csip off or --allow-unregistered)")
+			log.Println("FSAList empty; proceeding (not CSIP-strict: --csip off, --allow-unregistered, or a re-walk of a followed program)")
 			fsaList = list
 			return fsaList, nil
 		}

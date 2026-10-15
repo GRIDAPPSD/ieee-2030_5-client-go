@@ -141,18 +141,22 @@ func walkDERProgramTree(
 	fsaList sep2.FunctionSetAssignmentsList,
 	out map[string]sep2.DERProgram,
 ) error {
-	return walkDERProgramTreeOpts(ctx, client, fsaList, out, false)
+	return walkDERProgramTreeOpts(ctx, client, fsaList, out, false, nil)
 }
 
-// walkDERProgramTreeOpts is walkDERProgramTree; with lenientDefault a failed
-// DefaultDERControl read is logged and skipped instead of failing the walk,
-// for callers that re-read the default on their own cadence.
+// walkDERProgramTreeOpts is walkDERProgramTree; with lenient a failed
+// DefaultDERControl or DERCurveList read is logged and the program kept
+// instead of failing the walk, for callers that re-read those on their own
+// cadence. A program whose DERControlList cannot be read is left out of out
+// and recorded in unreadable (when non-nil), so one broken program neither
+// blinds the walk nor can be chosen over a readable one.
 func walkDERProgramTreeOpts(
 	ctx context.Context,
 	client *inverter.SEP2Client,
 	fsaList sep2.FunctionSetAssignmentsList,
 	out map[string]sep2.DERProgram,
-	lenientDefault bool,
+	lenient bool,
+	unreadable map[string]bool,
 ) error {
 	for _, fsa := range fsaList.FunctionSetAssignments {
 		if fsa.DERProgramListLink == nil {
@@ -172,7 +176,7 @@ func walkDERProgramTreeOpts(
 		for _, prog := range progList.DERProgram {
 			if prog.DefaultDERControlLink != nil {
 				if _, _, err := client.GetDefaultDERControl(ctx, prog.DefaultDERControlLink.Href); err != nil {
-					if !lenientDefault {
+					if !lenient {
 						return fmt.Errorf("DERProgram mRID=%s DefaultDERControl: %w", prog.MRID, err)
 					}
 					log.Printf("  DERProgram mRID=%s DefaultDERControl read failed (walk continues): %v", prog.MRID, err)
@@ -180,12 +184,22 @@ func walkDERProgramTreeOpts(
 			}
 			if prog.DERControlListLink != nil {
 				if _, _, err := client.GetDERControlList(ctx, prog.DERControlListLink.Href); err != nil {
-					return fmt.Errorf("DERProgram mRID=%s DERControlList: %w", prog.MRID, err)
+					if !lenient {
+						return fmt.Errorf("DERProgram mRID=%s DERControlList: %w", prog.MRID, err)
+					}
+					log.Printf("  DERProgram mRID=%s DERControlList read failed (program left out of this walk): %v", prog.MRID, err)
+					if unreadable != nil {
+						unreadable[prog.MRID] = true
+					}
+					continue
 				}
 			}
 			if prog.DERCurveListLink != nil {
 				if _, err := client.GetDERCurveList(ctx, prog.DERCurveListLink.Href); err != nil {
-					return fmt.Errorf("DERProgram mRID=%s DERCurveList: %w", prog.MRID, err)
+					if !lenient {
+						return fmt.Errorf("DERProgram mRID=%s DERCurveList: %w", prog.MRID, err)
+					}
+					log.Printf("  DERProgram mRID=%s DERCurveList read failed (walk continues): %v", prog.MRID, err)
 				}
 			}
 			out[prog.MRID] = prog
@@ -424,7 +438,12 @@ func main() {
 	// require it; the inverter has working polling for every function set
 	// in scope. If cert load, TCP bind, or address resolution fails, log
 	// the error and continue with polling-only rather than crash.
-	notifyReceiver = startNotifyReceiver(cfg, *notifyListen, hmi, notifyDispatcher.Dispatch)
+	// A notification for a list a managed device's session subscribed to wakes
+	// that session; every other notification goes to the dispatcher.
+	sessionRouter := newNotifyRouter()
+	// Managed-device hrefs never coincide with the main EndDevice's own
+	// subscriptions, so routing first never swallows a dispatcher notification.
+	notifyReceiver = startNotifyReceiver(cfg, *notifyListen, hmi, routeThenDispatch(sessionRouter, notifyDispatcher.Dispatch))
 	// effectiveAdvertiseHost is the host:port the notify URL actually
 	// names: --notify-advertise-host's own port when it gives one,
 	// otherwise --notify-advertise-host's host combined with the port the
@@ -1027,7 +1046,11 @@ func main() {
 		if simFile != nil {
 			managed.setStatusInterval(time.Duration(simFile.Status.IntervalS) * time.Second)
 		}
-		managed.StartControls(ctx, controlsEnv{client: client, dcap: dcap, cfg: cfg})
+		env := controlsEnv{client: client, dcap: dcap, cfg: cfg}
+		if url := notifyURLForReceiver(notifyReceiver, effectiveAdvertiseHost); url != "" {
+			env.notify = &sessionNotify{poster: client, url: url, router: sessionRouter}
+		}
+		managed.StartControls(ctx, env)
 		reservations = startReservations(client, edev, simFile, managed)
 	} else {
 		reporter = runPhase4Metering(ctx, client, dcap, derStatusHref)
