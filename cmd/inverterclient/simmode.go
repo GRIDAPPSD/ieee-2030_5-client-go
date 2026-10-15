@@ -1,7 +1,9 @@
 // Sim mode: one JSON file holds every sim setting for the process. A
 // setting resolves flag > env > file > default, where "default" is the
 // config schema's default when a file is loaded. With no file the flags
-// behave exactly as they always have: none of the env names below is read.
+// behave exactly as they always have. The settings env vars below are read
+// only with a file; SEP2_SIM_CONFIG, SEP2_PEN and SEP2_NOTIFY_LISTEN are read
+// without one.
 
 package main
 
