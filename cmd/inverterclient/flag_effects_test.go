@@ -56,6 +56,7 @@ func (s *fxServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RegistrationLink:     &sep2.Link{Href: "/edev/0/rg"},
 		SubscriptionListLink: &sep2.ListLink{Href: "/edev/0/sub"},
 		DERListLink:          &sep2.ListLink{Href: "/edev/0/der"},
+		LogEventListLink:     &sep2.ListLink{Href: "/edev/0/lel"},
 	}
 	edev.Href = "/edev/0"
 	var v any
@@ -74,6 +75,10 @@ func (s *fxServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		v = &edev
 	case r.Method == http.MethodGet && r.URL.Path == "/edev/0/rg":
 		v = &sep2.Registration{PIN: s.pin}
+	case r.Method == http.MethodPost && r.URL.Path == "/edev/0/lel":
+		w.Header().Set("Location", "/edev/0/lel/1")
+		w.WriteHeader(http.StatusCreated)
+		return
 	case r.Method == http.MethodPost && r.URL.Path == "/edev/0/sub":
 		w.Header().Set("Location", "/edev/0/sub/1")
 		w.WriteHeader(http.StatusCreated)
@@ -283,17 +288,18 @@ func TestFlagEffects_ServerAndCertFlags(t *testing.T) {
 		name     string
 		args     func(serverURL string) []string
 		wantDcap bool
+		wantOut  string // the refusal as the side that refused prints it
 	}{
-		{"all four set", func(u string) []string { return append([]string{"--server=" + u}, fxCertArgs(env)...) }, true},
+		{"all four set", func(u string) []string { return append([]string{"--server=" + u}, fxCertArgs(env)...) }, true, ""},
 		{"cert from another CA is refused by the server", func(u string) []string {
 			return []string{"--server=" + u, "--cert=" + other.deviceCertPath, "--key=" + other.deviceKeyPath, "--ca=" + env.caCertPath}
-		}, false},
+		}, false, "remote error: tls: bad certificate"},
 		{"key that does not match the cert stops the client", func(u string) []string {
 			return []string{"--server=" + u, "--cert=" + env.deviceCertPath, "--key=" + other.deviceKeyPath, "--ca=" + env.caCertPath}
-		}, false},
+		}, false, "private key does not match public key"},
 		{"ca that did not sign the server cert is refused by the client", func(u string) []string {
 			return []string{"--server=" + u, "--cert=" + env.deviceCertPath, "--key=" + env.deviceKeyPath, "--ca=" + other.caCertPath}
-		}, false},
+		}, false, "x509: certificate signed by unknown authority"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := &fxServer{lfdi: fxLFDI(t, env.deviceCertPath)}
@@ -311,6 +317,9 @@ func TestFlagEffects_ServerAndCertFlags(t *testing.T) {
 			}
 			if code != 1 {
 				t.Errorf("exit = %d, want 1; output:\n%s", code, p.out.String())
+			}
+			if !strings.Contains(p.out.String(), tc.wantOut) {
+				t.Errorf("output lacks %q, so the refusal came from somewhere else:\n%s", tc.wantOut, p.out.String())
 			}
 			if n := srv.count("GET", "/dcap"); n != 0 {
 				t.Errorf("server saw %d GET /dcap, want 0", n)
@@ -482,6 +491,11 @@ func TestFlagEffects_HMIPortServesDashboard(t *testing.T) {
 		if !ok || status != http.StatusOK {
 			t.Fatalf("dashboard on port %d: reachable=%v status=%d; output:\n%s", port, ok, status, p.out.String())
 		}
+		// Ties the log line the default-off case looks for to the property: a
+		// renamed line fails here instead of emptying that check.
+		if !strings.Contains(p.out.String(), "HMI dashboard: http://") {
+			t.Errorf("dashboard is up but the start line is missing; output:\n%s", p.out.String())
+		}
 	})
 
 	t.Run("default is off", func(t *testing.T) {
@@ -492,7 +506,12 @@ func TestFlagEffects_HMIPortServesDashboard(t *testing.T) {
 		if !p.waitCond(t, 15*time.Second, func() bool { return srv.count("GET", "/dcap") > 0 }) {
 			t.Fatalf("client never reached the server; output:\n%s", p.out.String())
 		}
-		if strings.Contains(p.out.String(), "HMI dashboard: http://") {
+		// Phase 5 starts after the HMI step, so reaching it shows the HMI
+		// code ran and chose not to bind.
+		if !p.waitCond(t, 15*time.Second, func() bool { return strings.Contains(p.out.String(), "=== Phase 5: Simulation") }) {
+			t.Fatalf("client never reached the simulation loop; output:\n%s", p.out.String())
+		}
+		if strings.Contains(p.out.String(), "HMI dashboard") {
 			t.Errorf("HMI started without --hmi-port:\n%s", p.out.String())
 		}
 	})
@@ -573,6 +592,9 @@ func TestFlagEffects_TimescaleAndTickSetSimStep(t *testing.T) {
 		want time.Duration
 	}{
 		{"defaults", nil, 60 * time.Second},
+		// Each default is pinned by setting only the other flag.
+		{"timescale only, default tick is 1s", []string{"--timescale=10"}, 10 * time.Second},
+		{"tick only, default timescale is 60", []string{"--tick=2s"}, 120 * time.Second},
 		{"both set", []string{"--timescale=10", "--tick=2s"}, 20 * time.Second},
 	} {
 		cfg := parseFlagsOnly(t, tc.args...)
@@ -594,15 +616,11 @@ func TestFlagEffects_TimescaleAndTickSetSimStep(t *testing.T) {
 // replay.clock decides which row of the recording the first read returns:
 // "start" begins at row 0, "wall" follows the UTC minute of day.
 func TestFlagEffects_ReplayClockPicksTheRow(t *testing.T) {
-	// Row 0 holds 1 W and every other minute 2 W, so the two clocks differ
-	// except in the single minute after 00:00 UTC.
+	// Row m holds m+1 W, so a read names the row it came from: "start" is
+	// 1 W and "wall" is the UTC minute of day plus one.
 	var b strings.Builder
 	for m := 0; m < 1440; m++ {
-		v := 2
-		if m == 0 {
-			v = 1
-		}
-		fmt.Fprintf(&b, "2020-01-01 %02d:%02d:00 UTC,%d\n", m/60, m%60, v)
+		fmt.Fprintf(&b, "2020-01-01 %02d:%02d:00 UTC,%d\n", m/60, m%60, m+1)
 	}
 	rec := filepath.Join(t.TempDir(), "rec.csv")
 	if err := os.WriteFile(rec, []byte(b.String()), 0o600); err != nil {
@@ -612,15 +630,10 @@ func TestFlagEffects_ReplayClockPicksTheRow(t *testing.T) {
 		t.Skip("00:00 UTC makes wall and start read the same row")
 	}
 
-	for _, tc := range []struct {
-		clock string
-		want  float64
-	}{
-		{"start", 1},
-		{"wall", 2},
-	} {
-		t.Run(tc.clock, func(t *testing.T) {
-			body := fmt.Sprintf(`{"backend":"replay","device":{"type":"pv","rated_w":5000},"replay":{"file":%q,"clock":%q,"scale":1}}`, rec, tc.clock)
+	minuteRow := func(now time.Time) float64 { return float64(now.Hour()*60 + now.Minute() + 1) }
+	for _, clock := range []string{"start", "wall"} {
+		t.Run(clock, func(t *testing.T) {
+			body := fmt.Sprintf(`{"backend":"replay","device":{"type":"pv","rated_w":5000},"replay":{"file":%q,"clock":%q,"scale":1}}`, rec, clock)
 			cfg, _, err := resolveSim(t, writeSimConfig(t, body), nil)
 			if err != nil {
 				t.Fatal(err)
@@ -629,13 +642,41 @@ func TestFlagEffects_ReplayClockPicksTheRow(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			before := time.Now().UTC()
 			st, err := d.ReadState(t.Context())
+			after := time.Now().UTC()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if st.MaxPowerW != tc.want {
-				t.Errorf("clock=%s: first read = %v W, want %v W", tc.clock, st.MaxPowerW, tc.want)
+			// A read that straddles a minute boundary may name either row.
+			want := []float64{1}
+			if clock == "wall" {
+				want = []float64{minuteRow(before), minuteRow(after)}
+			}
+			if st.MaxPowerW != want[0] && st.MaxPowerW != want[len(want)-1] {
+				t.Errorf("clock=%s: first read = %v W, want one of %v W", clock, st.MaxPowerW, want)
 			}
 		})
+	}
+}
+
+// --pen is stamped into every LogEvent the client posts: the alarm the
+// enterservice scenario raises on its first tick reaches the server with it.
+func TestFlagEffects_PENIsStampedOnPostedLogEvents(t *testing.T) {
+	bin := fxBuild(t)
+	env := newDERWalkTestEnv(t)
+	srv := &fxServer{lfdi: fxLFDI(t, env.deviceCertPath)}
+	serverURL, _ := startDERWalkListener(t, env, srv)
+	args := append([]string{"--server=" + serverURL, "--notify-listen=", "--scenario=enterservice", "--tick=50ms", "--timescale=600", "--pen=40732"}, fxCertArgs(env)...)
+	p := fxStart(t, bin, args...)
+	if !p.waitCond(t, 20*time.Second, func() bool { return srv.count("POST", "/edev/0/lel") > 0 }) {
+		t.Fatalf("no LogEvent POST; output:\n%s", p.out.String())
+	}
+	var evt sep2.LogEvent
+	if err := xml.Unmarshal([]byte(srv.body("POST", "/edev/0/lel")), &evt); err != nil {
+		t.Fatalf("decode LogEvent: %v", err)
+	}
+	if evt.LogEventPEN != 40732 {
+		t.Errorf("LogEventPEN = %d, want 40732", evt.LogEventPEN)
 	}
 }
