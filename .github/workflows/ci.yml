@@ -88,7 +88,7 @@ jobs:
         # wheel built for a different interpreter. On a hit, the install
         # step below never contacts PyPI (--no-index --find-links); on a
         # miss it downloads once.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: sim/gridlabd/.wheelhouse
           key: gldsidecar-wheelhouse-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('sim/gridlabd/requirements.lock', 'sim/gridlabd/requirements-dev.lock') }}
