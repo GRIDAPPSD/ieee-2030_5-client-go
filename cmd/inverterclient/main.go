@@ -852,6 +852,7 @@ func main() {
 	// See GRIDAPPSD/ieee-2030_5-server-go#102.
 	sched := inverter.NewScheduler(client.Now, mathrand.New(mathrand.NewPCG(uint64(time.Now().UnixNano()), 0xCAFEBABE)))
 	stateMachine := inverter.NewStateMachine()
+	stateMachine.SetValidator(controlValidator(ownRatings))
 
 	// Curve cache populated by the state-machine hook on
 	// EVENT_RECEIVED -> EVENT_STARTED. ApplyControlsWithCurves reads from
@@ -1108,7 +1109,7 @@ func main() {
 	// freeze during disturbance so the classification sees the original
 	// setpoint, not the curtailed value.
 	preDisturbancePW := 0.0
-	var refusals refusalLog
+	var applier controlApplier
 
 	ticker := time.NewTicker(cfg.TickInterval)
 	defer ticker.Stop()
@@ -1179,8 +1180,7 @@ func main() {
 			// server-supplied Volt/Var and Volt/Watt curves; misses fall
 			// back to IEEE 1547 defaults inside the controller.
 			base := inverter.ActiveControlBase(stateMachine.Current(), defaultCtl)
-			controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, ownRatings(), curveCache)
-			refusals.observe("inverter", controls.Refused)
+			controls := applier.apply("inverter", base, reading.Grid, reading.MaxPowerW, ownRatings(), curveCache)
 
 			// ApplySetpoint: push the commanded control output to the device
 			// and get back the achieved InverterState.

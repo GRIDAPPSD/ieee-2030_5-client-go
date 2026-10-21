@@ -90,6 +90,17 @@ func ApplyControlsWithCurves(
 		return out
 	}
 
+	// A base that cannot be honored is refused whole: nothing in it is
+	// applied, and the caller keeps the controls in force before it.
+	var fixedVAr float64
+	if base.OpModFixedVar != nil {
+		q, err := fixedVarVAr(*base.OpModFixedVar, ratings)
+		if err != nil {
+			return ControlOutputs{Refused: err}
+		}
+		fixedVAr = q
+	}
+
 	// Priority a: connect/disconnect
 	if base.OpModConnect != nil && !*base.OpModConnect {
 		return ControlOutputs{
@@ -156,19 +167,7 @@ func ApplyControlsWithCurves(
 		out.ActivePowerW = float64(base.OpModTargetW.Value) * math.Pow(10, float64(base.OpModTargetW.Multiplier))
 	}
 
-	// Priority e: reactive power modes (mutually exclusive). A refused
-	// fixed var is treated as absent, so the next mode in this order applies.
-	var fixedVAr float64
-	fixedVarOK := false
-	if base.OpModFixedVar != nil {
-		var err error
-		fixedVAr, err = fixedVarVAr(*base.OpModFixedVar, ratings)
-		if err != nil {
-			out.Refused = err
-		} else {
-			fixedVarOK = true
-		}
-	}
+	// Priority e: reactive power modes (mutually exclusive)
 	switch {
 	case base.OpModVoltVar != nil:
 		// Volt-var: reactive power as function of voltage. Uses the
@@ -178,7 +177,7 @@ func ApplyControlsWithCurves(
 		out.ReactivePowerVAr = qFraction * Rating.RatedVAr
 		out.Mode = ModeVoltVar
 
-	case fixedVarOK:
+	case base.OpModFixedVar != nil:
 		out.ReactivePowerVAr = fixedVAr
 		out.Mode = ModeConstantQ
 
@@ -240,6 +239,16 @@ func fixedVarVAr(fv sep2.FixedVar, r Ratings) (float64, error) {
 		return 0, fmt.Errorf("%w: refType %d is not %%setMaxW, %%setMaxVar or %%statVarAvail", ErrFixedVarRefused, fv.RefType)
 	}
 	return float64(fv.Value) / percentFullScale * basis, nil
+}
+
+// CheckControl reports whether the device can honor base as a whole, with
+// the same rule ApplyControls refuses by. A nil base is honored.
+func CheckControl(base *sep2.DERControlBase, r Ratings) error {
+	if base == nil || base.OpModFixedVar == nil {
+		return nil
+	}
+	_, err := fixedVarVAr(*base.OpModFixedVar, r)
+	return err
 }
 
 // lookupCurveOrDefault returns the cached curve for `curveType` when

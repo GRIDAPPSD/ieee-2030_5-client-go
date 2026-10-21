@@ -222,6 +222,7 @@ func (md *managedDevice) runControls(ctx context.Context, env controlsEnv) {
 	interval := md.ctl.pollInterval(env.dcap)
 
 	poster := targetedPoster{client: client, lfdi: md.lfdi, session: ctx}
+	md.ctl.sm.SetValidator(controlValidator(md.ratings))
 	md.ctl.sm.AddTransitionHook(responseHook(poster, md.lfdi, client.Now, func(prev, next inverter.EventState) uint8 {
 		status := mapTransitionToStatus(prev, next)
 		if status == sep2.ResponseStatusEventCancelled && md.ctl.superseded.Load() {

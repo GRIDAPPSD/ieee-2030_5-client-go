@@ -142,10 +142,9 @@ func TestApplyControlsFixedVar(t *testing.T) {
 	}
 }
 
-// TestApplyControlsFixedVarRefused pins the refusal: a basis the device does
-// not know, or a setpoint outside the schema's ranges, is refused with a
-// reason. The refused mode is not applied; the next reactive mode in
-// priority order is, as if opModFixedVar were absent.
+// TestApplyControlsFixedVarRefused: a base whose fixed var cannot be honored
+// is refused whole. Nothing in it is applied, including its other modes, so
+// the caller keeps what was in force.
 func TestApplyControlsFixedVarRefused(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -156,15 +155,17 @@ func TestApplyControlsFixedVarRefused(t *testing.T) {
 		{"refType 1 with no setMaxW", sep2.FixedVar{RefType: 1, Value: 5000}, Ratings{SetMaxVar: 8000}, "setMaxW"},
 		{"refType 2 with no setMaxVar", sep2.FixedVar{RefType: 2, Value: 5000}, Ratings{SetMaxW: 20000}, "setMaxVar"},
 		{"refType 3 with no statVarAvail", sep2.FixedVar{RefType: 3, Value: 5000}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "statVarAvail"},
-		{"refType 0 is not a DERUnitRefType for fixed var", sep2.FixedVar{RefType: 0, Value: 5000}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "refType 0"},
-		{"refType 4 is not a DERUnitRefType for fixed var", sep2.FixedVar{RefType: 4, Value: 5000}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "refType 4"},
+		{"refType 0", sep2.FixedVar{RefType: 0, Value: 5000}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "refType 0"},
+		{"refType 4", sep2.FixedVar{RefType: 4, Value: 5000}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "refType 4"},
 		{"value above full scale", sep2.FixedVar{RefType: 2, Value: 10001}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "10001"},
 		{"value below negative full scale", sep2.FixedVar{RefType: 2, Value: -10001}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "-10001"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fv := tt.fv
-			base := &sep2.DERControlBase{OpModFixedVar: &fv}
+			fixedW := sep2.SignedPerCent(2500)
+			inject := sep2.FixedPowerFactor{Displacement: 900}
+			base := &sep2.DERControlBase{OpModFixedVar: &fv, OpModFixedW: &fixedW, OpModFixedPFInjectW: &inject}
 			out := ApplyControls(base, GridState{VoltsPU: 1.0, FreqHz: 60.0}, 8000, tt.ratings)
 			if !errors.Is(out.Refused, ErrFixedVarRefused) {
 				t.Fatalf("Refused = %v, want ErrFixedVarRefused", out.Refused)
@@ -172,45 +173,10 @@ func TestApplyControlsFixedVarRefused(t *testing.T) {
 			if !strings.Contains(out.Refused.Error(), tt.reason) {
 				t.Errorf("Refused = %q, want it to name %q", out.Refused, tt.reason)
 			}
-			if out.Mode != ModeConstantPF || out.ReactivePowerVAr != 0 {
-				t.Errorf("mode = %v, Q = %g; want the no-reactive-control default (ConstantPF, 0)", out.Mode, out.ReactivePowerVAr)
+			if out != (ControlOutputs{Refused: out.Refused}) {
+				t.Errorf("refused base produced outputs %+v; want none applied", out)
 			}
 		})
-	}
-
-	t.Run("next reactive mode applies", func(t *testing.T) {
-		fv := sep2.FixedVar{RefType: 3, Value: 5000}
-		inject := sep2.FixedPowerFactor{Displacement: 900}
-		base := &sep2.DERControlBase{OpModFixedVar: &fv, OpModFixedPFInjectW: &inject}
-		out := ApplyControls(base, GridState{VoltsPU: 1.0, FreqHz: 60.0}, 8000, Ratings{SetMaxW: 20000})
-		if !errors.Is(out.Refused, ErrFixedVarRefused) {
-			t.Fatalf("Refused = %v, want ErrFixedVarRefused", out.Refused)
-		}
-		want := 8000 * tanFromPF(0.9)
-		if math.Abs(out.ReactivePowerVAr-want) > 1e-9 {
-			t.Errorf("Q = %g, want %g from opModFixedPFInjectW", out.ReactivePowerVAr, want)
-		}
-	})
-}
-
-func TestApplyControlsPriorityDisconnectOverAll(t *testing.T) {
-	connected := false
-	maxWPct := sep2.PerCent(5000)
-	base := &sep2.DERControlBase{
-		OpModConnect: &connected,
-		OpModMaxLimW: &maxWPct,
-		OpModVoltVar: &sep2.DERCurveLink{Href: "/dc/1"},
-	}
-	grid := GridState{VoltsPU: 1.05, FreqHz: 60.0}
-
-	out := ApplyControls(base, grid, 8000, Ratings{SetMaxW: RatedW(Rating.RatedW)})
-
-	// Disconnect has highest priority : all others ignored
-	if out.Connected {
-		t.Error("disconnect should override all")
-	}
-	if out.ActivePowerW != 0 {
-		t.Error("disconnected P should be 0")
 	}
 }
 

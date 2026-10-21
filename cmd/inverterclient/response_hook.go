@@ -47,6 +47,10 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
+// responseStatusRejectedInvalidEvent is IEEE 2030.5-2018 Table 27 status
+// 253, "Rejected: invalid event", which core does not name.
+const responseStatusRejectedInvalidEvent uint8 = 253
+
 // responsePOSTTimeout caps every PostResponseWithRetry call from the
 // hook. Sized to cover the worst-case retry schedule (three
 // attempts at PostResponse's ~10s HTTP timeout plus two backoffs of ~500ms
@@ -176,6 +180,7 @@ func responseHook(client responsePoster, lfdi string, now nowFunc, statusOf func
 //     EVENT_RECEIVED    -> EVENT_STARTED    => ResponseStatusEventStarted   (2)
 //     EVENT_STARTED     -> EVENT_COMPLETED  => ResponseStatusEventCompleted (3)
 //   - -> EVENT_CANCELLED  => ResponseStatusEventCancelled (6)
+//   - -> EVENT_REJECTED   => Rejected: invalid event (253), at receipt
 //
 // Pure function. No state, no side effects.
 func mapTransitionToStatus(prev, next inverter.EventState) uint8 {
@@ -192,6 +197,8 @@ func mapTransitionToStatus(prev, next inverter.EventState) uint8 {
 		}
 	case inverter.StateEventCancelled:
 		return sep2.ResponseStatusEventCancelled
+	case inverter.StateEventRejected:
+		return responseStatusRejectedInvalidEvent
 	}
 	return 0
 }
@@ -200,8 +207,9 @@ func mapTransitionToStatus(prev, next inverter.EventState) uint8 {
 // given Response status. IEEE 2030.5-2018 Table 27 gives each status a
 // "response required bit position": status 1 (received) is bit 0, so mask
 // 0x01; statuses 2 to 10 and 12 to 14 are bit 1, so mask 0x02; status 11
-// (acknowledged) is bit 2. The hook emits 1, 2, 3, 6 and 14, so the common
-// CSIP mask 0x03 selects all of them and 0x01 only the first.
+// (acknowledged) is bit 2; 253 is bit 1. The hook emits 1, 2, 3, 6, 14
+// and 253, so the common CSIP mask 0x03 selects all of them and 0x01 only
+// the first.
 //
 // Returns false for any status the hook never emits; those are out of scope
 // here. Returns false for status 0 (the "no wire status" sentinel).
@@ -212,7 +220,8 @@ func responseRequiredOn(mask uint8, status uint8) bool {
 	case sep2.ResponseStatusEventStarted,
 		sep2.ResponseStatusEventCompleted,
 		sep2.ResponseStatusEventCancelled,
-		sep2.ResponseStatusEventSupersededAlternateProgram:
+		sep2.ResponseStatusEventSupersededAlternateProgram,
+		responseStatusRejectedInvalidEvent:
 		return mask&0x02 != 0
 	}
 	return false
@@ -253,6 +262,8 @@ func responseStatusName(status uint8) string {
 		return "cancelled"
 	case sep2.ResponseStatusEventSupersededAlternateProgram:
 		return "superseded-alternate-program"
+	case responseStatusRejectedInvalidEvent:
+		return "rejected-invalid-event"
 	default:
 		return fmt.Sprintf("0x%02x", status)
 	}
