@@ -144,8 +144,9 @@ func TestApplyControlsFixedVar(t *testing.T) {
 
 // TestApplyControlsFixedVarRefused: a base whose fixed var cannot be honored
 // is refused whole. Nothing in it is applied, including its other modes, so
-// the caller keeps what was in force.
+// the caller falls back to another control.
 func TestApplyControlsFixedVarRefused(t *testing.T) {
+	negative := -1.0
 	tests := []struct {
 		name    string
 		fv      sep2.FixedVar
@@ -155,10 +156,9 @@ func TestApplyControlsFixedVarRefused(t *testing.T) {
 		{"refType 1 with no setMaxW", sep2.FixedVar{RefType: 1, Value: 5000}, Ratings{SetMaxVar: 8000}, "setMaxW"},
 		{"refType 2 with no setMaxVar", sep2.FixedVar{RefType: 2, Value: 5000}, Ratings{SetMaxW: 20000}, "setMaxVar"},
 		{"refType 3 with no statVarAvail", sep2.FixedVar{RefType: 3, Value: 5000}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "statVarAvail"},
+		{"refType 3 with a negative statVarAvail", sep2.FixedVar{RefType: 3, Value: 5000}, Ratings{SetMaxW: 20000, SetMaxVar: 8000, StatVarAvail: &negative}, "statVarAvail"},
 		{"refType 0", sep2.FixedVar{RefType: 0, Value: 5000}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "refType 0"},
 		{"refType 4", sep2.FixedVar{RefType: 4, Value: 5000}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "refType 4"},
-		{"value above full scale", sep2.FixedVar{RefType: 2, Value: 10001}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "10001"},
-		{"value below negative full scale", sep2.FixedVar{RefType: 2, Value: -10001}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "-10001"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

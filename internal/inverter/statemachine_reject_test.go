@@ -28,8 +28,6 @@ func unhonorable() []struct {
 		{"refType 3 with no statVarAvail", sep2.FixedVar{RefType: 3, Value: 5000}, inverter.Ratings{SetMaxW: 20000, SetMaxVar: 8000}},
 		{"refType 0", sep2.FixedVar{RefType: 0, Value: 5000}, full},
 		{"refType 4", sep2.FixedVar{RefType: 4, Value: 5000}, full},
-		{"value above full scale", sep2.FixedVar{RefType: 2, Value: 10001}, full},
-		{"value below negative full scale", sep2.FixedVar{RefType: 2, Value: -10001}, full},
 	}
 }
 
@@ -42,7 +40,7 @@ func controlAt(mrid string, start time.Time, durationSec uint32, base sep2.DERCo
 
 // TestStateMachine_RejectsUnhonorableEvent: an event the device cannot
 // honor is refused at receipt with one EVENT_REJECTED transition, is never
-// scheduled, and leaves the event already in force running.
+// scheduled, and leaves the active event running.
 func TestStateMachine_RejectsUnhonorableEvent(t *testing.T) {
 	for _, tc := range unhonorable() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -74,12 +72,13 @@ func TestStateMachine_RejectsUnhonorableEvent(t *testing.T) {
 			}
 			trail = nil
 
+			// B would start after A ends, so a scheduled B would show up.
 			fv := tc.fv
-			bad := controlAt("B", now, 300, sep2.DERControlBase{OpModFixedVar: &fv})
+			bad := controlAt("B", now.Add(5*time.Minute), 1800, sep2.DERControlBase{OpModFixedVar: &fv})
 			sm.Tick(now, []sep2.DERControl{bad}, nil, sched)
 
 			if cur := sm.Current(); cur.State != inverter.StateEventStarted || cur.ActiveMRID != "A" {
-				t.Errorf("after reject: state %s mRID %q, want EVENT_STARTED A still in force", cur.State, cur.ActiveMRID)
+				t.Errorf("after reject: state %s mRID %q, want EVENT_STARTED A still active", cur.State, cur.ActiveMRID)
 			}
 			if len(trail) != 1 || trail[0] != (seen{inverter.StateEventStarted, inverter.StateEventRejected, "B"}) {
 				t.Errorf("transitions = %+v, want exactly one EVENT_STARTED -> EVENT_REJECTED for B", trail)

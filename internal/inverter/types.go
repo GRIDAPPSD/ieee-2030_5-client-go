@@ -74,7 +74,7 @@ type ControlOutputs struct {
 	Mode             ControlMode
 	// Refused is non-nil when the base was refused whole; it wraps a
 	// sentinel such as ErrFixedVarRefused and names the reason. No other
-	// field is set, and the caller keeps the controls in force before it.
+	// field is set, and the caller must not apply the output.
 	Refused error
 }
 

@@ -7,54 +7,47 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
-// refusalLog logs a refused control when the reason changes, so a refusal
-// that holds for every tick of an event is logged once, and its end is
-// logged too.
+// refusalLog logs a line when its message changes, so a refusal that holds
+// for every tick is logged once, and its end is logged too.
 type refusalLog struct{ last string }
 
-func (l *refusalLog) observe(who string, refused error) {
-	reason := ""
-	if refused != nil {
-		reason = refused.Error()
-	}
-	if reason == l.last {
+func (l *refusalLog) observe(who, msg string) {
+	if msg == l.last {
 		return
 	}
-	l.last = reason
-	if refused != nil {
-		log.Printf("%s: control refused: %v", who, refused)
+	prev := l.last
+	l.last = msg
+	if msg != "" {
+		log.Printf("%s: %s", who, msg)
 		return
 	}
-	log.Printf("%s: control no longer refused", who)
+	if prev != "" {
+		log.Printf("%s: control no longer refused", who)
+	}
 }
 
-// controlApplier applies a control base and, when the base is refused
-// whole, keeps applying the base in force before it.
+// controlApplier applies a control base. A base refused whole falls back to
+// the DefaultDERControl's base, and to the nil-base output when the default
+// is absent or refused too.
 type controlApplier struct {
-	inForce  *sep2.DERControlBase
 	refusals refusalLog
 }
 
-func (a *controlApplier) apply(who string, base *sep2.DERControlBase, grid inverter.GridState, maxPW float64, ratings inverter.Ratings, curves *inverter.DERCurveCache) inverter.ControlOutputs {
+func (a *controlApplier) apply(who string, base *sep2.DERControlBase, defaultCtl *sep2.DefaultDERControl, grid inverter.GridState, maxPW float64, ratings inverter.Ratings, curves *inverter.DERCurveCache) inverter.ControlOutputs {
 	out := inverter.ApplyControlsWithCurves(base, grid, maxPW, ratings, curves)
-	a.refusals.observe(who, out.Refused)
 	if out.Refused == nil {
-		if base == nil {
-			a.inForce = nil
-		} else {
-			c := base.Copy()
-			a.inForce = &c
-		}
+		a.refusals.observe(who, "")
 		return out
 	}
-	kept := inverter.ApplyControlsWithCurves(a.inForce, grid, maxPW, ratings, curves)
-	if kept.Refused != nil {
-		// The ratings changed under the base in force; never hand the
-		// device an empty output, which would disconnect it.
-		a.inForce = nil
-		kept = inverter.ApplyControlsWithCurves(nil, grid, maxPW, ratings, curves)
+	if defaultCtl != nil && defaultCtl.DERControlBase != nil && defaultCtl.DERControlBase != base {
+		def := inverter.ApplyControlsWithCurves(defaultCtl.DERControlBase, grid, maxPW, ratings, curves)
+		if def.Refused == nil {
+			a.refusals.observe(who, "control refused: "+out.Refused.Error()+"; applying the default control")
+			return def
+		}
 	}
-	return kept
+	a.refusals.observe(who, "control refused: "+out.Refused.Error()+"; applying no control")
+	return inverter.ApplyControlsWithCurves(nil, grid, maxPW, ratings, curves)
 }
 
 // controlValidator is the state machine's receipt check: an event the
@@ -63,4 +56,12 @@ func controlValidator(ratings func() inverter.Ratings) func(*sep2.DERControl) er
 	return func(evt *sep2.DERControl) error {
 		return inverter.CheckControl(evt.DERControlBase, ratings())
 	}
+}
+
+// newEventStateMachine is the single-device state machine, rejecting at
+// receipt an event this device cannot honor.
+func newEventStateMachine() *inverter.StateMachine {
+	sm := inverter.NewStateMachine()
+	sm.SetValidator(controlValidator(ownRatings))
+	return sm
 }

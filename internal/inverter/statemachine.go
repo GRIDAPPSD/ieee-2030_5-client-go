@@ -61,7 +61,7 @@ const (
 	StateEventCancelled
 	// StateEventRejected marks an event refused at receipt because the
 	// device cannot honor it. It is a transition record only: the machine
-	// never rests in it, and the state in force before the event stays.
+	// never rests in it, and its state is unchanged by the event.
 	StateEventRejected
 )
 
@@ -142,6 +142,7 @@ type StateMachine struct {
 	hook           TransitionHook
 	hooks          []TransitionHook
 	validate       func(*sep2.DERControl) error
+	rejected       map[string]bool // mRIDs refused by validate
 }
 
 // NewStateMachine constructs a state machine in DEFAULT. No required
@@ -169,8 +170,8 @@ func (sm *StateMachine) OnTransition(hook TransitionHook) {
 // SetValidator installs the check an added event must pass before it is
 // scheduled. A refused event is never scheduled; it produces one
 // EVENT_REJECTED transition carrying the event. nil accepts every event.
-// validate runs under the state-machine mutex, so it must not call back
-// into the state machine.
+// validate runs under the state-machine mutex, so it must not block or call
+// back into the state machine.
 func (sm *StateMachine) SetValidator(validate func(*sep2.DERControl) error) {
 	sm.mu.Lock()
 	sm.validate = validate
@@ -310,12 +311,19 @@ func (sm *StateMachine) computeTransitionsLocked(
 
 	// 1. Forward added events to the scheduler. The scheduler dedupes by
 	// mRID (re-add replaces). An event the validator refuses is rejected
-	// at receipt and never scheduled, so the state in force is untouched.
+	// once, at receipt, and never scheduled; a re-add of it is ignored.
 	accepted := added
 	if sm.validate != nil && len(added) > 0 {
 		accepted = make([]sep2.DERControl, 0, len(added))
 		for i := range added {
+			if sm.rejected[added[i].MRID] {
+				continue
+			}
 			if err := sm.validate(&added[i]); err != nil {
+				if sm.rejected == nil {
+					sm.rejected = map[string]bool{}
+				}
+				sm.rejected[added[i].MRID] = true
 				log.Printf("statemachine: rejected mRID=%q: %v", added[i].MRID, err)
 				evtCopy := added[i].Copy()
 				out = append(out, transition{prev: sm.state, next: StateEventRejected, mRID: added[i].MRID, evt: &evtCopy, hook: sm.hook, hooks: snapshotHooks(sm.hooks)})

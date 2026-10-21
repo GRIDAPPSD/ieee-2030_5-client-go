@@ -851,8 +851,7 @@ func main() {
 	// Response Function Set emitter on top of this same hook surface.
 	// See GRIDAPPSD/ieee-2030_5-server-go#102.
 	sched := inverter.NewScheduler(client.Now, mathrand.New(mathrand.NewPCG(uint64(time.Now().UnixNano()), 0xCAFEBABE)))
-	stateMachine := inverter.NewStateMachine()
-	stateMachine.SetValidator(controlValidator(ownRatings))
+	stateMachine := newEventStateMachine()
 
 	// Curve cache populated by the state-machine hook on
 	// EVENT_RECEIVED -> EVENT_STARTED. ApplyControlsWithCurves reads from
@@ -1180,7 +1179,7 @@ func main() {
 			// server-supplied Volt/Var and Volt/Watt curves; misses fall
 			// back to IEEE 1547 defaults inside the controller.
 			base := inverter.ActiveControlBase(stateMachine.Current(), defaultCtl)
-			controls := applier.apply("inverter", base, reading.Grid, reading.MaxPowerW, ownRatings(), curveCache)
+			controls := applier.apply("inverter", base, defaultCtl, reading.Grid, reading.MaxPowerW, ownRatings(), curveCache)
 
 			// ApplySetpoint: push the commanded control output to the device
 			// and get back the achieved InverterState.

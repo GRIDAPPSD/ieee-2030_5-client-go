@@ -13,23 +13,25 @@ import (
 func TestRefusalLogLogsEachChangeOnce(t *testing.T) {
 	logs := captureSessionLog(t)
 	var l refusalLog
-	refused := fmt.Errorf("%w: refType 3 (%%statVarAvail) but the device has no valid statVarAvail", inverter.ErrFixedVarRefused)
+	const refused = "control refused: opModFixedVar refused: refType 3; applying the default control"
+	const noControl = "control refused: opModFixedVar refused: refType 3; applying no control"
 
-	l.observe("inverter", nil)
+	l.observe("inverter", "")
 	l.observe("inverter", refused)
 	l.observe("inverter", refused)
-	l.observe("inverter", nil)
-	l.observe("inverter", nil)
+	l.observe("inverter", noControl)
+	l.observe("inverter", noControl)
+	l.observe("inverter", "")
+	l.observe("inverter", "")
 
 	got := logs.String()
-	if n := strings.Count(got, "inverter: control refused: opModFixedVar refused: refType 3"); n != 1 {
-		t.Errorf("refusal logged %d times, want 1; log:\n%s", n, got)
+	for _, want := range []string{"inverter: " + refused, "inverter: " + noControl, "inverter: control no longer refused"} {
+		if n := strings.Count(got, want+"\n"); n != 1 {
+			t.Errorf("%q logged %d times, want 1; log:\n%s", want, n, got)
+		}
 	}
-	if n := strings.Count(got, "inverter: control no longer refused"); n != 1 {
-		t.Errorf("clearing logged %d times, want 1; log:\n%s", n, got)
-	}
-	if lines := strings.Count(got, "\n"); lines != 2 {
-		t.Errorf("log has %d lines, want 2 (no line before the first refusal); log:\n%s", lines, got)
+	if lines := strings.Count(got, "\n"); lines != 3 {
+		t.Errorf("log has %d lines, want 3 (one per change, none before the first refusal); log:\n%s", lines, got)
 	}
 }
 
@@ -69,34 +71,54 @@ func unhonorableFixedVars() []struct {
 		{"refType 3 with no statVarAvail", sep2.FixedVar{RefType: 3, Value: 5000}, inverter.Ratings{SetMaxW: 20000, SetMaxVar: 8000}},
 		{"refType 0", sep2.FixedVar{RefType: 0, Value: 5000}, full},
 		{"refType 4", sep2.FixedVar{RefType: 4, Value: 5000}, full},
-		{"value above full scale", sep2.FixedVar{RefType: 2, Value: 10001}, full},
-		{"value below negative full scale", sep2.FixedVar{RefType: 2, Value: -10001}, full},
 	}
 }
 
-// A refused base (a DefaultDERControl, or a managed device's control) is
-// not applied: the base in force before it keeps driving the device.
-func TestControlApplierKeepsWhatWasInForce(t *testing.T) {
+// A refused base falls back to the DefaultDERControl's outputs, and to
+// the nil-base output when the default is refused or absent. An event that
+// was applied earlier is never what a refused base falls back to.
+func TestControlApplierFallsBackToTheDefault(t *testing.T) {
+	grid := inverter.GridState{VoltsPU: 1.0, FreqHz: 60.0}
+	target := sep2.SignedPerCent(2500)
+	honorableDefault := &sep2.DefaultDERControl{DERControlBase: &sep2.DERControlBase{OpModFixedW: &target}}
 	for _, tc := range unhonorableFixedVars() {
 		t.Run(tc.name, func(t *testing.T) {
-			logs := captureSessionLog(t)
-			grid := inverter.GridState{VoltsPU: 1.0, FreqHz: 60.0}
-			var a controlApplier
-			fixedW := sep2.SignedPerCent(2500)
-			prior := &sep2.DERControlBase{OpModFixedW: &fixedW}
-			before := a.apply("inverter", prior, grid, 8000, tc.ratings, nil)
-
+			r := tc.ratings
+			nilBase := inverter.ApplyControls(nil, grid, 8000, r)
+			wantDefault := inverter.ApplyControls(honorableDefault.DERControlBase, grid, 8000, r)
+			if wantDefault.Refused != nil || wantDefault.ActivePowerW == nilBase.ActivePowerW {
+				t.Fatalf("setup: the default must be honorable and differ from the nil base; got %+v vs %+v", wantDefault, nilBase)
+			}
 			fv := tc.fv
-			inject := sep2.FixedPowerFactor{Displacement: 900}
-			refused := &sep2.DERControlBase{OpModFixedVar: &fv, OpModFixedPFInjectW: &inject}
+			refused := &sep2.DERControlBase{OpModFixedVar: &fv}
+			refusedDefault := &sep2.DefaultDERControl{DERControlBase: refused}
+			zero := sep2.SignedPerCent(0)
+			event := &sep2.DERControlBase{OpModFixedW: &zero}
+
+			var a controlApplier
+			logs := captureSessionLog(t)
+			a.apply("inverter", event, honorableDefault, grid, 8000, r, nil)
 			for i := 0; i < 3; i++ {
-				got := a.apply("inverter", refused, grid, 8000, tc.ratings, nil)
-				if got.Refused != nil || got.ActivePowerW != before.ActivePowerW || got.ReactivePowerVAr != before.ReactivePowerVAr || got.Mode != before.Mode {
-					t.Fatalf("tick %d: outputs %+v, want the prior base's %+v", i, got, before)
+				if got := a.apply("inverter", refused, honorableDefault, grid, 8000, r, nil); got != wantDefault {
+					t.Fatalf("refused base with an honorable default, tick %d: %+v, want the default's %+v", i, got, wantDefault)
 				}
 			}
-			if n := strings.Count(logs.String(), "inverter: control refused: opModFixedVar refused"); n != 1 {
-				t.Errorf("refusal logged %d times over 3 ticks, want 1; log:\n%s", n, logs.String())
+			// The event ended and the default itself is refused: nothing
+			// valid remains, so the nil base applies, not the ended event.
+			for i := 0; i < 3; i++ {
+				if got := a.apply("inverter", refused, refusedDefault, grid, 8000, r, nil); got != nilBase {
+					t.Fatalf("refused default, tick %d: %+v, want the nil base %+v", i, got, nilBase)
+				}
+			}
+			if got := a.apply("inverter", refused, nil, grid, 8000, r, nil); got != nilBase {
+				t.Errorf("refused base with no default: %+v, want the nil base %+v", got, nilBase)
+			}
+			out := logs.String()
+			if n := strings.Count(out, "applying the default control"); n != 1 {
+				t.Errorf("fallback to the default logged %d times over 3 ticks, want 1; log:\n%s", n, out)
+			}
+			if n := strings.Count(out, "applying no control"); n != 1 {
+				t.Errorf("fallback to the nil base logged %d times over 4 ticks, want 1; log:\n%s", n, out)
 			}
 		})
 	}
@@ -142,5 +164,65 @@ func TestResponsePOSTHook_RejectedEventPosts253(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// The single-device state machine rejects an event the device cannot honor.
+func TestNewEventStateMachineRejectsUnhonorable(t *testing.T) {
+	clock := func() time.Time { return fixedTestNow }
+	sm := newEventStateMachine()
+	_, sched := newTestStateMachine(clock)
+	var nexts []inverter.EventState
+	sm.AddTransitionHook(func(_, next inverter.EventState, _ *sep2.DERControl) { nexts = append(nexts, next) })
+	fv := sep2.FixedVar{RefType: 3, Value: 5000}
+	dc := buildControl("EVT-REJ", "", nil, 0, 300)
+	dc.DERControlBase = &sep2.DERControlBase{OpModFixedVar: &fv}
+	sm.Tick(clock(), []sep2.DERControl{dc}, nil, sched)
+	if len(nexts) != 1 || nexts[0] != inverter.StateEventRejected || sm.Current().State != inverter.StateDefault {
+		t.Errorf("transitions %v, state %s; want one EVENT_REJECTED and DEFAULT", nexts, sm.Current().State)
+	}
+}
+
+// One rejected event gets one 253, however often it is added again: after
+// dropping out of the list for a poll, from a fresh cache on a re-walk, or
+// with only its status changed.
+func TestResponsePOSTHook_RejectedEventPosts253Once(t *testing.T) {
+	const replyTo = "https://server.example/rsps"
+	poster := &fakePoster{}
+	clock := func() time.Time { return fixedTestNow }
+	sm, sched := newTestStateMachine(clock)
+	sm.SetValidator(controlValidator(func() inverter.Ratings { return inverter.Ratings{SetMaxW: 20000} }))
+	sm.AddTransitionHook(responsePOSTHook(poster, "lfdi", fixedNowFn))
+
+	mask := sep2.HexBinary8(0x03)
+	dc := buildControl("EVT-REJ", replyTo, &mask, time.Minute, 300)
+	fv := sep2.FixedVar{RefType: 2, Value: 5000}
+	dc.DERControlBase = &sep2.DERControlBase{OpModFixedVar: &fv}
+	snap := func(cs ...sep2.DERControl) map[string]sep2.DERControl {
+		m := map[string]sep2.DERControl{}
+		for _, c := range cs {
+			m[c.MRID] = c
+		}
+		return m
+	}
+	tick := func(prev, curr map[string]sep2.DERControl) {
+		added, cancelled := diffSnapshots(prev, curr)
+		sm.Tick(clock(), added, cancelled, sched)
+	}
+
+	// Received, gone for one poll, back.
+	tick(snap(), snap(dc))
+	tick(snap(dc), snap())
+	tick(snap(), snap(dc))
+	// A re-walk's fresh cache adds it again.
+	tick(snap(), snap(dc))
+	// Only its status changed.
+	active := dc.Copy()
+	active.EventStatus = &sep2.EventStatus{CurrentStatus: 1}
+	tick(snap(), snap(active))
+
+	calls := poster.Calls()
+	if len(calls) != 1 || calls[0].Resp.Status == nil || *calls[0].Resp.Status != 253 {
+		t.Errorf("Responses = %+v, want exactly one 253", calls)
 	}
 }

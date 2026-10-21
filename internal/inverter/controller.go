@@ -13,8 +13,7 @@ import (
 const percentFullScale = 10000.0
 
 // ErrFixedVarRefused marks an opModFixedVar the device cannot honor: its
-// refType names a basis the device does not know, or its setpoint is out of
-// the schema's range.
+// refType names a basis the device does not know.
 var ErrFixedVarRefused = errors.New("opModFixedVar refused")
 
 // RatedW is the device's own %setMaxW basis, in watts: the same value
@@ -91,7 +90,7 @@ func ApplyControlsWithCurves(
 	}
 
 	// A base that cannot be honored is refused whole: nothing in it is
-	// applied, and the caller keeps the controls in force before it.
+	// applied, and the caller falls back to another control.
 	var fixedVAr float64
 	if base.OpModFixedVar != nil {
 		q, err := fixedVarVAr(*base.OpModFixedVar, ratings)
@@ -211,13 +210,10 @@ func ApplyControlsWithCurves(
 
 // fixedVarVAr converts an opModFixedVar setpoint to VAr. Value is a
 // SignedPerCent of the basis RefType names (IEEE 2030.5-2018 FixedVar and
-// DERUnitRefType): 1 %setMaxW, 2 %setMaxVar, 3 %statVarAvail. An unknown
-// basis or an out-of-range setpoint returns an error wrapping
-// ErrFixedVarRefused, never a guessed or zero VAr.
+// DERUnitRefType): 1 %setMaxW, 2 %setMaxVar, 3 %statVarAvail. A basis the
+// device does not know returns an error wrapping ErrFixedVarRefused, never a
+// guessed or zero VAr.
 func fixedVarVAr(fv sep2.FixedVar, r Ratings) (float64, error) {
-	if fv.Value < -percentFullScale || fv.Value > percentFullScale {
-		return 0, fmt.Errorf("%w: value %d is outside [-10000, 10000]", ErrFixedVarRefused, fv.Value)
-	}
 	var basis float64
 	switch fv.RefType {
 	case 1:
@@ -236,6 +232,7 @@ func fixedVarVAr(fv sep2.FixedVar, r Ratings) (float64, error) {
 		}
 		basis = *r.StatVarAvail
 	default:
+		// Core refuses these at decode; kept so a hand-built value fails closed.
 		return 0, fmt.Errorf("%w: refType %d is not %%setMaxW, %%setMaxVar or %%statVarAvail", ErrFixedVarRefused, fv.RefType)
 	}
 	return float64(fv.Value) / percentFullScale * basis, nil

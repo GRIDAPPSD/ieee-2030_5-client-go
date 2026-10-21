@@ -120,7 +120,7 @@ type managedDevice struct {
 	edev sep2.EndDevice
 	ctl  *controlSession
 
-	// applier keeps this device's control in force when a new one is refused.
+	// applier falls back to the default control when a control is refused.
 	applier controlApplier
 
 	// DER resources (managed_status.go): der is set once the device's
@@ -352,10 +352,11 @@ func (f *managedFleet) Tick(ctx context.Context) {
 			continue
 		}
 		var base *sep2.DERControlBase
+		var defaultCtl *sep2.DefaultDERControl
 		if md.ctl != nil {
-			base = md.ctl.base()
+			base, defaultCtl = md.ctl.base(), md.ctl.defaultCtl.Load()
 		}
-		controls := md.applier.apply("managed device "+md.name, base, reading.Grid, reading.MaxPowerW, md.ratings(), nil)
+		controls := md.applier.apply("managed device "+md.name, base, defaultCtl, reading.Grid, reading.MaxPowerW, md.ratings(), nil)
 		if w, ok := plan[md.lfdi]; ok {
 			controls.ActivePowerW = w
 		}
