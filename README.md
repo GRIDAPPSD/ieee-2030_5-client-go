@@ -2,6 +2,7 @@
 
 [![ci](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/github-code-scanning/codeql)
+[![Go version](https://img.shields.io/github/go-mod/go-version/GRIDAPPSD/ieee-2030_5-client-go)](go.mod)
 [![License: Battelle BSD](https://img.shields.io/badge/License-Battelle_BSD-blue.svg)](LICENSE)
 
 Releases and tags: <https://github.com/GRIDAPPSD/ieee-2030_5-client-go/releases>.
@@ -236,9 +237,9 @@ Run `--list-scenarios` for the authoritative list. Current scenarios:
 
 ## Dependency
 
-This module depends on `github.com/GRIDAPPSD/ieee-2030_5-core-go`, pinned in
-`go.mod` (the `require` line holds the version). It is an ordinary versioned Go module import; no
-`replace` directive is used.
+This module depends on `github.com/GRIDAPPSD/ieee-2030_5-core-go`. The pinned
+version is the `require` line in `go.mod`. It is an ordinary versioned Go module
+import; no `replace` directive is used.
 
 ## License
 
