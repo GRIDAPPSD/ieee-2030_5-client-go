@@ -24,6 +24,7 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/device"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/invertertest"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/simconfig"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
@@ -68,6 +69,15 @@ type controlsServer struct {
 
 	// ctlFixedVar, when set, is added to CTL1's control base.
 	ctlFixedVar *sep2.FixedVar
+
+	// withBadControl adds BAD, whose base core cannot decode, to the list.
+	withBadControl bool
+}
+
+func (s *controlsServer) addBadControl() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.withBadControl = true
 }
 
 func (s *controlsServer) setControlFixedVar(fv sep2.FixedVar) {
@@ -339,6 +349,7 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 			mask = srv.respMask
 		}
 		fixedVar := srv.ctlFixedVar
+		withBad := srv.withBadControl
 		srv.mu.Unlock()
 		var dc sep2.DERControl
 		dc.MRID = "CTL1"
@@ -346,10 +357,21 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 		dc.ResponseRequired = &mask
 		dc.Interval = &sep2.DateTimeInterval{Start: time.Now().Add(-startOffset).Unix(), Duration: durationS}
 		dc.DERControlBase = &sep2.DERControlBase{OpModTargetW: &sep2.ActivePower{Value: controlTargetW}, OpModFixedVar: fixedVar}
-		writeSepXML(t, w, sep2.DERControlList{
+		list := sep2.DERControlList{
 			ListResource: sep2.ListResource{All: 1, Results: 1},
 			DERControl:   []sep2.DERControl{dc},
-		})
+		}
+		if !withBad {
+			writeSepXML(t, w, list)
+			return
+		}
+		bad := dc.Copy()
+		bad.MRID = "BAD"
+		fv := invertertest.BadFixedVar
+		bad.DERControlBase = &sep2.DERControlBase{OpModFixedVar: &fv}
+		list.DERControl = append(list.DERControl, bad)
+		list.All, list.Results = 2, 2
+		invertertest.WriteListWithBadItems(t, w, list, 1)
 	})
 	mux.HandleFunc("/rsp", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)

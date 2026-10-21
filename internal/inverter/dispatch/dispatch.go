@@ -49,5 +49,5 @@ type RegisterableDispatcher interface {
 // interfaces) so tests can stub the HTTP path without spinning a real client.
 // SEP2Client satisfies this implicitly.
 type DERControlListFetcher interface {
-	GetDERControlList(ctx context.Context, href string) (sep2.DERControlList, string, error)
+	GetDERControlList(ctx context.Context, href string) (sep2.DERControlListResult, string, error)
 }

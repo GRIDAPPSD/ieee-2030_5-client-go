@@ -27,15 +27,15 @@ type fakeFetcher struct {
 	returnErr error
 }
 
-func (f *fakeFetcher) GetDERControlList(_ context.Context, href string) (sep2.DERControlList, string, error) {
+func (f *fakeFetcher) GetDERControlList(_ context.Context, href string) (sep2.DERControlListResult, string, error) {
 	atomic.AddInt32(&f.callCount, 1)
 	f.mu.Lock()
 	f.lastHref = href
 	f.mu.Unlock()
 	if f.returnErr != nil {
-		return sep2.DERControlList{}, "", f.returnErr
+		return sep2.DERControlListResult{}, "", f.returnErr
 	}
-	return f.returnVal, "", nil
+	return sep2.DERControlListResult{DERControlList: f.returnVal}, "", nil
 }
 
 func (f *fakeFetcher) calls() int { return int(atomic.LoadInt32(&f.callCount)) }

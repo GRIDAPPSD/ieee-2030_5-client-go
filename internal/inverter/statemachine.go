@@ -142,7 +142,7 @@ type StateMachine struct {
 	hook           TransitionHook
 	hooks          []TransitionHook
 	validate       func(*sep2.DERControl) error
-	rejected       map[string]bool // mRIDs refused by validate
+	rejected       map[string]bool // mRIDs refused by validate or Reject
 }
 
 // NewStateMachine constructs a state machine in DEFAULT. No required
@@ -252,6 +252,51 @@ func (sm *StateMachine) Tick(
 	sm.mu.Lock()
 	pending := sm.computeTransitionsLocked(now, added, cancelled, sched)
 	sm.mu.Unlock()
+	fireTransitions(now, pending)
+}
+
+// Reject refuses list items whose DERControlBase could not be decoded. Each
+// mRID gets one EVENT_REJECTED transition, the first time it is seen, and is
+// never scheduled, even when a control with the same mRID arrives in a later
+// Tick. Call it before the Tick for the same list so the rejection wins. An
+// item with no mRID cannot be answered or remembered, so it is only logged.
+// An item the server already cancelled is left to the cancellation path.
+//
+// An event accepted earlier under the same mRID is withdrawn without an
+// EVENT_CANCELLED transition: the server did not cancel it, so it must not
+// be answered with 6.
+func (sm *StateMachine) Reject(now time.Time, items []sep2.RejectedDERControl, sched *Scheduler) {
+	if sched == nil {
+		panic("inverter.StateMachine.Reject: sched required")
+	}
+	var pending []transition
+	sm.mu.Lock()
+	for i := range items {
+		mRID := items[i].MRID
+		if mRID == "" {
+			log.Printf("statemachine: rejected a DERControl with no mRID, no response possible: %v", items[i].Err)
+			continue
+		}
+		if sm.rejected[mRID] {
+			continue
+		}
+		if es := items[i].EventStatus; es != nil && es.CurrentStatus == sep2.EventStatusCancelled {
+			continue
+		}
+		evt := sep2.DERControl{RandomizableEvent: items[i].RandomizableEvent}.Copy()
+		pending = append(pending, sm.rejectLocked(evt, items[i].Err))
+		sched.OnEventsCancelled([]string{mRID})
+		if sm.activeMRID == mRID && (sm.state == StateEventReceived || sm.state == StateEventStarted) {
+			pending = append(pending, sm.transitionLocked(StateDefault, "", nil))
+		}
+	}
+	sm.mu.Unlock()
+	fireTransitions(now, pending)
+}
+
+// fireTransitions logs and hook-fires transitions recorded under the mutex.
+// The caller MUST NOT hold sm.mu.
+func fireTransitions(now time.Time, pending []transition) {
 	for _, t := range pending {
 		log.Printf("statemachine: %s → %s mRID=%q now=%s",
 			t.prev, t.next, t.mRID, now.UTC().Format(time.RFC3339Nano))
@@ -262,6 +307,18 @@ func (sm *StateMachine) Tick(
 			h(t.prev, t.next, t.evt)
 		}
 	}
+}
+
+// rejectLocked remembers evt's mRID as rejected and records its
+// EVENT_REJECTED transition without changing the state in force. Caller MUST
+// hold sm.mu.
+func (sm *StateMachine) rejectLocked(evt sep2.DERControl, err error) transition {
+	if sm.rejected == nil {
+		sm.rejected = map[string]bool{}
+	}
+	sm.rejected[evt.MRID] = true
+	log.Printf("statemachine: rejected mRID=%q: %v", evt.MRID, err)
+	return transition{prev: sm.state, next: StateEventRejected, mRID: evt.MRID, evt: &evt, hook: sm.hook, hooks: snapshotHooks(sm.hooks)}
 }
 
 // transition records a single state change for post-lock hook firing.
@@ -310,24 +367,20 @@ func (sm *StateMachine) computeTransitionsLocked(
 	var out []transition
 
 	// 1. Forward added events to the scheduler. The scheduler dedupes by
-	// mRID (re-add replaces). An event the validator refuses is rejected
-	// once, at receipt, and never scheduled; a re-add of it is ignored.
+	// mRID (re-add replaces). An event the validator or Reject refused is
+	// rejected once, at receipt, and never scheduled; a re-add of it is ignored.
 	accepted := added
-	if sm.validate != nil && len(added) > 0 {
+	if (sm.validate != nil || len(sm.rejected) > 0) && len(added) > 0 {
 		accepted = make([]sep2.DERControl, 0, len(added))
 		for i := range added {
 			if sm.rejected[added[i].MRID] {
 				continue
 			}
-			if err := sm.validate(&added[i]); err != nil {
-				if sm.rejected == nil {
-					sm.rejected = map[string]bool{}
+			if sm.validate != nil {
+				if err := sm.validate(&added[i]); err != nil {
+					out = append(out, sm.rejectLocked(added[i].Copy(), err))
+					continue
 				}
-				sm.rejected[added[i].MRID] = true
-				log.Printf("statemachine: rejected mRID=%q: %v", added[i].MRID, err)
-				evtCopy := added[i].Copy()
-				out = append(out, transition{prev: sm.state, next: StateEventRejected, mRID: added[i].MRID, evt: &evtCopy, hook: sm.hook, hooks: snapshotHooks(sm.hooks)})
-				continue
 			}
 			accepted = append(accepted, added[i])
 		}

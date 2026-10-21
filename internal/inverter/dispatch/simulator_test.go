@@ -372,13 +372,13 @@ type fakeFetcherBlocking struct {
 	returnVal sep2.DERControlList
 }
 
-func (f *fakeFetcherBlocking) GetDERControlList(ctx context.Context, _ string) (sep2.DERControlList, string, error) {
+func (f *fakeFetcherBlocking) GetDERControlList(ctx context.Context, _ string) (sep2.DERControlListResult, string, error) {
 	select {
 	case <-f.block:
 	case <-ctx.Done():
-		return sep2.DERControlList{}, "", ctx.Err()
+		return sep2.DERControlListResult{}, "", ctx.Err()
 	}
-	return f.returnVal, "", nil
+	return sep2.DERControlListResult{DERControlList: f.returnVal}, "", nil
 }
 
 // TestChangedResourceHref_PreferenceOrder tests the href preference ordering.
