@@ -20,9 +20,9 @@ THESE FILES ARE NOT DISTRIBUTED WITH THIS PROJECT.
 
 No copy of sep.xsd or sep_wadl.xml is contained in this repository, in any
 release artifact, or in any binary built from this module. The client refers
-to the schema only in source comments. Where schema or WADL checks run, they
-read a copy you supply from outside the checkout, and the protocol types come
-from the core module, ieee-2030_5-core-go, whose NOTICE covers the schema.
+to the schema only in source comments and runs no schema or WADL check. The
+protocol types come from the core module, ieee-2030_5-core-go, whose NOTICE
+covers the schema.
 
 IEEE 2030.5 is available at no charge through the IEEE GET Program:
 
@@ -41,3 +41,8 @@ them read them from a directory you supply outside the checkout (SUNSPEC_DIR),
 and the fixture paths are gitignored so they cannot be committed by accident.
 Your use of that material is governed by SunSpec's terms, not by this
 project's license.
+
+Obtaining a copy: obtain the SunSpec CSIP test PKI from SunSpec, under their
+terms. Put the files in one directory outside the checkout and export it as SUNSPEC_DIR. The
+files expected, and how to run the scripts, are described in
+scripts/derms/README.md. The scripts refuse a directory inside the checkout.

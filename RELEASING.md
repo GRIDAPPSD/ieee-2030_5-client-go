@@ -534,24 +534,14 @@ decision with its own review, and it is not meaningfully reversible once
 content has been fetched.
 ## 16. Repository-specific notes and history (client-go)
 
-**Unresolved licensing posture. This gates the release; read it first.**
-
-This repository's `NOTICE` and its `README.md` describe two different things
-with two different distribution postures:
-
-- `NOTICE` describes a private, non-redistributable archive of inverter
-  simulator code translated from a local copy of a non-open-source EPRI C
-  client, retained for migration-planning reference only, with no
-  redistribution rights for the original or the derivative.
-- `README.md` describes a clean-room IEEE 2030.5 client and inverter
-  simulator with a Battelle BSD licence badge.
-
-Those cannot both be describing the current contents. The difference decides
-whether this repository may be released at all, in any form, and a release is
-a distribution event. Do not assert a licensing posture in release notes and
-do not publish a first release here until a person has reconciled `NOTICE`
-against `README.md` and recorded which one is current. That reconciliation is
-a prerequisite of the release, not a follow-up to it.
+**Licensing posture.** The client is Battelle BSD (3-clause), the same
+license as the server. `LICENSE`, `README.md` and `NOTICE` agree: `NOTICE`
+says the project is licensed under `LICENSE` and lists the third-party
+material the client refers to but does not distribute (the IEEE 2030.5
+schema and WADL, and the SunSpec test material). A release is a distribution
+event, so before the first one, check that `NOTICE` still matches the tree:
+no IEEE or SunSpec file in the tagged tree (section 8), and no change to
+`LICENSE` that `NOTICE` does not reflect.
 
 **Release history.** Client-go carries TAGS THAT ARE NOT RELEASES: archive and
 import markers from earlier restructuring, and an empty-repository marker.
