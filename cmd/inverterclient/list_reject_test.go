@@ -1,53 +1,16 @@
 package main
 
 import (
-	"bytes"
-	"encoding/xml"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/invertertest"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
-
-// badFixedVar marks the control writeListWithBadItems turns into a refType 4
-// FixedVar, which core refuses on decode and the encoder refuses to write.
-var badFixedVar = sep2.FixedVar{RefType: 2, Value: 1234}
-
-// writeListWithBadItems writes list with every badFixedVar rewritten to
-// refType 4 on the wire.
-func writeListWithBadItems(t *testing.T, w http.ResponseWriter, list sep2.DERControlList, bad int) {
-	t.Helper()
-	raw, err := xml.Marshal(&list)
-	if err != nil {
-		t.Errorf("encode DERControlList: %v", err)
-		return
-	}
-	good := []byte("<refType>2</refType><value>1234</value>")
-	if n := bytes.Count(raw, good); n != bad {
-		t.Errorf("setup: %d marked FixedVars in the list, want %d", n, bad)
-	}
-	w.Header().Set("Content-Type", "application/sep+xml")
-	_, _ = w.Write(bytes.ReplaceAll(raw, good, []byte("<refType>4</refType><value>1234</value>")))
-}
-
-// rejectedEvent is a list item whose base failed to decode, as core reports it.
-func rejectedEvent(mrid, replyTo string, mask sep2.HexBinary8) sep2.RejectedDERControl {
-	var r sep2.RejectedDERControl
-	r.MRID = mrid
-	r.ReplyTo = replyTo
-	r.ResponseRequired = &mask
-	r.Err = errors.New("sep2: DERControl (mRID " + mrid + "): refType 4")
-	return r
-}
-
-func controlList(controls []sep2.DERControl, rejected ...sep2.RejectedDERControl) sep2.DERControlListResult {
-	return sep2.DERControlListResult{DERControlList: sep2.DERControlList{DERControl: controls}, Rejected: rejected}
-}
 
 type listRejectRig struct {
 	sm     *inverter.StateMachine
@@ -108,9 +71,9 @@ func TestStepEvents_UndecodableControlIsRejectedAndTheListKept(t *testing.T) {
 	mask := sep2.HexBinary8(0x03)
 	a := buildControl("A", "/rsp/A", &mask, 10*time.Minute, 300)
 	c := buildControl("C", "/rsp/C", &mask, 20*time.Minute, 300)
-	bad := rejectedEvent("B", "/rsp/B", 0x02)
+	bad := invertertest.Rejected("B", "/rsp/B", 0x02)
 
-	r.poll(controlList([]sep2.DERControl{a, c}, bad))
+	r.poll(invertertest.ListResult([]sep2.DERControl{a, c}, bad))
 	if snap := r.sm.Current(); snap.State != inverter.StateEventReceived || snap.ActiveMRID != "A" {
 		t.Fatalf("after poll 1: %s mRID %q, want EVENT_RECEIVED for A", snap.State, snap.ActiveMRID)
 	}
@@ -119,8 +82,8 @@ func TestStepEvents_UndecodableControlIsRejectedAndTheListKept(t *testing.T) {
 	}
 
 	// Poll 2: the same list. Poll 3: A removed by the server.
-	r.poll(controlList([]sep2.DERControl{a, c}, bad))
-	r.poll(controlList([]sep2.DERControl{c}, bad))
+	r.poll(invertertest.ListResult([]sep2.DERControl{a, c}, bad))
+	r.poll(invertertest.ListResult([]sep2.DERControl{c}, bad))
 
 	if got := r.statuses("B"); len(got) != 1 {
 		t.Errorf("B responses after 3 polls %v, want one 253", got)
@@ -150,7 +113,7 @@ func TestStepEvents_RejectionWinsAndTheDeviceFallsBack(t *testing.T) {
 	x.DERControlBase = &sep2.DERControlBase{OpModFixedW: &target}
 
 	for i := 0; i < 3; i++ {
-		r.poll(controlList([]sep2.DERControl{x}, rejectedEvent("X", "/rsp/X", 0x03)))
+		r.poll(invertertest.ListResult([]sep2.DERControl{x}, invertertest.Rejected("X", "/rsp/X", 0x03)))
 	}
 	if got := r.statuses("X"); len(got) != 1 || got[0] != "253@/rsp/X" {
 		t.Errorf("X responses %v, want exactly [253@/rsp/X]", got)
@@ -176,12 +139,12 @@ func TestStepEvents_RejectionWinsAndTheDeviceFallsBack(t *testing.T) {
 func TestStepEvents_RejectedItemWithNoMRIDIsLoggedOnly(t *testing.T) {
 	logs := captureSessionLog(t)
 	r := newListRejectRig()
-	one := rejectedEvent("", "/rsp/1", 0x03)
+	one := invertertest.Rejected("", "/rsp/1", 0x03)
 	one.Err = errors.New("first bad item")
-	two := rejectedEvent("", "/rsp/2", 0x03)
+	two := invertertest.Rejected("", "/rsp/2", 0x03)
 	two.Err = errors.New("second bad item")
 
-	r.poll(controlList(nil, one, two))
+	r.poll(invertertest.ListResult(nil, one, two))
 	if calls := r.poster.Calls(); len(calls) != 0 {
 		t.Errorf("posted %d Responses for items with no mRID, want 0", len(calls))
 	}
@@ -196,7 +159,7 @@ func TestStepEvents_RejectedItemWithNoMRIDIsLoggedOnly(t *testing.T) {
 // No 253 when responseRequired bit 1 is clear.
 func TestStepEvents_RejectedWithoutBit1PostsNothing(t *testing.T) {
 	r := newListRejectRig()
-	r.poll(controlList(nil, rejectedEvent("B", "/rsp/B", 0x01)))
+	r.poll(invertertest.ListResult(nil, invertertest.Rejected("B", "/rsp/B", 0x01)))
 	if calls := r.poster.Calls(); len(calls) != 0 {
 		t.Errorf("posted %d Responses with responseRequired 0x01, want 0", len(calls))
 	}
@@ -232,5 +195,74 @@ func TestManagedControls_UndecodableControlIsRejectedAndTheListKept(t *testing.T
 	}
 	if out := logs.String(); strings.Contains(out, "DERControlList poll failed") {
 		t.Errorf("a poll logged a failure:\n%s", out)
+	}
+}
+
+// An event received valid that comes back undecodable under the same mRID
+// is answered with 253 only: the server did not cancel it, so no 6. It
+// stops applying, and the device falls back to the default.
+func TestStepEvents_ValidEventTurnedUndecodablePostsNoCancel(t *testing.T) {
+	mask := sep2.HexBinary8(0x03)
+	target := sep2.SignedPerCent(2500)
+	cases := []struct {
+		name  string
+		start time.Duration
+		other time.Duration // start of a second event Y, 0 for none
+		want  []string
+	}{
+		{"active", -time.Minute, 0, []string{"1@/rsp/X", "2@/rsp/X", "253@/rsp/X"}},
+		{"pending head", 10 * time.Minute, 20 * time.Minute, []string{"1@/rsp/X", "253@/rsp/X"}},
+		{"pending behind the head", 20 * time.Minute, 10 * time.Minute, []string{"253@/rsp/X"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newListRejectRig()
+			x := buildControl("X", "/rsp/X", &mask, tc.start, 3600)
+			x.DERControlBase = &sep2.DERControlBase{OpModFixedW: &target}
+			controls := []sep2.DERControl{x}
+			var rest []sep2.DERControl
+			if tc.other != 0 {
+				y := buildControl("Y", "/rsp/Y", &mask, tc.other, 300)
+				controls = append(controls, y)
+				rest = append(rest, y)
+			}
+			r.poll(invertertest.ListResult(controls))
+			for i := 0; i < 2; i++ {
+				r.poll(invertertest.ListResult(rest, invertertest.Rejected("X", "/rsp/X", 0x03)))
+			}
+			if got := r.statuses("X"); strings.Join(got, " ") != strings.Join(tc.want, " ") {
+				t.Errorf("X responses %v, want %v", got, tc.want)
+			}
+			snap := r.sm.Current()
+			if snap.ActiveMRID == "X" {
+				t.Fatalf("X still active (%s)", snap.State)
+			}
+			if tc.other == 0 {
+				if snap.State != inverter.StateDefault {
+					t.Errorf("state %s, want DEFAULT", snap.State)
+				}
+				def := &sep2.DefaultDERControl{DERControlBase: &sep2.DERControlBase{OpModTargetW: &sep2.ActivePower{Value: 700}}}
+				if got := inverter.ActiveControlBase(snap, def); got != def.DERControlBase {
+					t.Errorf("applied base %+v, want the default's", got)
+				}
+			} else if snap.ActiveMRID != "Y" {
+				t.Errorf("active mRID %q, want Y", snap.ActiveMRID)
+			}
+		})
+	}
+}
+
+// A bad item the server has already cancelled is not answered with 253.
+func TestStepEvents_CancelledUndecodableItemPostsNo253(t *testing.T) {
+	r := newListRejectRig()
+	bad := invertertest.Rejected("B", "/rsp/B", 0x03)
+	bad.EventStatus = &sep2.EventStatus{CurrentStatus: sep2.EventStatusCancelled}
+	r.poll(invertertest.ListResult(nil, bad))
+	r.poll(invertertest.ListResult(nil, bad))
+	if calls := r.poster.Calls(); len(calls) != 0 {
+		t.Errorf("posted %d Responses for a cancelled bad item, want 0", len(calls))
+	}
+	if hasTrail(r.trail, "B EVENT_REJECTED") {
+		t.Errorf("cancelled B was rejected; trail %v", r.trail)
 	}
 }

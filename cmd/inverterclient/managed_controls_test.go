@@ -24,6 +24,7 @@ import (
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/device"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/guard"
+	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter/invertertest"
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/simconfig"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
@@ -366,11 +367,11 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 		}
 		bad := dc.Copy()
 		bad.MRID = "BAD"
-		fv := badFixedVar
+		fv := invertertest.BadFixedVar
 		bad.DERControlBase = &sep2.DERControlBase{OpModFixedVar: &fv}
 		list.DERControl = append(list.DERControl, bad)
 		list.All, list.Results = 2, 2
-		writeListWithBadItems(t, w, list, 1)
+		invertertest.WriteListWithBadItems(t, w, list, 1)
 	})
 	mux.HandleFunc("/rsp", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)

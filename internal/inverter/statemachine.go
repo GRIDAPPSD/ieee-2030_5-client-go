@@ -260,19 +260,35 @@ func (sm *StateMachine) Tick(
 // never scheduled, even when a control with the same mRID arrives in a later
 // Tick. Call it before the Tick for the same list so the rejection wins. An
 // item with no mRID cannot be answered or remembered, so it is only logged.
-func (sm *StateMachine) Reject(now time.Time, items []sep2.RejectedDERControl) {
+// An item the server already cancelled is left to the cancellation path.
+//
+// An event accepted earlier under the same mRID is withdrawn without an
+// EVENT_CANCELLED transition: the server did not cancel it, so it must not
+// be answered with 6.
+func (sm *StateMachine) Reject(now time.Time, items []sep2.RejectedDERControl, sched *Scheduler) {
+	if sched == nil {
+		panic("inverter.StateMachine.Reject: sched required")
+	}
 	var pending []transition
 	sm.mu.Lock()
 	for i := range items {
-		if items[i].MRID == "" {
+		mRID := items[i].MRID
+		if mRID == "" {
 			log.Printf("statemachine: rejected a DERControl with no mRID, no response possible: %v", items[i].Err)
 			continue
 		}
-		if sm.rejected[items[i].MRID] {
+		if sm.rejected[mRID] {
+			continue
+		}
+		if es := items[i].EventStatus; es != nil && es.CurrentStatus == sep2.EventStatusCancelled {
 			continue
 		}
 		evt := sep2.DERControl{RandomizableEvent: items[i].RandomizableEvent}.Copy()
 		pending = append(pending, sm.rejectLocked(evt, items[i].Err))
+		sched.OnEventsCancelled([]string{mRID})
+		if sm.activeMRID == mRID && (sm.state == StateEventReceived || sm.state == StateEventStarted) {
+			pending = append(pending, sm.transitionLocked(StateDefault, "", nil))
+		}
 	}
 	sm.mu.Unlock()
 	fireTransitions(now, pending)

@@ -126,7 +126,7 @@ func diffSnapshots(prev, curr map[string]sep2.DERControl) (added, cancelled []se
 // returns the snapshot to pass as prev next time. Rejected items go first,
 // so a control sharing a rejected mRID is never scheduled.
 func stepEvents(sm *inverter.StateMachine, sched *inverter.Scheduler, now time.Time, cache *inverter.DERControlCache, prev map[string]sep2.DERControl) map[string]sep2.DERControl {
-	sm.Reject(now, cache.Rejected())
+	sm.Reject(now, cache.Rejected(), sched)
 	curr := cache.Snapshot()
 	added, cancelled := diffSnapshots(prev, curr)
 	sm.Tick(now, added, cancelled, sched)

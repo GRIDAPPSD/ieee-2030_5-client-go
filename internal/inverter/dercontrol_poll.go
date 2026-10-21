@@ -224,6 +224,17 @@ func (c *DERControlCache) Refresh(next sep2.DERControlListResult) int {
 	return len(fresh)
 }
 
+// Update diffs next against the cache, commits it with Refresh, and logs the
+// change counts prefixed by source when anything changed.
+func (c *DERControlCache) Update(next sep2.DERControlListResult, source string) {
+	added, updated, cancelled := c.Diff(next)
+	total := c.Refresh(next)
+	if len(added)+len(updated)+len(cancelled) > 0 {
+		log.Printf("%s: %d total (+%d new, ~%d updated, !%d cancelled)",
+			source, total, len(added), len(updated), len(cancelled))
+	}
+}
+
 // derControlCurrentStatus returns the EventStatus.CurrentStatus for an event,
 // or EventStatusScheduled (0) when EventStatus is absent. Server omits-equals-
 // scheduled is the IEEE 2030.5 §10.1.3 default semantic for unset status.
@@ -329,11 +340,6 @@ func (c *SEP2Client) pollDERControlListOnce(
 	if err != nil {
 		return "", fmt.Errorf("poll DERControlList %s: %w", href, err)
 	}
-	added, updated, cancelled := cache.Diff(list)
-	total := cache.Refresh(list)
-	if len(added)+len(updated)+len(cancelled) > 0 {
-		log.Printf("DERControlList poll: %d total (+%d new, ~%d updated, !%d cancelled)",
-			total, len(added), len(updated), len(cancelled))
-	}
+	cache.Update(list, "DERControlList poll")
 	return newHref, nil
 }
