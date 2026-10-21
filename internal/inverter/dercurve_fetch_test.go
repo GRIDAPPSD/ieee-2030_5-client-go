@@ -324,12 +324,11 @@ func TestFetchProgramCurves_DuplicateTypeLastWins(t *testing.T) {
 // ApplyControlsWithCurves : cached-curve consumption + fallback + multi-mode.
 // =============================================================================
 
-// vvHelper returns a DERControlBase with OpModVoltVar set to a non-nil value
-// (the integer value itself is irrelevant : the controller only checks
-// the pointer for nil-ness when deciding to route through the V/V curve).
+// vvHelper returns a DERControlBase with OpModVoltVar set (the href itself
+// is irrelevant : the controller only checks the pointer for nil-ness when
+// deciding to route through the V/V curve).
 func vvHelper() *sep2.DERControlBase {
-	v := int32(1)
-	return &sep2.DERControlBase{OpModVoltVar: &v}
+	return &sep2.DERControlBase{OpModVoltVar: &sep2.DERCurveLink{Href: "/dc/1"}}
 }
 
 // TestApplyControlsWithCurves_CachedVoltVarCurve injects a custom V/V curve
@@ -350,7 +349,7 @@ func TestApplyControlsWithCurves_CachedVoltVarCurve(t *testing.T) {
 	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
 	const maxP = 8000.0
 
-	out := ApplyControlsWithCurves(vvHelper(), grid, maxP, RatedW(Rating.RatedW), cache)
+	out := ApplyControlsWithCurves(vvHelper(), grid, maxP, Ratings{SetMaxW: RatedW(Rating.RatedW)}, cache)
 	if out.Mode != ModeVoltVar {
 		t.Errorf("Mode = %s, want VoltVar", out.Mode)
 	}
@@ -361,7 +360,7 @@ func TestApplyControlsWithCurves_CachedVoltVarCurve(t *testing.T) {
 
 	// Confirm the IEEE 1547 default differs at V=1.0 : pinning that the
 	// cached path actually overrode the default.
-	defaultOut := ApplyControlsWithCurves(vvHelper(), grid, maxP, RatedW(Rating.RatedW), nil)
+	defaultOut := ApplyControlsWithCurves(vvHelper(), grid, maxP, Ratings{SetMaxW: RatedW(Rating.RatedW)}, nil)
 	if defaultOut.ReactivePowerVAr == out.ReactivePowerVAr {
 		t.Error("cached curve produced same Q as default at V=1.0 : cached path not exercised")
 	}
@@ -380,9 +379,9 @@ func TestApplyControlsWithCurves_EmptyCacheFallsBackToDefault(t *testing.T) {
 	grid := GridState{VoltsPU: 1.05, FreqHz: 60.0}
 	const maxP = 8000.0
 
-	withEmpty := ApplyControlsWithCurves(vvHelper(), grid, maxP, RatedW(Rating.RatedW), emptyCache)
-	withNil := ApplyControlsWithCurves(vvHelper(), grid, maxP, RatedW(Rating.RatedW), nil)
-	legacy := ApplyControls(vvHelper(), grid, maxP, RatedW(Rating.RatedW))
+	withEmpty := ApplyControlsWithCurves(vvHelper(), grid, maxP, Ratings{SetMaxW: RatedW(Rating.RatedW)}, emptyCache)
+	withNil := ApplyControlsWithCurves(vvHelper(), grid, maxP, Ratings{SetMaxW: RatedW(Rating.RatedW)}, nil)
+	legacy := ApplyControls(vvHelper(), grid, maxP, Ratings{SetMaxW: RatedW(Rating.RatedW)})
 
 	if withEmpty != withNil {
 		t.Errorf("empty-cache result != nil-cache result; empty=%+v nil=%+v", withEmpty, withNil)
@@ -420,7 +419,7 @@ func TestApplyControlsWithCurves_MultiModeDispatch(t *testing.T) {
 	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
 	const maxP = 8000.0
 
-	out := ApplyControlsWithCurves(vvHelper(), grid, maxP, RatedW(Rating.RatedW), cache)
+	out := ApplyControlsWithCurves(vvHelper(), grid, maxP, Ratings{SetMaxW: RatedW(Rating.RatedW)}, cache)
 
 	wantQ := 0.25 * Rating.RatedVAr
 	if math.Abs(out.ReactivePowerVAr-wantQ) > 1e-6 {
@@ -446,7 +445,7 @@ func TestApplyControlsWithCurves_NilBaseSafe(t *testing.T) {
 	cache := NewDERCurveCache()
 	cache.Set(sep2.CurveTypeOpModVoltVar, []CurvePoint{{X: 1, Y: 1}})
 
-	out := ApplyControlsWithCurves(nil, GridState{VoltsPU: 1.0, FreqHz: 60.0}, 5000, RatedW(Rating.RatedW), cache)
+	out := ApplyControlsWithCurves(nil, GridState{VoltsPU: 1.0, FreqHz: 60.0}, 5000, Ratings{SetMaxW: RatedW(Rating.RatedW)}, cache)
 	if out.ActivePowerW != 5000 || out.ReactivePowerVAr != 0 || !out.Connected {
 		t.Errorf("nil-base output = %+v, want {5000W, 0VAr, connected}", out)
 	}

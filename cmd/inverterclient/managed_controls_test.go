@@ -65,6 +65,15 @@ type controlsServer struct {
 	// failFSAAfterServe makes a device's FSA list answer once more and then
 	// fail.
 	failFSAAfterServe map[string]bool
+
+	// ctlFixedVar, when set, is added to CTL1's control base.
+	ctlFixedVar *sep2.FixedVar
+}
+
+func (s *controlsServer) setControlFixedVar(fv sep2.FixedVar) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ctlFixedVar = &fv
 }
 
 func (s *controlsServer) setSubStatus(code int) {
@@ -329,13 +338,14 @@ func newControlsFixtureWith(t *testing.T, withDefault bool, startOffset time.Dur
 		if srv.respMask != 0 {
 			mask = srv.respMask
 		}
+		fixedVar := srv.ctlFixedVar
 		srv.mu.Unlock()
 		var dc sep2.DERControl
 		dc.MRID = "CTL1"
 		dc.ReplyTo = "/rsp"
 		dc.ResponseRequired = &mask
 		dc.Interval = &sep2.DateTimeInterval{Start: time.Now().Add(-startOffset).Unix(), Duration: durationS}
-		dc.DERControlBase = &sep2.DERControlBase{OpModTargetW: &sep2.ActivePower{Value: controlTargetW}}
+		dc.DERControlBase = &sep2.DERControlBase{OpModTargetW: &sep2.ActivePower{Value: controlTargetW}, OpModFixedVar: fixedVar}
 		writeSepXML(t, w, sep2.DERControlList{
 			ListResource: sep2.ListResource{All: 1, Results: 1},
 			DERControl:   []sep2.DERControl{dc},
@@ -1524,5 +1534,57 @@ func TestManagedControls_FollowedProgramWithAnUnreadableListIsKept(t *testing.T)
 	}
 	if got := pv.ctl.sm.Current().State; got != inverter.StateEventStarted {
 		t.Errorf("PV state = %v, want the control still started", got)
+	}
+}
+
+// A managed device has only a watt rating, so a %setMaxVar fixed var is
+// rejected at receipt: each device posts one 253 for it and never starts it.
+func TestManagedControls_UnhonorableControlIsRejectedWith253(t *testing.T) {
+	client, srv := newControlsFixture(t, 5*time.Second, 3600, pvLFDI, batLFDI)
+	srv.setControlFixedVar(sep2.FixedVar{RefType: 2, Value: 5000})
+	fleet, _, _ := startControlFleet(t, client, "follow")
+
+	for _, l := range []string{pvLFDI, batLFDI} {
+		waitFor(t, "a Response from "+l, func() bool { return len(srv.statusesFor(l, "CTL1")) > 0 })
+	}
+	// Further polls re-read the same list; none may post again or start it.
+	time.Sleep(200 * time.Millisecond)
+	for _, l := range []string{pvLFDI, batLFDI} {
+		if got := srv.statusesFor(l, "CTL1"); len(got) != 1 || got[0] != 253 {
+			t.Errorf("%s posted %v for CTL1, want exactly [253]", l, got)
+		}
+		if st := deviceByLFDI(fleet, l).ctl.sm.Current().State; st == inverter.StateEventStarted {
+			t.Errorf("%s started the rejected control", l)
+		}
+	}
+}
+
+func TestManagedDevice_RatingsHoldOnlyTheWattRating(t *testing.T) {
+	md := &managedDevice{ratedW: 4000}
+	if got := md.ratings(); got != (inverter.Ratings{SetMaxW: 4000}) {
+		t.Errorf("ratings = %+v, want only SetMaxW 4000: a managed device has no reactive rating or reserve", got)
+	}
+}
+
+// A managed device whose control is refused falls back to its default
+// control instead of handing the device the empty refused output.
+func TestManagedControls_RefusedControlFallsBackToTheDefault(t *testing.T) {
+	fleet, probes := batteryFleet(t, "follow")
+	md := fleet.devices[0]
+	md.ctl.defaultCtl.Store(&sep2.DefaultDERControl{DERControlBase: &sep2.DERControlBase{OpModTargetW: &sep2.ActivePower{Value: 700}}})
+	// No session validator runs here, so the refused event reaches the tick.
+	fv := sep2.FixedVar{RefType: 2, Value: 5000}
+	var dc sep2.DERControl
+	dc.MRID = "CTL1"
+	dc.Interval = &sep2.DateTimeInterval{Start: time.Now().Add(-time.Minute).Unix(), Duration: 3600}
+	dc.DERControlBase = &sep2.DERControlBase{OpModTargetW: &sep2.ActivePower{Value: controlTargetW}, OpModFixedVar: &fv}
+	md.ctl.sm.Tick(time.Now(), []sep2.DERControl{dc}, nil, inverter.NewScheduler(time.Now, rand.New(rand.NewPCG(1, 2))))
+	if st := md.ctl.sm.Current().State; st != inverter.StateEventStarted {
+		t.Fatalf("setup: state %s, want EVENT_STARTED", st)
+	}
+
+	fleet.Tick(context.Background())
+	if got := probes[md.lfdi].achievedW(); got != 700 {
+		t.Errorf("achieved %v W, want 700 W from the default control", got)
 	}
 }

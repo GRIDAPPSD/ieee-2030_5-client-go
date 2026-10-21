@@ -59,6 +59,10 @@ const (
 	StateEventStarted
 	StateEventCompleted
 	StateEventCancelled
+	// StateEventRejected marks an event refused at receipt because the
+	// device cannot honor it. It is a transition record only: the machine
+	// never rests in it, and its state is unchanged by the event.
+	StateEventRejected
 )
 
 // String returns the canonical UPPER_SNAKE_CASE state name used in logs and
@@ -75,6 +79,8 @@ func (s EventState) String() string {
 		return "EVENT_COMPLETED"
 	case StateEventCancelled:
 		return "EVENT_CANCELLED"
+	case StateEventRejected:
+		return "EVENT_REJECTED"
 	default:
 		return "UNKNOWN"
 	}
@@ -135,6 +141,8 @@ type StateMachine struct {
 	activeExpireAt time.Time
 	hook           TransitionHook
 	hooks          []TransitionHook
+	validate       func(*sep2.DERControl) error
+	rejected       map[string]bool // mRIDs refused by validate
 }
 
 // NewStateMachine constructs a state machine in DEFAULT. No required
@@ -156,6 +164,17 @@ func NewStateMachine() *StateMachine {
 func (sm *StateMachine) OnTransition(hook TransitionHook) {
 	sm.mu.Lock()
 	sm.hook = hook
+	sm.mu.Unlock()
+}
+
+// SetValidator installs the check an added event must pass before it is
+// scheduled. A refused event is never scheduled; it produces one
+// EVENT_REJECTED transition carrying the event. nil accepts every event.
+// validate runs under the state-machine mutex, so it must not block or call
+// back into the state machine.
+func (sm *StateMachine) SetValidator(validate func(*sep2.DERControl) error) {
+	sm.mu.Lock()
+	sm.validate = validate
 	sm.mu.Unlock()
 }
 
@@ -291,9 +310,30 @@ func (sm *StateMachine) computeTransitionsLocked(
 	var out []transition
 
 	// 1. Forward added events to the scheduler. The scheduler dedupes by
-	// mRID (re-add replaces); the state machine doesn't need to filter.
-	if len(added) > 0 {
-		sched.OnEventsAdded(added)
+	// mRID (re-add replaces). An event the validator refuses is rejected
+	// once, at receipt, and never scheduled; a re-add of it is ignored.
+	accepted := added
+	if sm.validate != nil && len(added) > 0 {
+		accepted = make([]sep2.DERControl, 0, len(added))
+		for i := range added {
+			if sm.rejected[added[i].MRID] {
+				continue
+			}
+			if err := sm.validate(&added[i]); err != nil {
+				if sm.rejected == nil {
+					sm.rejected = map[string]bool{}
+				}
+				sm.rejected[added[i].MRID] = true
+				log.Printf("statemachine: rejected mRID=%q: %v", added[i].MRID, err)
+				evtCopy := added[i].Copy()
+				out = append(out, transition{prev: sm.state, next: StateEventRejected, mRID: added[i].MRID, evt: &evtCopy, hook: sm.hook, hooks: snapshotHooks(sm.hooks)})
+				continue
+			}
+			accepted = append(accepted, added[i])
+		}
+	}
+	if len(accepted) > 0 {
+		sched.OnEventsAdded(accepted)
 	}
 
 	// 2. Forward cancellations. Cancelled may touch the active event (raise

@@ -109,6 +109,12 @@ func TestMapTransitionToStatus_Table(t *testing.T) {
 			want: 0,
 		},
 		{
+			name: "any state to rejected emits Rejected: invalid event (253)",
+			prev: inverter.StateEventStarted,
+			next: inverter.StateEventRejected,
+			want: 253,
+		},
+		{
 			// Out-of-band edges the state machine never produces but the
 			// function must not crash on.
 			name: "default to default returns 0",
@@ -148,6 +154,7 @@ func TestResponseRequiredOn_Bitmask(t *testing.T) {
 		{"3 completed", sep2.ResponseStatusEventCompleted, 0x02},
 		{"6 cancelled", sep2.ResponseStatusEventCancelled, 0x02},
 		{"14 superseded by an alternate program", sep2.ResponseStatusEventSupersededAlternateProgram, 0x02},
+		{"253 rejected, invalid event", 253, 0x02},
 	}
 	for _, st := range statuses {
 		for _, mask := range []uint8{0x00, 0x01, 0x02, 0x03, 0x04, 0x07, 0x20} {
