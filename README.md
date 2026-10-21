@@ -2,10 +2,9 @@
 
 [![ci](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/GRIDAPPSD/ieee-2030_5-client-go/actions/workflows/github-code-scanning/codeql)
-[![Go 1.26.8](https://img.shields.io/badge/Go-1.26.8-00ADD8?logo=go)](https://go.dev/)
 [![License: Battelle BSD](https://img.shields.io/badge/License-Battelle_BSD-blue.svg)](LICENSE)
 
-No GitHub release is published yet. The latest tag is `v0.1.0-client-on-core`.
+Releases and tags: <https://github.com/GRIDAPPSD/ieee-2030_5-client-go/releases>.
 
 IEEE 2030.5 (SEP2) Go client and inverter simulator.
 
@@ -238,7 +237,7 @@ Run `--list-scenarios` for the authoritative list. Current scenarios:
 ## Dependency
 
 This module depends on `github.com/GRIDAPPSD/ieee-2030_5-core-go`, pinned in
-`go.mod` at `v0.23.0`. It is an ordinary versioned Go module import; no
+`go.mod` (the `require` line holds the version). It is an ordinary versioned Go module import; no
 `replace` directive is used.
 
 ## License
