@@ -1,7 +1,9 @@
 package inverter
 
 import (
+	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
@@ -9,7 +11,7 @@ import (
 
 func TestApplyControlsNil(t *testing.T) {
 	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
-	out := ApplyControls(nil, grid, 8000, RatedW(Rating.RatedW))
+	out := ApplyControls(nil, grid, 8000, Ratings{SetMaxW: RatedW(Rating.RatedW)})
 
 	if out.ActivePowerW != 8000 {
 		t.Errorf("nil controls P = %.0f, want 8000", out.ActivePowerW)
@@ -24,7 +26,7 @@ func TestApplyControlsDisconnect(t *testing.T) {
 	base := &sep2.DERControlBase{OpModConnect: &connected}
 	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
 
-	out := ApplyControls(base, grid, 8000, RatedW(Rating.RatedW))
+	out := ApplyControls(base, grid, 8000, Ratings{SetMaxW: RatedW(Rating.RatedW)})
 
 	if out.Connected {
 		t.Error("should be disconnected")
@@ -46,7 +48,7 @@ func TestApplyControlsMaxLimW(t *testing.T) {
 	base := &sep2.DERControlBase{OpModMaxLimW: &maxW}
 	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
 
-	out := ApplyControls(base, grid, 20000, 20000)
+	out := ApplyControls(base, grid, 20000, Ratings{SetMaxW: 20000})
 
 	if out.ActivePowerW != 10000 {
 		t.Errorf("P = %.0f, want 10000 (50%% of 20000 W ratedW; a raw cast of the wire value would read 5000)", out.ActivePowerW)
@@ -60,7 +62,7 @@ func TestApplyControlsFixedW(t *testing.T) {
 	base := &sep2.DERControlBase{OpModFixedW: &fixedW}
 	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
 
-	out := ApplyControls(base, grid, 20000, 20000)
+	out := ApplyControls(base, grid, 20000, Ratings{SetMaxW: 20000})
 
 	if out.ActivePowerW != 5000 {
 		t.Errorf("P = %.0f, want 5000 (25%% of 20000 W ratedW; a raw cast of the wire value would read 2500)", out.ActivePowerW)
@@ -75,7 +77,7 @@ func TestApplyControlsTargetW(t *testing.T) {
 	base := &sep2.DERControlBase{OpModTargetW: &targetW}
 	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
 
-	out := ApplyControls(base, grid, 40000, 40000)
+	out := ApplyControls(base, grid, 40000, Ratings{SetMaxW: 40000})
 
 	if out.ActivePowerW != 30000 {
 		t.Errorf("P = %.0f, want 30000 (Value=30 * 10^Multiplier=3; ignoring Multiplier would read 30)", out.ActivePowerW)
@@ -83,11 +85,10 @@ func TestApplyControlsTargetW(t *testing.T) {
 }
 
 func TestApplyControlsVoltVar(t *testing.T) {
-	voltVar := int32(0) // enable volt-var
-	base := &sep2.DERControlBase{OpModVoltVar: &voltVar}
+	base := &sep2.DERControlBase{OpModVoltVar: &sep2.DERCurveLink{Href: "/dc/1"}}
 	grid := GridState{VoltsPU: 1.05, FreqHz: 60.0}
 
-	out := ApplyControls(base, grid, 8000, RatedW(Rating.RatedW))
+	out := ApplyControls(base, grid, 8000, Ratings{SetMaxW: RatedW(Rating.RatedW)})
 
 	if out.Mode != ModeVoltVar {
 		t.Errorf("mode = %v, want VoltVar", out.Mode)
@@ -99,33 +100,110 @@ func TestApplyControlsVoltVar(t *testing.T) {
 	}
 }
 
-func TestApplyControlsConstantQ(t *testing.T) {
-	fixedQ := sep2.ReactivePower{Value: 2000}
-	base := &sep2.DERControlBase{OpModFixedVar: &fixedQ}
-	grid := GridState{VoltsPU: 1.0, FreqHz: 60.0}
-
-	out := ApplyControls(base, grid, 8000, RatedW(Rating.RatedW))
-
-	if out.Mode != ModeConstantQ {
-		t.Errorf("mode = %v, want ConstantQ", out.Mode)
+// TestApplyControlsFixedVar pins opModFixedVar scaling: Value is a
+// SignedPerCent (hundredths of a percent) of the quantity refType names.
+// The three bases differ from each other and from Value, so reading Value
+// as VAr, or scaling against the wrong basis, fails.
+func TestApplyControlsFixedVar(t *testing.T) {
+	statVarAvail := 3000.0
+	zero := 0.0
+	ratings := Ratings{SetMaxW: 20000, SetMaxVar: 8000, StatVarAvail: &statVarAvail}
+	tests := []struct {
+		name    string
+		fv      sep2.FixedVar
+		ratings Ratings
+		wantQ   float64
+	}{
+		{"refType 1 is percent of setMaxW", sep2.FixedVar{RefType: 1, Value: 5000}, ratings, 10000},
+		{"refType 2 is percent of setMaxVar", sep2.FixedVar{RefType: 2, Value: 5000}, ratings, 4000},
+		{"refType 3 is percent of statVarAvail", sep2.FixedVar{RefType: 3, Value: 5000}, ratings, 1500},
+		{"negative value absorbs", sep2.FixedVar{RefType: 2, Value: -2500}, ratings, -2000},
+		{"full scale is the whole basis", sep2.FixedVar{RefType: 2, Value: 10000}, ratings, 8000},
+		{"zero statVarAvail is a real reading", sep2.FixedVar{RefType: 3, Value: 5000}, Ratings{SetMaxW: 20000, StatVarAvail: &zero}, 0},
 	}
-	if out.ReactivePowerVAr != 2000 {
-		t.Errorf("Q = %.0f, want 2000", out.ReactivePowerVAr)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fv := tt.fv
+			base := &sep2.DERControlBase{OpModFixedVar: &fv}
+			out := ApplyControls(base, GridState{VoltsPU: 1.0, FreqHz: 60.0}, 8000, tt.ratings)
+			if out.Refused != nil {
+				t.Fatalf("Refused = %v, want nil", out.Refused)
+			}
+			if out.Mode != ModeConstantQ {
+				t.Errorf("mode = %v, want ConstantQ", out.Mode)
+			}
+			if out.ReactivePowerVAr != tt.wantQ {
+				t.Errorf("Q = %g VAr, want %g (refType %d, value %d)", out.ReactivePowerVAr, tt.wantQ, tt.fv.RefType, tt.fv.Value)
+			}
+			if out.ActivePowerW != 8000 {
+				t.Errorf("P = %g, want 8000 (fixed var must not touch active power)", out.ActivePowerW)
+			}
+		})
 	}
+}
+
+// TestApplyControlsFixedVarRefused pins the refusal: a basis the device does
+// not know, or a setpoint outside the schema's ranges, is refused with a
+// reason. The refused mode is not applied; the next reactive mode in
+// priority order is, as if opModFixedVar were absent.
+func TestApplyControlsFixedVarRefused(t *testing.T) {
+	tests := []struct {
+		name    string
+		fv      sep2.FixedVar
+		ratings Ratings
+		reason  string
+	}{
+		{"refType 1 with no setMaxW", sep2.FixedVar{RefType: 1, Value: 5000}, Ratings{SetMaxVar: 8000}, "setMaxW"},
+		{"refType 2 with no setMaxVar", sep2.FixedVar{RefType: 2, Value: 5000}, Ratings{SetMaxW: 20000}, "setMaxVar"},
+		{"refType 3 with no statVarAvail", sep2.FixedVar{RefType: 3, Value: 5000}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "statVarAvail"},
+		{"refType 0 is not a DERUnitRefType for fixed var", sep2.FixedVar{RefType: 0, Value: 5000}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "refType 0"},
+		{"refType 4 is not a DERUnitRefType for fixed var", sep2.FixedVar{RefType: 4, Value: 5000}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "refType 4"},
+		{"value above full scale", sep2.FixedVar{RefType: 2, Value: 10001}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "10001"},
+		{"value below negative full scale", sep2.FixedVar{RefType: 2, Value: -10001}, Ratings{SetMaxW: 20000, SetMaxVar: 8000}, "-10001"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fv := tt.fv
+			base := &sep2.DERControlBase{OpModFixedVar: &fv}
+			out := ApplyControls(base, GridState{VoltsPU: 1.0, FreqHz: 60.0}, 8000, tt.ratings)
+			if !errors.Is(out.Refused, ErrFixedVarRefused) {
+				t.Fatalf("Refused = %v, want ErrFixedVarRefused", out.Refused)
+			}
+			if !strings.Contains(out.Refused.Error(), tt.reason) {
+				t.Errorf("Refused = %q, want it to name %q", out.Refused, tt.reason)
+			}
+			if out.Mode != ModeConstantPF || out.ReactivePowerVAr != 0 {
+				t.Errorf("mode = %v, Q = %g; want the no-reactive-control default (ConstantPF, 0)", out.Mode, out.ReactivePowerVAr)
+			}
+		})
+	}
+
+	t.Run("next reactive mode applies", func(t *testing.T) {
+		fv := sep2.FixedVar{RefType: 3, Value: 5000}
+		inject := sep2.FixedPowerFactor{Displacement: 900}
+		base := &sep2.DERControlBase{OpModFixedVar: &fv, OpModFixedPFInjectW: &inject}
+		out := ApplyControls(base, GridState{VoltsPU: 1.0, FreqHz: 60.0}, 8000, Ratings{SetMaxW: 20000})
+		if !errors.Is(out.Refused, ErrFixedVarRefused) {
+			t.Fatalf("Refused = %v, want ErrFixedVarRefused", out.Refused)
+		}
+		want := 8000 * tanFromPF(0.9)
+		if math.Abs(out.ReactivePowerVAr-want) > 1e-9 {
+			t.Errorf("Q = %g, want %g from opModFixedPFInjectW", out.ReactivePowerVAr, want)
+		}
+	})
 }
 
 func TestApplyControlsPriorityDisconnectOverAll(t *testing.T) {
 	connected := false
 	maxWPct := sep2.PerCent(5000)
-	voltVar := int32(0)
 	base := &sep2.DERControlBase{
 		OpModConnect: &connected,
 		OpModMaxLimW: &maxWPct,
-		OpModVoltVar: &voltVar,
+		OpModVoltVar: &sep2.DERCurveLink{Href: "/dc/1"},
 	}
 	grid := GridState{VoltsPU: 1.05, FreqHz: 60.0}
 
-	out := ApplyControls(base, grid, 8000, RatedW(Rating.RatedW))
+	out := ApplyControls(base, grid, 8000, Ratings{SetMaxW: RatedW(Rating.RatedW)})
 
 	// Disconnect has highest priority : all others ignored
 	if out.Connected {
@@ -133,6 +211,30 @@ func TestApplyControlsPriorityDisconnectOverAll(t *testing.T) {
 	}
 	if out.ActivePowerW != 0 {
 		t.Error("disconnected P should be 0")
+	}
+}
+
+// TestApplyControlsFreqDroopKOF pins the kOF scale: thousandths of a
+// per-unit frequency change per per-unit power change, so 50 is 5% droop.
+// At 61.5 Hz a 5% droop on the 10 kW rating sheds 5000 W of 8000 W.
+func TestApplyControlsFreqDroopKOF(t *testing.T) {
+	tests := []struct {
+		name  string
+		kOF   uint16
+		wantP float64
+	}{
+		{"kOF 50 is 5 percent", 50, 3000},
+		{"kOF 100 is 10 percent", 100, 5500},
+		{"kOF 0 uses the default droop", 0, 3000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := &sep2.DERControlBase{OpModFreqDroop: &sep2.FreqDroopType{KOF: tt.kOF}}
+			out := ApplyControls(base, GridState{VoltsPU: 1.0, FreqHz: 61.5}, 8000, Ratings{SetMaxW: RatedW(Rating.RatedW)})
+			if math.Abs(out.ActivePowerW-tt.wantP) > 1e-6 {
+				t.Errorf("P = %g, want %g", out.ActivePowerW, tt.wantP)
+			}
+		})
 	}
 }
 

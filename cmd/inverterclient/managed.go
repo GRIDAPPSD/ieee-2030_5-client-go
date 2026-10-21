@@ -120,6 +120,9 @@ type managedDevice struct {
 	edev sep2.EndDevice
 	ctl  *controlSession
 
+	// refusals logs this device's refused controls once per change.
+	refusals refusalLog
+
 	// DER resources (managed_status.go): der is set once the device's
 	// DERList has been read; setupDone once capability and settings are
 	// PUT; lastStatus is when status and availability last went out.
@@ -352,7 +355,10 @@ func (f *managedFleet) Tick(ctx context.Context) {
 		if md.ctl != nil {
 			base = md.ctl.base()
 		}
-		controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, inverter.RatedW(md.ratedW), nil)
+		// A managed device has no reactive rating or reserve, so only a
+		// %setMaxW fixed var can be honored.
+		controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, inverter.Ratings{SetMaxW: inverter.RatedW(md.ratedW)}, nil)
+		md.refusals.observe("managed device "+md.name, controls.Refused)
 		if w, ok := plan[md.lfdi]; ok {
 			controls.ActivePowerW = w
 		}

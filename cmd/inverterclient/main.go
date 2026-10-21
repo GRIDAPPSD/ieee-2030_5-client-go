@@ -1108,6 +1108,7 @@ func main() {
 	// freeze during disturbance so the classification sees the original
 	// setpoint, not the curtailed value.
 	preDisturbancePW := 0.0
+	var refusals refusalLog
 
 	ticker := time.NewTicker(cfg.TickInterval)
 	defer ticker.Stop()
@@ -1178,7 +1179,8 @@ func main() {
 			// server-supplied Volt/Var and Volt/Watt curves; misses fall
 			// back to IEEE 1547 defaults inside the controller.
 			base := inverter.ActiveControlBase(stateMachine.Current(), defaultCtl)
-			controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, inverter.RatedW(inverter.Rating.RatedW), curveCache)
+			controls := inverter.ApplyControlsWithCurves(base, reading.Grid, reading.MaxPowerW, ownRatings(), curveCache)
+			refusals.observe("inverter", controls.Refused)
 
 			// ApplySetpoint: push the commanded control output to the device
 			// and get back the achieved InverterState.
@@ -1261,5 +1263,16 @@ func main() {
 					state.PowerFactor, state.VoltsPU, state.FreqHz, state.Mode, reading.Irradiance)
 			}
 		}
+	}
+}
+
+// ownRatings are this device's bases for percentage controls. setMaxVar
+// defaults to rtgMaxVar (IEEE 2030.5-2018 DERSettings), which Phase 3
+// reports from Rating.RatedVAr. statVarAvail is not tracked, so a
+// %statVarAvail fixed var is refused.
+func ownRatings() inverter.Ratings {
+	return inverter.Ratings{
+		SetMaxW:   inverter.RatedW(inverter.Rating.RatedW),
+		SetMaxVar: inverter.Rating.RatedVAr,
 	}
 }

@@ -72,6 +72,10 @@ type ControlOutputs struct {
 	Connected        bool    // should be connected
 	Energized        bool    // should be energized
 	Mode             ControlMode
+	// Refused is non-nil when a control in the base was refused instead of
+	// applied; it wraps a sentinel such as ErrFixedVarRefused and names the
+	// reason. The refused mode is treated as absent.
+	Refused error
 }
 
 // SimConfig holds the inverter client configuration.

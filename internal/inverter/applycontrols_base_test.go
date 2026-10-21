@@ -195,7 +195,7 @@ func TestActiveControlBase_DrivesApplyControls(t *testing.T) {
 	grid := inverter.GridState{VoltsPU: 1.0, FreqHz: 60.0}
 	const maxP = 8000.0
 	const ratedW = 8000.0
-	out := inverter.ApplyControls(base, grid, maxP, ratedW)
+	out := inverter.ApplyControls(base, grid, maxP, inverter.Ratings{SetMaxW: ratedW})
 
 	if out.ActivePowerW != 400 {
 		t.Fatalf("ApplyControls(default base with OpModFixedW=500 [5%%], ratedW=8000, ...) ActivePowerW = %.0f, want 400 (controller honored the helper-supplied base)", out.ActivePowerW)
