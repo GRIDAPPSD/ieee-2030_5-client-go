@@ -1,14 +1,43 @@
-NOTICE — DERIVATIVE WORK, NOT FOR REDISTRIBUTION
+NOTICE
+======
 
-This repository is a private archive of inverter simulator code that was
-translated from a local copy of the EPRI IEEE 2030.5 C client to Go.
-The original C client is not open-source software and the team does
-not have redistribution rights for either the original or this derivative.
+This project (ieee-2030_5-client-go) is licensed under the terms in the
+LICENSE file at the root of this repository. This NOTICE covers third-party
+material the project refers to but does not distribute.
 
-This repository is retained solely as a personal reference for migration
-planning purposes. Do not redistribute, publish, or relicense any portion
-of this repository.
 
-The replacement inverter simulator (clean-room implementation, based on
-the IEEE 1547-2018 public specification with an OSS reference codebase)
-lives in the public GRIDAPPSD/ieee-2030_5-go repository.
+IEEE 2030.5 and its XML artifacts (sep.xsd, sep_wadl.xml)
+----------------------------------------------------------
+
+IEEE 2030.5, "IEEE Standard for Smart Energy Profile Application Protocol",
+and the artifacts published with it, including the XML Schema sep.xsd and the
+application description document sep_wadl.xml, are copyright (c) The Institute
+of Electrical and Electronics Engineers, Inc. (IEEE). All rights reserved.
+IEEE, the IEEE Standards Association, and the standard's authors are not
+affiliated with this project and do not endorse it.
+
+THESE FILES ARE NOT DISTRIBUTED WITH THIS PROJECT.
+
+No copy of sep.xsd or sep_wadl.xml is contained in this repository, in any
+release artifact, or in any binary built from this module. The client refers
+to the schema only in source comments. Where schema or WADL checks run, they
+read a copy you supply from outside the checkout, and the protocol types come
+from the core module, ieee-2030_5-core-go, whose NOTICE covers the schema.
+
+IEEE 2030.5 is available at no charge through the IEEE GET Program:
+
+    https://standards.ieee.org/products-programs/ieee-get-program/
+
+Your use of those files is governed by IEEE's terms, not by this project's
+license.
+
+
+SunSpec test material
+---------------------
+
+The SunSpec CSIP test certificates and related fixtures are third-party
+material. They are not distributed with this project. The scripts that use
+them read them from a directory you supply outside the checkout (SUNSPEC_DIR),
+and the fixture paths are gitignored so they cannot be committed by accident.
+Your use of that material is governed by SunSpec's terms, not by this
+project's license.
