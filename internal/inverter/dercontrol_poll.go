@@ -81,6 +81,7 @@ func derControlPollDuration(pollRateSec uint32) time.Duration {
 type DERControlCache struct {
 	mu       sync.RWMutex
 	controls map[string]sep2.DERControl
+	rejected []sep2.RejectedDERControl
 }
 
 // NewDERControlCache constructs an empty cache ready for concurrent use.
@@ -101,12 +102,59 @@ func (c *DERControlCache) Snapshot() map[string]sep2.DERControl {
 	return out
 }
 
+// Rejected returns a copy of the latest list's items whose DERControlBase
+// failed to decode. A slice, not a map: the mRID is optional on a rejected
+// item, so two items can share the empty key.
+func (c *DERControlCache) Rejected() []sep2.RejectedDERControl {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return copyRejected(c.rejected)
+}
+
+// copyRejected deep-copies each item's event fields through DERControl.Copy,
+// the one owner of those pointer copies.
+func copyRejected(items []sep2.RejectedDERControl) []sep2.RejectedDERControl {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]sep2.RejectedDERControl, len(items))
+	for i, r := range items {
+		out[i] = sep2.RejectedDERControl{
+			RandomizableEvent: sep2.DERControl{RandomizableEvent: r.RandomizableEvent}.Copy().RandomizableEvent,
+			Err:               r.Err,
+		}
+	}
+	return out
+}
+
 // Len returns the number of entries currently cached. Exposed for tests and
 // operator logging; the canonical inspection path is Snapshot.
 func (c *DERControlCache) Len() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return len(c.controls)
+}
+
+// acceptedControls is the list's controls less any whose mRID is also
+// rejected: the rejection wins, so a control sharing a rejected mRID is
+// never scheduled.
+func acceptedControls(list sep2.DERControlListResult) []sep2.DERControl {
+	if len(list.Rejected) == 0 {
+		return list.DERControl
+	}
+	rejected := make(map[string]bool, len(list.Rejected))
+	for _, r := range list.Rejected {
+		if r.MRID != "" {
+			rejected[r.MRID] = true
+		}
+	}
+	out := make([]sep2.DERControl, 0, len(list.DERControl))
+	for _, c := range list.DERControl {
+		if !rejected[c.MRID] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // Diff compares `next` (a freshly polled DERControlList contents) against the
@@ -128,10 +176,10 @@ func (c *DERControlCache) Len() int {
 // Slices are returned as fresh copies; the caller may sort or filter them
 // freely. Entries returned in `next`-order (range-iteration order) so callers
 // that care about determinism should sort by mRID downstream.
-func (c *DERControlCache) Diff(next []sep2.DERControl) (added, updated, cancelled []sep2.DERControl) {
+func (c *DERControlCache) Diff(next sep2.DERControlListResult) (added, updated, cancelled []sep2.DERControl) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, nc := range next {
+	for _, nc := range acceptedControls(next) {
 		if nc.MRID == "" {
 			// Spec note: DERControl mRID is "shall be present" per IEEE 2030.5
 			// §10.7. A blank one is server-side garbage; skip it rather than
@@ -155,20 +203,23 @@ func (c *DERControlCache) Diff(next []sep2.DERControl) (added, updated, cancelle
 	return added, updated, cancelled
 }
 
-// Refresh replaces the cache contents with the supplied snapshot. Like Diff
-// it skips entries with empty mRID. Holds the write lock only across the
-// map swap; never across I/O. Returns the count of entries committed for
-// operator logging.
-func (c *DERControlCache) Refresh(next []sep2.DERControl) int {
-	fresh := make(map[string]sep2.DERControl, len(next))
-	for _, nc := range next {
+// Refresh replaces the cache contents, controls and rejected items, with the
+// supplied list. Like Diff it skips controls with empty mRID. Holds the write
+// lock only across the swap; never across I/O. Returns the count of controls
+// committed for operator logging.
+func (c *DERControlCache) Refresh(next sep2.DERControlListResult) int {
+	controls := acceptedControls(next)
+	fresh := make(map[string]sep2.DERControl, len(controls))
+	for _, nc := range controls {
 		if nc.MRID == "" {
 			continue
 		}
 		fresh[nc.MRID] = nc.Copy()
 	}
+	rejected := copyRejected(next.Rejected)
 	c.mu.Lock()
 	c.controls = fresh
+	c.rejected = rejected
 	c.mu.Unlock()
 	return len(fresh)
 }
@@ -278,8 +329,8 @@ func (c *SEP2Client) pollDERControlListOnce(
 	if err != nil {
 		return "", fmt.Errorf("poll DERControlList %s: %w", href, err)
 	}
-	added, updated, cancelled := cache.Diff(list.DERControl)
-	total := cache.Refresh(list.DERControl)
+	added, updated, cancelled := cache.Diff(list)
+	total := cache.Refresh(list)
 	if len(added)+len(updated)+len(cancelled) > 0 {
 		log.Printf("DERControlList poll: %d total (+%d new, ~%d updated, !%d cancelled)",
 			total, len(added), len(updated), len(cancelled))

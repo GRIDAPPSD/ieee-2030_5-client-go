@@ -122,6 +122,17 @@ func diffSnapshots(prev, curr map[string]sep2.DERControl) (added, cancelled []se
 	return added, cancelled
 }
 
+// stepEvents feeds the state machine what changed in cache since prev and
+// returns the snapshot to pass as prev next time. Rejected items go first,
+// so a control sharing a rejected mRID is never scheduled.
+func stepEvents(sm *inverter.StateMachine, sched *inverter.Scheduler, now time.Time, cache *inverter.DERControlCache, prev map[string]sep2.DERControl) map[string]sep2.DERControl {
+	sm.Reject(now, cache.Rejected())
+	curr := cache.Snapshot()
+	added, cancelled := diffSnapshots(prev, curr)
+	sm.Tick(now, added, cancelled, sched)
+	return curr
+}
+
 // walkDERProgramTree implements the Phase 2c (continued) walk: for
 // each FSA whose DERProgramListLink is non-nil, GET the DERProgramList and
 // fetch each DERProgram's DefaultDERControl / DERControlList / DERCurveList
@@ -907,21 +918,9 @@ func main() {
 			defer t.Stop()
 			prev := derControlCache.Snapshot()
 			tick := func() {
-				curr := derControlCache.Snapshot()
-				// Translate the cache to a fresh DERControl slice for Diff :
-				// Diff already returns Copy() values for added/cancelled.
-				next := make([]sep2.DERControl, 0, len(curr))
-				for _, v := range curr {
-					next = append(next, v)
-				}
-				// cache.Diff is computed against the live cache state, not
-				// against `prev`. We track `prev` so on the next iteration we
-				// see freshly-added events; the Diff signature consults the
-				// cache's internal map directly. For the state machine we want
-				// "deltas since LAST TICK", so use a manual diff against prev.
-				added, cancelled := diffSnapshots(prev, curr)
-				stateMachine.Tick(client.Now(), added, cancelled, sched)
-				prev = curr
+				// The state machine wants deltas since the LAST TICK, not
+				// against the live cache, so diff against prev.
+				prev = stepEvents(stateMachine, sched, client.Now(), derControlCache, prev)
 			}
 			tick() // initial tick so a fresh poll seeds the state machine.
 			for {

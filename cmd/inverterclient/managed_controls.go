@@ -288,23 +288,19 @@ func (md *managedDevice) followProgram(ctx, tctx context.Context, env controlsEn
 		}
 		// The state machine ticks every cycle, so an event ends on time
 		// even while the control list cannot be read.
-		var added, cancelled []sep2.DERControl
 		list, newHref, err := client.GetDERControlList(tctx, href)
-		switch {
-		case err != nil:
+		if err != nil {
 			if ctx.Err() == nil {
 				log.Printf("managed device %s: DERControlList poll failed (continuing): %v", md.name, err)
 			}
-		default:
-			if newHref != "" {
-				href = newHref
-			}
-			cache.Refresh(list.DERControl)
-			curr := cache.Snapshot()
-			added, cancelled = diffSnapshots(prev, curr)
-			prev = curr
+			md.ctl.sm.Tick(client.Now(), nil, nil, sched)
+			return
 		}
-		md.ctl.sm.Tick(client.Now(), added, cancelled, sched)
+		if newHref != "" {
+			href = newHref
+		}
+		cache.Refresh(list)
+		prev = stepEvents(md.ctl.sm, sched, client.Now(), cache, prev)
 	}
 
 	log.Printf("managed device %s: following controls from %s every %s (controls.response %s)", md.name, href, interval, md.ctl.mode)

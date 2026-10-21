@@ -833,14 +833,18 @@ func (c *SEP2Client) GetDefaultDERControl(ctx context.Context, defaultDERControl
 // walking deferred). This method caches the result per-program; scheduling and
 // application are Phase 5.
 //
+// A DERControl whose DERControlBase fails to decode lands in the result's
+// Rejected rather than failing the whole list, so the rest of the list is
+// still followed and the bad event can be answered with 253.
+//
 // On 301 the underlying Get follows once and the new
 // DERControlList href (with the ?l=255 page query stripped) is surfaced as
 // newDERControlListHref so the long-lived PollDERControlList loop can
 // update its local href and stop paying a redirect on every tick.
 // newDERControlListHref is "" when no follow happened.
-func (c *SEP2Client) GetDERControlList(ctx context.Context, derControlListHref string) (list sep2.DERControlList, newDERControlListHref string, err error) {
+func (c *SEP2Client) GetDERControlList(ctx context.Context, derControlListHref string) (list sep2.DERControlListResult, newDERControlListHref string, err error) {
 	if derControlListHref == "" {
-		return sep2.DERControlList{}, "", fmt.Errorf("DERControlList href required")
+		return sep2.DERControlListResult{}, "", fmt.Errorf("DERControlList href required")
 	}
 	sep := "?"
 	if strings.Contains(derControlListHref, "?") {
@@ -849,7 +853,7 @@ func (c *SEP2Client) GetDERControlList(ctx context.Context, derControlListHref s
 	path := derControlListHref + sep + "l=255"
 	followedHref, err := c.Get(ctx, guard.KindEndDeviceRead, path, &list)
 	if err != nil {
-		return sep2.DERControlList{}, "", fmt.Errorf("GET DERControlList: %w", err)
+		return sep2.DERControlListResult{}, "", fmt.Errorf("GET DERControlList: %w", err)
 	}
 	return list, stripPagingQuery(followedHref, sep), nil
 }

@@ -52,10 +52,10 @@ func makeDERControl(mrid string, status uint8) sep2.DERControl {
 func TestDERControlCache_SnapshotIsIndependent(t *testing.T) {
 	t.Parallel()
 	cache := inverter.NewDERControlCache()
-	cache.Refresh([]sep2.DERControl{
+	cache.Refresh(listResult([]sep2.DERControl{
 		makeDERControl("A", sep2.EventStatusScheduled),
 		makeDERControl("B", sep2.EventStatusActive),
-	})
+	}))
 
 	snap := cache.Snapshot()
 	if got, want := len(snap), 2; got != want {
@@ -80,11 +80,11 @@ func TestDERControlCache_SnapshotIsIndependent(t *testing.T) {
 func TestDERControlCache_RefreshSkipsEmptyMRID(t *testing.T) {
 	t.Parallel()
 	cache := inverter.NewDERControlCache()
-	n := cache.Refresh([]sep2.DERControl{
+	n := cache.Refresh(listResult([]sep2.DERControl{
 		makeDERControl("A", sep2.EventStatusScheduled),
 		makeDERControl("", sep2.EventStatusActive), // skipped
 		makeDERControl("B", sep2.EventStatusScheduled),
-	})
+	}))
 	if n != 2 {
 		t.Errorf("Refresh return = %d, want 2 (empty mRID dropped)", n)
 	}
@@ -212,9 +212,9 @@ func TestDERControlCache_Diff(t *testing.T) {
 			t.Parallel()
 			cache := inverter.NewDERControlCache()
 			if len(tc.seeded) > 0 {
-				cache.Refresh(tc.seeded)
+				cache.Refresh(listResult(tc.seeded))
 			}
-			added, updated, cancelled := cache.Diff(tc.next)
+			added, updated, cancelled := cache.Diff(listResult(tc.next))
 			if got := len(added); got != tc.expect.added {
 				t.Errorf("added = %d, want %d", got, tc.expect.added)
 			}
@@ -471,7 +471,7 @@ func TestPollDERControlList_DiffNewAndCancelled(t *testing.T) {
 		makeDERControl("B", sep2.EventStatusCancelled),
 		makeDERControl("C", sep2.EventStatusScheduled),
 	}
-	added, _, cancelled := cache.Diff(next)
+	added, _, cancelled := cache.Diff(listResult(next))
 	if len(added) != 1 || added[0].MRID != "C" {
 		t.Errorf("Diff.added = %+v, want [C]", mridsOf(added))
 	}

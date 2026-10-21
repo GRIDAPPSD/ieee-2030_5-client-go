@@ -198,8 +198,8 @@ func refreshDERControlList(
 	if err != nil {
 		return err
 	}
-	added, updated, cancelled := cache.Diff(list.DERControl)
-	total := cache.Refresh(list.DERControl)
+	added, updated, cancelled := cache.Diff(list)
+	total := cache.Refresh(list)
 	if len(added)+len(updated)+len(cancelled) > 0 {
 		log.Printf("Notification dispatcher: DERControlList refreshed via notification, %d total (+%d new, ~%d updated, !%d cancelled)",
 			total, len(added), len(updated), len(cancelled))

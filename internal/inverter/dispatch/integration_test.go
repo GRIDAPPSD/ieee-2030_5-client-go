@@ -39,26 +39,26 @@ type httpFetcher struct {
 	client  *http.Client
 }
 
-func (f *httpFetcher) GetDERControlList(ctx context.Context, href string) (sep2.DERControlList, string, error) {
+func (f *httpFetcher) GetDERControlList(ctx context.Context, href string) (sep2.DERControlListResult, string, error) {
 	url := f.baseURL + href
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return sep2.DERControlList{}, "", fmt.Errorf("build request: %w", err)
+		return sep2.DERControlListResult{}, "", fmt.Errorf("build request: %w", err)
 	}
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return sep2.DERControlList{}, "", fmt.Errorf("GET %s: %w", href, err)
+		return sep2.DERControlListResult{}, "", fmt.Errorf("GET %s: %w", href, err)
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return sep2.DERControlList{}, "", fmt.Errorf("GET %s: status %d", href, resp.StatusCode)
+		return sep2.DERControlListResult{}, "", fmt.Errorf("GET %s: status %d", href, resp.StatusCode)
 	}
-	var list sep2.DERControlList
+	var list sep2.DERControlListResult
 	if err := xml.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return sep2.DERControlList{}, "", fmt.Errorf("decode DERControlList: %w", err)
+		return sep2.DERControlListResult{}, "", fmt.Errorf("decode DERControlList: %w", err)
 	}
 	return list, "", nil
 }
