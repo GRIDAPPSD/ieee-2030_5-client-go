@@ -33,7 +33,7 @@ func TestRunPhase4Metering_MirrorUsesClientOwnLFDI(t *testing.T) {
 	t.Parallel()
 	env := newDERWalkTestEnv(t)
 
-	var gotDeviceLFDI atomic.Value
+	var gotDeviceLFDI, gotRoleFlags atomic.Value
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mup", func(w http.ResponseWriter, r *http.Request) {
 		b, err := io.ReadAll(r.Body)
@@ -45,6 +45,7 @@ func TestRunPhase4Metering_MirrorUsesClientOwnLFDI(t *testing.T) {
 			t.Errorf("unmarshal /mup POST body: %v", err)
 		}
 		gotDeviceLFDI.Store(mup.DeviceLFDI)
+		gotRoleFlags.Store(mup.RoleFlags)
 		w.Header().Set("Location", "/mup/1")
 		w.WriteHeader(http.StatusCreated)
 	})
@@ -70,6 +71,11 @@ func TestRunPhase4Metering_MirrorUsesClientOwnLFDI(t *testing.T) {
 	}
 	if got == "" {
 		t.Error("MirrorUsagePoint DeviceLFDI is empty")
+	}
+	// 9 is isMirror (bit 0) | isDER (bit 3); the server counts a mirror as
+	// DER power only with bit 3 set.
+	if rf, _ := gotRoleFlags.Load().(sep2.RoleFlagsValue); rf != 9 {
+		t.Errorf("MirrorUsagePoint RoleFlags = %d, want 9 (isMirror|isDER)", rf)
 	}
 }
 

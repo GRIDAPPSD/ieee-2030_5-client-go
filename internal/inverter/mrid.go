@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
 )
 
 // mRIDType (IEEE 2030.5-2018 sec 10.x object model, "mRIDType object
@@ -47,6 +49,12 @@ func avoidReservedAllF(b []byte) []byte {
 func MirrorUsagePointMRID(deviceLFDI string) string {
 	return deriveMRID("mup", deviceLFDI)
 }
+
+// MirrorRoleFlags is the roleFlags value of a MirrorUsagePoint that mirrors a
+// DER's own metering: isMirror (bit 0, the server is not the measurement
+// device) and isDER (bit 3, the usage applies to a DER). The server counts a
+// mirror toward DER power only when bit 3 is set.
+const MirrorRoleFlags sep2.RoleFlagsValue = 0x01 | 0x08
 
 // NewFlowReservationRequestMRID mints the mRID of one FlowReservationRequest
 // from the aggregator's LFDI, the creation instant and 16 random bytes, so
