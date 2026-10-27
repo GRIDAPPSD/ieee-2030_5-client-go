@@ -1098,6 +1098,7 @@ func main() {
 	}
 
 	lastReport := time.Time{}
+	own := &ownReporter{client: client, dcap: dcap, reporter: reporter, base: cfg.ReportInterval, now: time.Now}
 	// Track contiguous abnormal-condition duration so the trip
 	// curves in ridethrough.go have a duration argument. Reset on every
 	// nominal-grid tick.
@@ -1248,17 +1249,7 @@ func main() {
 
 			// Report periodically
 			if time.Since(lastReport) >= cfg.ReportInterval {
-				if err := reporter.ReportStatus(ctx, state); err != nil {
-					log.Printf("ReportStatus failed: %v", err)
-				}
-				if err := reporter.ReportMetering(ctx, state); err != nil {
-					log.Printf("ReportMetering failed: %v", err)
-					if inverter.MirrorLost(err) {
-						if href := createOwnMirror(ctx, client, dcap); href != "" {
-							reporter.SetMirrorHref(href)
-						}
-					}
-				}
+				own.report(ctx, state)
 				lastReport = time.Now()
 
 				log.Printf("  sim=%s P=%.0fW Q=%.0fVAr PF=%.3f V=%.3fpu F=%.1fHz mode=%s irr=%.0f",

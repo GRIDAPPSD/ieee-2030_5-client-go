@@ -25,6 +25,7 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/GRIDAPPSD/ieee-2030_5-client-go/internal/inverter"
 	"github.com/GRIDAPPSD/ieee-2030_5-core-go/pkg/sep2"
@@ -48,29 +49,60 @@ func runPhase4Metering(ctx context.Context, client *inverter.SEP2Client, dcap se
 }
 
 // createOwnMirror POSTs the DER client's own MirrorUsagePoint and returns the
-// href its readings post to, or "" when none was created (no list link, a
-// failed POST, or an empty Location), each logged. A reading post that gets a
-// 404 calls it again to replace a mirror the server lost.
+// href its readings post to, or "" when none was created (no list link or a
+// failed POST), each logged.
 func createOwnMirror(ctx context.Context, client *inverter.SEP2Client, dcap sep2.DeviceCapability) string {
 	if dcap.MirrorUsagePointListLink == nil {
 		log.Println("DeviceCapability has no MirrorUsagePointListLink; metering disabled")
 		return ""
 	}
-	mupLoc, err := client.CreateMirrorUsagePoint(ctx, dcap.MirrorUsagePointListLink.Href, inverter.DeviceLFDI(client.LFDI()), sep2.MirrorUsagePoint{
-		MRID:                inverter.MirrorUsagePointMRID(client.LFDI()),
-		Description:         "PV Inverter Metering",
-		RoleFlags:           inverter.MirrorRoleFlags,
-		ServiceCategoryKind: 0,
-		Status:              1,
-	})
-	switch {
-	case err != nil:
+	mupLoc, err := postMirrorUsagePoint(ctx, client, dcap.MirrorUsagePointListLink.Href, client.LFDI(), "PV Inverter Metering")
+	if err != nil {
 		log.Printf("create MirrorUsagePoint: %v (metering disabled)", err)
-		return ""
-	case mupLoc == "":
-		log.Println("MirrorUsagePoint POST returned empty Location; metering disabled")
 		return ""
 	}
 	log.Printf("MirrorUsagePoint: %s", mupLoc)
 	return mupLoc + "/mr"
+}
+
+// ownReporter runs the single-device report step and replaces a mirror the
+// server lost, under the same backoff a managed device uses.
+type ownReporter struct {
+	client   *inverter.SEP2Client
+	dcap     sep2.DeviceCapability
+	reporter *inverter.Reporter
+	base     time.Duration
+	now      func() time.Time
+	retry    mirrorRetry
+	lost     bool
+}
+
+// report posts one status and one metering reading. A 404 on the reading
+// marks the mirror lost; readings are skipped, as for a managed device, until
+// the backoff has elapsed and a new mirror is created.
+func (o *ownReporter) report(ctx context.Context, state inverter.InverterState) {
+	if err := o.reporter.ReportStatus(ctx, state); err != nil {
+		log.Printf("ReportStatus failed: %v", err)
+	}
+	if o.lost {
+		if !o.retry.ready(o.now()) {
+			return
+		}
+		href := createOwnMirror(ctx, o.client, o.dcap)
+		if href == "" {
+			o.retry.failed(o.now(), o.base)
+			return
+		}
+		o.reporter.SetMirrorHref(href)
+		o.lost = false
+	}
+	if err := o.reporter.ReportMetering(ctx, state); err != nil {
+		log.Printf("ReportMetering failed: %v", err)
+		if inverter.MirrorLost(err) {
+			o.lost = true
+			o.retry.failed(o.now(), o.base)
+		}
+		return
+	}
+	o.retry.worked()
 }

@@ -80,6 +80,20 @@ type fakeServer struct {
 func newFakeServer(t *testing.T, env *derWalkTestEnv, listed ...string) (*inverter.SEP2Client, *fakeServer) {
 	t.Helper()
 	fs := &fakeServer{mupLFDI: map[string]string{}, readings: map[string][]sep2.MirrorMeterReading{}}
+	serverURL, _ := startDERWalkListener(t, env, fs.mux(t, listed...))
+	client, err := inverter.NewSEP2Client(inverter.SimConfig{
+		ServerURL: serverURL, CertFile: env.deviceCertPath, KeyFile: env.deviceKeyPath,
+		CAFile: env.caCertPath, ClientRole: "aggregator",
+	})
+	if err != nil {
+		t.Fatalf("NewSEP2Client: %v", err)
+	}
+	return client, fs
+}
+
+// mux serves the fake server's handlers, so a test with a different client
+// role can reach the same mirror and reading bookkeeping.
+func (fs *fakeServer) mux(t *testing.T, listed ...string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/edev", func(w http.ResponseWriter, _ *http.Request) {
 		var list sep2.EndDeviceList
@@ -127,15 +141,7 @@ func newFakeServer(t *testing.T, env *derWalkTestEnv, listed ...string) (*invert
 		fs.readings[loc] = append(fs.readings[loc], mmr)
 		w.WriteHeader(http.StatusCreated)
 	})
-	serverURL, _ := startDERWalkListener(t, env, mux)
-	client, err := inverter.NewSEP2Client(inverter.SimConfig{
-		ServerURL: serverURL, CertFile: env.deviceCertPath, KeyFile: env.deviceKeyPath,
-		CAFile: env.caCertPath, ClientRole: "aggregator",
-	})
-	if err != nil {
-		t.Fatalf("NewSEP2Client: %v", err)
-	}
-	return client, fs
+	return mux
 }
 
 var dcapWithMirrors = sep2.DeviceCapability{MirrorUsagePointListLink: &sep2.ListLink{Href: "/mup"}}
@@ -386,6 +392,47 @@ func TestManagedFleet_ServerErrorOnReadingKeepsTheMirror(t *testing.T) {
 	}
 	if n := len(fs.readings["/mup/1"]); n != 1 {
 		t.Errorf("%d readings at /mup/1, want 1 from the second tick", n)
+	}
+}
+
+// A server that keeps losing the mirror it was just given is not asked for a
+// new one every interval: each loss widens the wait before the next create.
+func TestManagedFleet_RepeatedLossBacksOffBeforeEachRecreate(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, pvLFDI)
+	fs.readingFailures, fs.readingFailStatus = 2, http.StatusNotFound
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	const interval = 10 * time.Second
+	fleet, err := startManaged(ctx, client, dcapWithMirrors, "/edev", []simconfig.Managed{managedCfg(t, "pv", pvLFDI, "pv", 3000)}, interval)
+	if err != nil {
+		t.Fatalf("startManaged: %v", err)
+	}
+	clock := useFakeClock(fleet)
+
+	fleet.Tick(ctx) // reading 404s: first loss, wait one interval
+	fleet.Tick(ctx)
+	if fs.mupAttempts != 1 {
+		t.Fatalf("mirror attempts = %d inside the first backoff, want 1", fs.mupAttempts)
+	}
+	clock.advance(interval)
+	fleet.Tick(ctx) // second mirror; its reading 404s: second loss, wait two intervals
+	if fs.mupAttempts != 2 {
+		t.Fatalf("mirror attempts = %d after the first backoff, want 2", fs.mupAttempts)
+	}
+	clock.advance(interval)
+	fleet.Tick(ctx)
+	if fs.mupAttempts != 2 {
+		t.Fatalf("mirror attempts = %d one interval after the second loss, want 2 (wait is two intervals)", fs.mupAttempts)
+	}
+	clock.advance(interval)
+	fleet.Tick(ctx)
+	if fs.mupAttempts != 3 {
+		t.Fatalf("mirror attempts = %d after the second backoff, want 3", fs.mupAttempts)
+	}
+	if n := len(fs.readings["/mup/3"]); n != 1 {
+		t.Errorf("%d readings at /mup/3, want 1", n)
 	}
 }
 

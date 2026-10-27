@@ -102,13 +102,12 @@ type managedDevice struct {
 	// The mirror is retried on later ticks, with backoff, until it exists.
 	// mupListHref is empty when the server advertised no
 	// MirrorUsagePointList, which no retry can fix.
-	client        *inverter.SEP2Client
-	mupListHref   string
-	mirrorTries   int
-	mirrorBase    time.Duration
-	nextMirrorTry time.Time
-	hasMirror     bool
-	now           func() time.Time
+	client      *inverter.SEP2Client
+	mupListHref string
+	mirrorBase  time.Duration
+	mirrorRetry mirrorRetry
+	hasMirror   bool
+	now         func() time.Time
 
 	// down is set when the last tick could not read or apply the device,
 	// so a grant leaves it out of its split until a tick succeeds.
@@ -289,42 +288,31 @@ func (md *managedDevice) tryMirror(ctx context.Context) bool {
 	if md.mupListHref == "" {
 		return false
 	}
-	if md.now().Before(md.nextMirrorTry) {
+	if !md.mirrorRetry.ready(md.now()) {
 		return false
 	}
-	md.mirrorTries++
 	if !md.postMirror(ctx) {
-		md.nextMirrorTry = md.now().Add(mirrorBackoff(md.mirrorBase, md.mirrorTries))
+		md.mirrorRetry.failed(md.now(), md.mirrorBase)
 		return false
 	}
 	return true
 }
 
-// dropMirror forgets a mirror the server lost, so the next tick creates a new
-// one without waiting out a backoff.
+// dropMirror forgets a mirror the server lost. The loss counts as a failure,
+// so a repeat loss waits longer before the next create.
 func (md *managedDevice) dropMirror() {
-	log.Printf("managed device %s: server lost the MirrorUsagePoint (404); re-creating it", md.name)
+	log.Printf("managed device %s: server lost the MirrorUsagePoint (404); re-creating it after a backoff", md.name)
 	md.hasMirror = false
-	md.mirrorTries = 0
-	md.nextMirrorTry = time.Time{}
+	md.mirrorRetry.failed(md.now(), md.mirrorBase)
 }
 
 // postMirror makes one MirrorUsagePoint POST and installs the reporter that
 // posts to the new mirror.
 func (md *managedDevice) postMirror(ctx context.Context) bool {
-	mupLoc, err := md.client.CreateMirrorUsagePoint(inverter.WithTarget(ctx, md.lfdi), md.mupListHref, inverter.DeviceLFDI(md.lfdi), sep2.MirrorUsagePoint{
-		MRID:                inverter.MirrorUsagePointMRID(md.lfdi),
-		Description:         md.name + " Metering",
-		RoleFlags:           inverter.MirrorRoleFlags,
-		ServiceCategoryKind: 0,
-		Status:              1,
-	})
-	switch {
-	case err != nil:
-		log.Printf("managed device %s: create MirrorUsagePoint attempt %d: %v", md.name, md.mirrorTries, err)
-		return false
-	case mupLoc == "":
-		log.Printf("managed device %s: MirrorUsagePoint POST attempt %d returned empty Location", md.name, md.mirrorTries)
+	attempt := md.mirrorRetry.tries + 1
+	mupLoc, err := postMirrorUsagePoint(inverter.WithTarget(ctx, md.lfdi), md.client, md.mupListHref, md.lfdi, md.name+" Metering")
+	if err != nil {
+		log.Printf("managed device %s: create MirrorUsagePoint attempt %d: %v", md.name, attempt, err)
 		return false
 	}
 	if err := md.setReporter(mupLoc + "/mr"); err != nil {
@@ -395,6 +383,8 @@ func (f *managedFleet) Tick(ctx context.Context) {
 			if inverter.MirrorLost(err) {
 				md.dropMirror()
 			}
+		} else {
+			md.mirrorRetry.worked()
 		}
 		md.lastReport = md.now()
 	}
