@@ -211,6 +211,13 @@ func TestManagedFleet_PostsMirrorAndSignedReadingPerDevice(t *testing.T) {
 		if strings.Contains(body, client.LFDI()) {
 			t.Errorf("a mirror names the aggregator's own LFDI %s: %s", client.LFDI(), body)
 		}
+		var mup sep2.MirrorUsagePoint
+		if err := xml.Unmarshal([]byte(body), &mup); err != nil {
+			t.Fatalf("unmarshal posted mirror: %v", err)
+		}
+		if mup.RoleFlags != 9 {
+			t.Errorf("mirror for %s: RoleFlags = %d, want 9 (isMirror|isDER)", mup.DeviceLFDI, mup.RoleFlags)
+		}
 	}
 
 	for _, want := range []struct {

@@ -306,6 +306,7 @@ func (md *managedDevice) postMirror(ctx context.Context) bool {
 	mupLoc, err := md.client.CreateMirrorUsagePoint(inverter.WithTarget(ctx, md.lfdi), md.mupListHref, inverter.DeviceLFDI(md.lfdi), sep2.MirrorUsagePoint{
 		MRID:                inverter.MirrorUsagePointMRID(md.lfdi),
 		Description:         md.name + " Metering",
+		RoleFlags:           inverter.MirrorRoleFlags,
 		ServiceCategoryKind: 0,
 		Status:              1,
 	})

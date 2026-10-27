@@ -41,6 +41,7 @@ func runPhase4Metering(ctx context.Context, client *inverter.SEP2Client, dcap se
 		mupLoc, err := client.CreateMirrorUsagePoint(ctx, dcap.MirrorUsagePointListLink.Href, inverter.DeviceLFDI(client.LFDI()), sep2.MirrorUsagePoint{
 			MRID:                inverter.MirrorUsagePointMRID(client.LFDI()),
 			Description:         "PV Inverter Metering",
+			RoleFlags:           inverter.MirrorRoleFlags,
 			ServiceCategoryKind: 0,
 			Status:              1,
 		})
