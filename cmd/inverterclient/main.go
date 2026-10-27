@@ -1098,7 +1098,7 @@ func main() {
 	}
 
 	lastReport := time.Time{}
-	own := &ownReporter{client: client, dcap: dcap, reporter: reporter, base: cfg.ReportInterval, now: time.Now}
+	own := newOwnReporter(client, dcap, reporter, cfg.ReportInterval, time.Now)
 	// Track contiguous abnormal-condition duration so the trip
 	// curves in ridethrough.go have a duration argument. Reset on every
 	// nominal-grid tick.

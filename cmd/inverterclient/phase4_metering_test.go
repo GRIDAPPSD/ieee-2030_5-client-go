@@ -11,12 +11,16 @@ package main
 // same TLS setup, no duplication needed.
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -237,6 +241,73 @@ func TestOwnReporter_RepeatedLossBacksOff(t *testing.T) {
 	o.report(ctx, state)
 	if len(fs.mupBodies) != 3 || len(fs.readings["/mup/3"]) != 1 {
 		t.Fatalf("mirror POSTs = %d, readings at /mup/3 = %d, want 3 and 1", len(fs.mupBodies), len(fs.readings["/mup/3"]))
+	}
+}
+
+// A first mirror create that fails is retried after the backoff, and readings
+// land at the new mirror.
+func TestOwnReporter_FailedFirstCreateIsRetried(t *testing.T) {
+	t.Parallel()
+	env := newDERWalkTestEnv(t)
+	fs := &fakeServer{mupLFDI: map[string]string{}, readings: map[string][]sep2.MirrorMeterReading{}}
+	fs.mupFailures = 1
+	serverURL, _ := startDERWalkListener(t, env, fs.mux(t))
+	client := newDERWalkClient(t, env, serverURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const interval = 10 * time.Second
+	clock := &fakeClock{t: time.Now()}
+	reporter := runPhase4Metering(ctx, client, dcapWithMirrors, "") // first create answers 503
+	if reporter.MirrorHref() != "" {
+		t.Fatalf("mirror href = %q after a failed create, want empty", reporter.MirrorHref())
+	}
+	o := newOwnReporter(client, dcapWithMirrors, reporter, interval, clock.now)
+	state := inverter.InverterState{ActivePowerW: 1200, Time: time.Unix(1700000000, 0)}
+
+	o.report(ctx, state)
+	if n := len(fs.mupBodies); n != 0 {
+		t.Fatalf("mirror POSTs = %d inside the backoff, want 0", n)
+	}
+	clock.advance(interval)
+	o.report(ctx, state)
+
+	if n := len(fs.mupBodies); n != 1 {
+		t.Fatalf("mirror POSTs = %d after the backoff, want 1", n)
+	}
+	got := fs.readings["/mup/1"]
+	if len(got) != 1 || got[0].Reading == nil || got[0].Reading.Value == nil || *got[0].Reading.Value != 1200 {
+		t.Fatalf("readings at /mup/1 = %v, want one of 1200 W", got)
+	}
+}
+
+// An empty mirror href is not a silent success: nothing is posted, and the
+// skip is logged once per streak, not per cycle.
+func TestOwnReporter_EmptyHrefSkipIsLoggedOnce(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	fs := &fakeServer{mupLFDI: map[string]string{}, readings: map[string][]sep2.MirrorMeterReading{}}
+	fs.mupFailures = 1000
+	serverURL, _ := startDERWalkListener(t, env, fs.mux(t))
+	client := newDERWalkClient(t, env, serverURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	const interval = 10 * time.Second
+	clock := &fakeClock{t: time.Now()}
+	o := newOwnReporter(client, dcapWithMirrors, runPhase4Metering(ctx, client, dcapWithMirrors, ""), interval, clock.now)
+	state := inverter.InverterState{ActivePowerW: 1200, Time: time.Unix(1700000000, 0)}
+	for range 3 {
+		o.report(ctx, state)
+	}
+	if n := strings.Count(buf.String(), "reading skipped"); n != 1 {
+		t.Errorf("'reading skipped' logged %d times over 3 cycles, want 1:\n%s", n, buf.String())
+	}
+	if n := len(fs.readings["/mup/1"]); n != 0 {
+		t.Errorf("%d readings with no mirror, want 0", n)
 	}
 }
 
