@@ -43,6 +43,12 @@ func (r *Reporter) SetMirrorHref(mmrHref string) {
 	r.mmrHref = mmrHref
 }
 
+// MirrorHref returns the MirrorMeterReadingList href readings post to, empty
+// when no mirror exists.
+func (r *Reporter) MirrorHref() string {
+	return r.mmrHref
+}
+
 // AsManager marks the reporter as one a manager runs for a managed device.
 // Its POSTs are judged by the guard as actions for deviceLFDI, and each
 // reading carries flowDirection so the server's fleet view can tell export

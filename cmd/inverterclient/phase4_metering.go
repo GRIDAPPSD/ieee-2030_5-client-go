@@ -14,7 +14,8 @@ package main
 //   - dcap.MirrorUsagePointListLink == nil: log and skip mirror creation;
 //     mmrHref stays "".
 //   - CreateMirrorUsagePoint error, or an empty Location: log and leave
-//     mmrHref "" (metering disabled, non-fatal).
+//     mmrHref "" (non-fatal; ownReporter retries the create under the
+//     mirrorRetry backoff).
 //   - success: log the Location and derive mmrHref as mupLoc + "/mr" (CSIP
 //     convention; see CreateMirrorUsagePoint's own doc). core removed
 //     MirrorMeterReadingListLink : sep.xsd has no such child, so this is
@@ -58,15 +59,16 @@ func createOwnMirror(ctx context.Context, client *inverter.SEP2Client, dcap sep2
 	}
 	mupLoc, err := postMirrorUsagePoint(ctx, client, dcap.MirrorUsagePointListLink.Href, client.LFDI(), "PV Inverter Metering")
 	if err != nil {
-		log.Printf("create MirrorUsagePoint: %v (metering disabled)", err)
+		log.Printf("create MirrorUsagePoint: %v (readings wait for a retry)", err)
 		return ""
 	}
 	log.Printf("MirrorUsagePoint: %s", mupLoc)
 	return mupLoc + "/mr"
 }
 
-// ownReporter runs the single-device report step and replaces a mirror the
-// server lost, under the same backoff a managed device uses.
+// ownReporter runs the single-device report step. It creates the mirror when
+// the first create failed and replaces one the server lost, under the same
+// backoff a managed device uses.
 type ownReporter struct {
 	client   *inverter.SEP2Client
 	dcap     sep2.DeviceCapability
@@ -75,17 +77,37 @@ type ownReporter struct {
 	now      func() time.Time
 	retry    mirrorRetry
 	lost     bool
+	// skipLogged keeps the "reading skipped" line to one per failure streak.
+	skipLogged bool
 }
 
-// report posts one status and one metering reading. A 404 on the reading
-// marks the mirror lost; readings are skipped, as for a managed device, until
-// the backoff has elapsed and a new mirror is created.
+// newOwnReporter wraps the reporter runPhase4Metering built. A first create
+// that failed counts as the first failure, so the retry waits one backoff
+// instead of posting on the next report.
+func newOwnReporter(client *inverter.SEP2Client, dcap sep2.DeviceCapability, reporter *inverter.Reporter, base time.Duration, now func() time.Time) *ownReporter {
+	o := &ownReporter{client: client, dcap: dcap, reporter: reporter, base: base, now: now}
+	if dcap.MirrorUsagePointListLink != nil && reporter.MirrorHref() == "" {
+		o.retry.failed(now(), base)
+	}
+	return o
+}
+
+// report posts one status and one metering reading. A reporter with no mirror
+// href (the first create failed) or a 404 on the reading (the mirror was
+// lost) skips readings, as for a managed device, until the backoff has
+// elapsed and a create succeeds. A device whose DeviceCapability advertises
+// no MirrorUsagePointList has nothing to create and skips readings.
 func (o *ownReporter) report(ctx context.Context, state inverter.InverterState) {
 	if err := o.reporter.ReportStatus(ctx, state); err != nil {
 		log.Printf("ReportStatus failed: %v", err)
 	}
-	if o.lost {
+	if o.dcap.MirrorUsagePointListLink == nil && o.reporter.MirrorHref() == "" {
+		o.logSkip("DeviceCapability has no MirrorUsagePointList")
+		return
+	}
+	if o.lost || o.reporter.MirrorHref() == "" {
 		if !o.retry.ready(o.now()) {
+			o.logSkip("no MirrorUsagePoint yet, waiting for the retry backoff")
 			return
 		}
 		href := createOwnMirror(ctx, o.client, o.dcap)
@@ -105,4 +127,14 @@ func (o *ownReporter) report(ctx context.Context, state inverter.InverterState) 
 		return
 	}
 	o.retry.worked()
+	o.skipLogged = false
+}
+
+// logSkip logs why readings are skipped, once per failure streak.
+func (o *ownReporter) logSkip(why string) {
+	if o.skipLogged {
+		return
+	}
+	o.skipLogged = true
+	log.Printf("reading skipped: %s", why)
 }
