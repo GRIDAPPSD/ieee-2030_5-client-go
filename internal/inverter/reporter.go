@@ -37,6 +37,12 @@ type Reporter struct {
 	manager bool
 }
 
+// SetMirrorHref points metering at a re-created mirror's MirrorMeterReadingList.
+// Call it from the goroutine that calls ReportMetering.
+func (r *Reporter) SetMirrorHref(mmrHref string) {
+	r.mmrHref = mmrHref
+}
+
 // AsManager marks the reporter as one a manager runs for a managed device.
 // Its POSTs are judged by the guard as actions for deviceLFDI, and each
 // reading carries flowDirection so the server's fleet view can tell export

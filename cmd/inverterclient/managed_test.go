@@ -71,6 +71,10 @@ type fakeServer struct {
 	mupAttempts int
 	// noLocation makes a successful mirror POST answer 201 with no Location.
 	noLocation bool
+	// readingFailures is how many reading POSTs answer readingFailStatus
+	// before they are accepted.
+	readingFailures   int
+	readingFailStatus int
 }
 
 func newFakeServer(t *testing.T, env *derWalkTestEnv, listed ...string) (*inverter.SEP2Client, *fakeServer) {
@@ -114,8 +118,13 @@ func newFakeServer(t *testing.T, env *derWalkTestEnv, listed ...string) (*invert
 		}
 		loc := strings.TrimSuffix(r.URL.Path, "/mr")
 		fs.mu.Lock()
+		defer fs.mu.Unlock()
+		if fs.readingFailures > 0 {
+			fs.readingFailures--
+			w.WriteHeader(fs.readingFailStatus)
+			return
+		}
 		fs.readings[loc] = append(fs.readings[loc], mmr)
-		fs.mu.Unlock()
 		w.WriteHeader(http.StatusCreated)
 	})
 	serverURL, _ := startDERWalkListener(t, env, mux)
@@ -315,6 +324,68 @@ func TestManagedFleet_FailedMirrorIsRetriedAndThenReports(t *testing.T) {
 	fleet.Tick(ctx)
 	if fs.mupAttempts != 2 {
 		t.Errorf("mirror attempts = %d after success, want no further attempts", fs.mupAttempts)
+	}
+}
+
+// A 404 on a reading post means the server lost the mirror: the device drops
+// it, posts a new MirrorUsagePoint on the next tick, and readings resume at
+// the new href.
+func TestManagedFleet_LostMirrorIsRecreatedAndReadingsResume(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, pvLFDI)
+	fs.readingFailures, fs.readingFailStatus = 1, http.StatusNotFound
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fleet, err := startManaged(ctx, client, dcapWithMirrors, "/edev", []simconfig.Managed{managedCfg(t, "pv", pvLFDI, "pv", 3000)}, 0)
+	if err != nil {
+		t.Fatalf("startManaged: %v", err)
+	}
+	fleet.Tick(ctx)
+	if n := len(fs.readings["/mup/1"]); n != 0 {
+		t.Fatalf("%d readings at /mup/1 after the 404, want 0", n)
+	}
+	fleet.Tick(ctx)
+
+	if fs.mupAttempts != 2 || len(fs.mupBodies) != 2 {
+		t.Fatalf("mirror attempts = %d, bodies = %d, want a second MirrorUsagePoint POST", fs.mupAttempts, len(fs.mupBodies))
+	}
+	var mup sep2.MirrorUsagePoint
+	if err := xml.Unmarshal([]byte(fs.mupBodies[1]), &mup); err != nil {
+		t.Fatalf("unmarshal re-created mirror: %v", err)
+	}
+	if mup.RoleFlags != 9 || mup.DeviceLFDI != pvLFDI {
+		t.Errorf("re-created mirror RoleFlags = %d, DeviceLFDI = %s, want 9 and %s", mup.RoleFlags, mup.DeviceLFDI, pvLFDI)
+	}
+	got := fs.readings["/mup/2"]
+	if len(got) != 1 || got[0].Reading == nil || got[0].Reading.Value == nil || *got[0].Reading.Value != 3000 {
+		t.Fatalf("readings at /mup/2 = %v, want one of 3000 W", got)
+	}
+	if n := len(fs.readings["/mup/1"]); n != 0 {
+		t.Errorf("%d readings still posted to the lost /mup/1, want 0", n)
+	}
+}
+
+// Any other failure keeps the mirror and the retry behaviour it had.
+func TestManagedFleet_ServerErrorOnReadingKeepsTheMirror(t *testing.T) {
+	env := newDERWalkTestEnv(t)
+	client, fs := newFakeServer(t, env, pvLFDI)
+	fs.readingFailures, fs.readingFailStatus = 1, http.StatusInternalServerError
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fleet, err := startManaged(ctx, client, dcapWithMirrors, "/edev", []simconfig.Managed{managedCfg(t, "pv", pvLFDI, "pv", 3000)}, 0)
+	if err != nil {
+		t.Fatalf("startManaged: %v", err)
+	}
+	fleet.Tick(ctx)
+	fleet.Tick(ctx)
+
+	if fs.mupAttempts != 1 {
+		t.Errorf("mirror attempts = %d after a 500, want 1 (no re-create)", fs.mupAttempts)
+	}
+	if n := len(fs.readings["/mup/1"]); n != 1 {
+		t.Errorf("%d readings at /mup/1, want 1 from the second tick", n)
 	}
 }
 

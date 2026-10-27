@@ -1253,6 +1253,11 @@ func main() {
 				}
 				if err := reporter.ReportMetering(ctx, state); err != nil {
 					log.Printf("ReportMetering failed: %v", err)
+					if inverter.MirrorLost(err) {
+						if href := createOwnMirror(ctx, client, dcap); href != "" {
+							reporter.SetMirrorHref(href)
+						}
+					}
 				}
 				lastReport = time.Now()
 

@@ -157,3 +157,11 @@ func classifyResponse(resp *http.Response) error {
 	}
 	return fmt.Errorf("unexpected status %d", resp.StatusCode)
 }
+
+// MirrorLost reports whether err from a reading post means the server no
+// longer has the mirror: a 404 on the mirror's href. It is the one rule every
+// reading poster uses to decide to re-create its mirror; any other error is
+// a transient failure and keeps the same mirror.
+func MirrorLost(err error) bool {
+	return errors.Is(err, ErrNotFound)
+}

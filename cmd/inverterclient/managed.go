@@ -300,6 +300,15 @@ func (md *managedDevice) tryMirror(ctx context.Context) bool {
 	return true
 }
 
+// dropMirror forgets a mirror the server lost, so the next tick creates a new
+// one without waiting out a backoff.
+func (md *managedDevice) dropMirror() {
+	log.Printf("managed device %s: server lost the MirrorUsagePoint (404); re-creating it", md.name)
+	md.hasMirror = false
+	md.mirrorTries = 0
+	md.nextMirrorTry = time.Time{}
+}
+
 // postMirror makes one MirrorUsagePoint POST and installs the reporter that
 // posts to the new mirror.
 func (md *managedDevice) postMirror(ctx context.Context) bool {
@@ -383,6 +392,9 @@ func (f *managedFleet) Tick(ctx context.Context) {
 		}
 		if err := md.reporter.ReportMetering(ctx, state); err != nil {
 			log.Printf("managed device %s: ReportMetering failed: %v", md.name, err)
+			if inverter.MirrorLost(err) {
+				md.dropMirror()
+			}
 		}
 		md.lastReport = md.now()
 	}

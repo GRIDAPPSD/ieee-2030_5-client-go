@@ -13,8 +13,12 @@ package main
 import (
 	"context"
 	"encoding/xml"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -153,5 +157,82 @@ func TestRunPhase4Metering_ReporterUsesClientOwnLFDI(t *testing.T) {
 	if got != wantBefore && got != wantAfter {
 		t.Errorf("actual reading MRID = %q, matches neither client-own-LFDI reference (%q, %q): Reporter was not built with client.LFDI()",
 			got, wantBefore, wantAfter)
+	}
+}
+
+// A single-device client replaces a mirror the server lost the way a managed
+// device does: the reading post's 404 is MirrorLost, createOwnMirror returns
+// the new href, and readings resume there.
+func TestRunPhase4Metering_LostMirrorIsReplacedAndReadingsResume(t *testing.T) {
+	t.Parallel()
+	env := newDERWalkTestEnv(t)
+	var mu sync.Mutex
+	var bodies []string
+	readings := map[string][]sep2.MirrorMeterReading{}
+	lost := true
+	mux := http.NewServeMux()
+	mux.HandleFunc("/mup", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		defer mu.Unlock()
+		bodies = append(bodies, string(b))
+		w.Header().Set("Location", fmt.Sprintf("/mup/%d", len(bodies)))
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/mup/", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var mmr sep2.MirrorMeterReading
+		if err := xml.Unmarshal(b, &mmr); err != nil {
+			t.Errorf("unmarshal MirrorMeterReading: %v", err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if lost {
+			lost = false
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		loc := strings.TrimSuffix(r.URL.Path, "/mr")
+		readings[loc] = append(readings[loc], mmr)
+		w.WriteHeader(http.StatusCreated)
+	})
+	serverURL, _ := startDERWalkListener(t, env, mux)
+	client := newDERWalkClient(t, env, serverURL)
+	dcapWithMirrors := sep2.DeviceCapability{MirrorUsagePointListLink: &sep2.ListLink{Href: "/mup"}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	reporter := runPhase4Metering(ctx, client, dcapWithMirrors, "")
+	state := inverter.InverterState{ActivePowerW: 1200, Time: time.Unix(1700000000, 0)}
+	err := reporter.ReportMetering(ctx, state)
+	if !inverter.MirrorLost(err) {
+		t.Fatalf("ReportMetering after a 404 = %v, want MirrorLost", err)
+	}
+	href := createOwnMirror(ctx, client, dcapWithMirrors)
+	if href != "/mup/2/mr" {
+		t.Fatalf("re-created mirror href = %q, want /mup/2/mr", href)
+	}
+	reporter.SetMirrorHref(href)
+	if err := reporter.ReportMetering(ctx, state); err != nil {
+		t.Fatalf("ReportMetering at the new mirror: %v", err)
+	}
+	got := readings["/mup/2"]
+	if len(got) != 1 || got[0].Reading == nil || got[0].Reading.Value == nil || *got[0].Reading.Value != 1200 {
+		t.Fatalf("readings at /mup/2 = %v, want one of 1200 W", got)
+	}
+	if len(bodies) != 2 {
+		t.Errorf("mirror POSTs = %d, want 2", len(bodies))
+	}
+}
+
+func TestMirrorLost_Only404(t *testing.T) {
+	t.Parallel()
+	if !inverter.MirrorLost(fmt.Errorf("POST /mup/1/mr: %w", inverter.ErrNotFound)) {
+		t.Error("wrapped 404: MirrorLost = false, want true")
+	}
+	for _, err := range []error{nil, inverter.ErrBadRequest, inverter.ErrResponseTransient, errors.New("boom")} {
+		if inverter.MirrorLost(err) {
+			t.Errorf("MirrorLost(%v) = true, want false", err)
+		}
 	}
 }

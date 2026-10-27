@@ -34,26 +34,7 @@ import (
 // itself) and returns the Reporter that posts against it.
 func runPhase4Metering(ctx context.Context, client *inverter.SEP2Client, dcap sep2.DeviceCapability, derStatusHref string) *inverter.Reporter {
 	log.Println("=== Phase 4: Metering Setup ===")
-	var mmrHref string
-	if dcap.MirrorUsagePointListLink == nil {
-		log.Println("DeviceCapability has no MirrorUsagePointListLink; metering disabled")
-	} else {
-		mupLoc, err := client.CreateMirrorUsagePoint(ctx, dcap.MirrorUsagePointListLink.Href, inverter.DeviceLFDI(client.LFDI()), sep2.MirrorUsagePoint{
-			MRID:                inverter.MirrorUsagePointMRID(client.LFDI()),
-			Description:         "PV Inverter Metering",
-			RoleFlags:           inverter.MirrorRoleFlags,
-			ServiceCategoryKind: 0,
-			Status:              1,
-		})
-		if err != nil {
-			log.Printf("create MirrorUsagePoint: %v (metering disabled)", err)
-		} else if mupLoc == "" {
-			log.Println("MirrorUsagePoint POST returned empty Location; metering disabled")
-		} else {
-			log.Printf("MirrorUsagePoint: %s", mupLoc)
-			mmrHref = mupLoc + "/mr"
-		}
-	}
+	mmrHref := createOwnMirror(ctx, client, dcap)
 
 	// client.LFDI() is derived from the leaf certificate at construction
 	// (NewSEP2Client) and is never empty once the client exists, so
@@ -64,4 +45,32 @@ func runPhase4Metering(ctx context.Context, client *inverter.SEP2Client, dcap se
 		log.Fatalf("build reporter: %v", err)
 	}
 	return reporter
+}
+
+// createOwnMirror POSTs the DER client's own MirrorUsagePoint and returns the
+// href its readings post to, or "" when none was created (no list link, a
+// failed POST, or an empty Location), each logged. A reading post that gets a
+// 404 calls it again to replace a mirror the server lost.
+func createOwnMirror(ctx context.Context, client *inverter.SEP2Client, dcap sep2.DeviceCapability) string {
+	if dcap.MirrorUsagePointListLink == nil {
+		log.Println("DeviceCapability has no MirrorUsagePointListLink; metering disabled")
+		return ""
+	}
+	mupLoc, err := client.CreateMirrorUsagePoint(ctx, dcap.MirrorUsagePointListLink.Href, inverter.DeviceLFDI(client.LFDI()), sep2.MirrorUsagePoint{
+		MRID:                inverter.MirrorUsagePointMRID(client.LFDI()),
+		Description:         "PV Inverter Metering",
+		RoleFlags:           inverter.MirrorRoleFlags,
+		ServiceCategoryKind: 0,
+		Status:              1,
+	})
+	switch {
+	case err != nil:
+		log.Printf("create MirrorUsagePoint: %v (metering disabled)", err)
+		return ""
+	case mupLoc == "":
+		log.Println("MirrorUsagePoint POST returned empty Location; metering disabled")
+		return ""
+	}
+	log.Printf("MirrorUsagePoint: %s", mupLoc)
+	return mupLoc + "/mr"
 }
