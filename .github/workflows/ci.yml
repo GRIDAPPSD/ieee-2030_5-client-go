@@ -114,6 +114,25 @@ jobs:
         # step, so an install failure is red on its own step.
         run: sim/gridlabd/.venv/bin/python -m pytest sim/gridlabd/tests -q
 
+      - name: Check for CI app credentials
+        # Fork PRs and Dependabot PRs get no Actions secrets, so minting
+        # would fail and turn the PR red whatever it changes. Without the
+        # secrets the two token steps below are skipped and the job log
+        # says so. That is honest only while the GRIDAPPSD modules this
+        # repo requires are public, so go fetches them anonymously; if one
+        # goes private, an unarmed run fails at Vet instead of passing.
+        id: creds
+        env:
+          APP_ID: ${{ secrets.GRIDAPPSD_CI_APP_ID }}
+          APP_KEY: ${{ secrets.GRIDAPPSD_CI_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$APP_KEY" ]; then
+            echo "armed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "armed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::CI app secrets are not available to this run (fork or Dependabot PR): skipping the app token and module access steps; GRIDAPPSD modules are fetched anonymously."
+          fi
+
       - name: Mint GitHub App installation token
         # Mints a short-lived installation token for the GRIDAPPSD App
         # (referenced by App ID via secret, not by slug) so
@@ -121,6 +140,7 @@ jobs:
         # can resolve the github.com/GRIDAPPSD/ieee-2030_5-core-go
         # module. Pinned to v3 (current stable major as of 2026-07-07).
         # The action masks the token in logs; it is never echoed.
+        if: steps.creds.outputs.armed == 'true'
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
@@ -129,6 +149,7 @@ jobs:
           owner: GRIDAPPSD
 
       - name: Configure module access
+        if: steps.creds.outputs.armed == 'true'
         # Rewrites HTTPS clones/fetches of github.com/GRIDAPPSD/* to carry
         # the minted installation token, scoped to this org only. Runs
         # before Setup Go so `go build`'s module resolution can see it.
