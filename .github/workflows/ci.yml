@@ -19,10 +19,11 @@
 name: ci
 
 on:
-  # paths-ignore: doc-only changes do not affect build artifacts in this
+  # push paths-ignore: doc-only changes do not affect build artifacts in this
   # repo. See .claude/rules/devops.md "Documentation-only changes should
   # not trigger a full CI rebuild", invert this list if docs ever
-  # become part of the build.
+  # become part of the build. Pull requests run on every change so each job
+  # can be a required check.
   push:
     branches: [main]
     paths-ignore:
@@ -33,12 +34,6 @@ on:
       - 'LICENSE'
   pull_request:
     branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'CHANGELOG.md'
-      - '.gitignore'
-      - 'LICENSE'
   workflow_dispatch:
     inputs:
       reason:
